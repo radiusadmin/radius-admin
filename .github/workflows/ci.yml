@@ -97,7 +97,7 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/logs"
           sudo sh -c 'cp /var/tmp/ra-bench/*.log /opt/ci-src/*.log /var/log/postgresql/*.log "$0" 2>/dev/null; chmod -R a+r "$0"' "$RUNNER_TEMP/logs" || true
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: failure()
         with:
           name: bench-logs
