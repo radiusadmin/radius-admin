@@ -1,0 +1,140 @@
+--- a/mods-available/ldap
++++ b/mods-available/ldap
+@@ -16,21 +16,21 @@
+ 	#  - ldaps:// (LDAP over SSL)
+ 	#  - ldapi:// (LDAP over Unix socket)
+ 	#  - ldapc:// (Connectionless LDAP)
+-	server = 'localhost'
++	server = 'ldaps://dc01.example.net'
+ #	server = 'ldap.rrdns.example.org'
+ #	server = 'ldap.rrdns.example.org'
+ 
+ 	#  Port to connect on, defaults to 389, will be ignored for LDAP URIs.
+-#	port = 389
++	port = 636
+ 
+ 	#  Administrator account for searching and possibly modifying.
+ 	#  If using SASL + KRB5 these should be commented out.
+-#	identity = 'cn=admin,dc=example,dc=org'
+-#	password = mypass
++	identity = 'CN=RADIUS LDAP Bind,OU=Service Accounts,DC=example,DC=net'
++	password = 'REDACTED'
+ 
+ 	#  Unless overridden in another section, the dn from which all
+ 	#  searches will start from.
+-	base_dn = 'dc=example,dc=org'
++	base_dn = 'dc=example,dc=net'
+ 
+ 	#
+ 	#  You can run the 'ldapsearch' command line tool using the
+@@ -233,8 +233,8 @@
+ 		#
+ 		#  For Active Directory, you should use
+ 		#  "samaccountname=" instead of "uid="
+-		#
+-		filter = "(uid=%{%{Stripped-User-Name}:-%{User-Name}})"
++		
++		filter = "(&(objectClass=computer)(dNSHostName=%{TLS-Client-Cert-Subject-Alt-Name-Dns}))"
+ 
+ 		#  For Active Directory nested group, you should comment out the previous 'filter = ...'
+ 		#  and use the below. Where 'group' is the group you are querying for.
+@@ -326,7 +326,7 @@
+ 		#
+ 		#  If using Active Directory you are likely to need "group"
+ 		#  instead of "posixGroup".
+-		filter = '(objectClass=posixGroup)'
++		filter = '(objectClass=group)'
+ 
+ 		# Search scope, may be 'base', 'one', sub' or 'children'
+ #		scope = 'sub'
+@@ -334,7 +334,7 @@
+ 		#  Attribute that uniquely identifies a group.
+ 		#  Is used when converting group DNs to group
+ 		#  names.
+-#		name_attribute = cn
++		name_attribute = cn
+ 
+ 		#  Filter to find all group objects a user is a member of.
+ 		#  That is, group objects with attributes that
+@@ -343,7 +343,7 @@
+ 		#  Note that this configuration references the "user_dn"
+ 		#  configuration defined above.
+ 		#
+-#		membership_filter = "(|(member=%{control:${..user_dn}})(memberUid=%{%{Stripped-User-Name}:-%{User-Name}}))"
++		membership_filter = "(member:1.2.840.113556.1.4.1941:=%{control:Ldap-UserDn})"
+ 
+ 		#  The attribute, in user objects, which contain the names
+ 		#  or DNs of groups a user is a member of.
+@@ -374,8 +374,8 @@
+ 		#  the type that matches the format of your check items
+ 		#  i.e. if your groups are specified as DNs then enable
+ 		#  cacheable_dn else enable cacheable_name.
+-#		cacheable_name = 'no'
+-#		cacheable_dn = 'no'
++		cacheable_name = 'yes'
++		cacheable_dn = 'no'
+ 
+ 		#  Override the normal cache attribute (<inst>-LDAP-Group or
+ 		#  LDAP-Group if using the default instance) and create a
+@@ -551,8 +551,8 @@
+ 		#  for this module.  If it is set to 'no' libldap will bind
+ 		#  to those connections anonymously.
+ 		#
+-		chase_referrals = yes
+-		rebind = yes
++		chase_referrals = no
++		rebind = no
+ 
+ 		# SASL Security Properties (see SASL_SECPROPS in ldap.conf man page).
+ 		# Note - uncomment when using GSS-API sasl mechanism along with TLS
+@@ -591,7 +591,7 @@
+ 		#
+ 		#	default: 0x0000 (no debugging messages)
+ 		#	Example:(LDAP_DEBUG_FILTER+LDAP_DEBUG_CONNS)
+-		ldap_debug = 0x0028
++		ldap_debug = 0x0000
+ 	}
+ 
+ 	#
+@@ -629,7 +629,7 @@
+ 		# using ldaps (port 636) connections
+ #		start_tls = yes
+ 
+-#		ca_file	= ${certdir}/cacert.pem
++		ca_file	= ${certdir}/site/ca.pem
+ 
+ #		ca_path	= ${certdir}
+ #		certificate_file = /path/to/radius.crt
+@@ -647,7 +647,7 @@
+ 		#  The default is libldap's default, which varies based
+ 		#  on the contents of ldap.conf.
+ 
+-#		require_cert	= 'demand'
++		require_cert	= 'demand'
+ 
+ 		#
+ 		#  Check the CRL, as with the EAP module.
+@@ -660,13 +660,21 @@
+ 		#  Minimum TLS version to accept. We STRONGLY recommend
+ 		#  setting this to "1.2"
+ 		#
+-#		tls_min_version = "1.2"
++		tls_min_version = "1.2"
+ 
+ 		#  Set this option to specify the allowed
+ 		#  TLS cipher suites.  The format is listed
+ 		#  in "man 1 ciphers".
+ 		#
+-		cipher_list = "DEFAULT"
++		#  radius-admin: intentionally NOT set. Ubuntu's libldap is linked
++		#  against GnuTLS, which does not accept OpenSSL-format cipher
++		#  strings (an OpenSSL list can break LDAPS entirely, and was
++		#  otherwise ignored in testing). The cipher suites for LDAPS are
++		#  therefore governed by GnuTLS defaults and by the domain
++		#  controller's Schannel policy - restrict the DC to TLS 1.2+
++		#  with AES-GCM suites. See docs/SECURITY.md (F-7).
++		#
++#		cipher_list = "DEFAULT"
+ 	}
+ 
+ 	#  As of v3, the 'pool' section has replaced the

@@ -1,0 +1,19 @@
+# Root helper socket (SPEC section 6). Only root and group radius-admin can connect;
+# the helper additionally checks SO_PEERCRED against allowed_users in helper.conf.
+[Unit]
+Description=radius-admin privileged helper socket
+Documentation=file:/opt/radius-admin/docs/SECURITY.md
+
+[Socket]
+ListenStream=/run/radius-admin-helper.sock
+SocketUser=root
+SocketGroup=radius-admin
+SocketMode=0660
+Accept=yes
+# one apply at a time is enforced by flock; cap concurrent helper processes anyway
+MaxConnections=8
+MaxConnectionsPerSource=4
+RemoveOnStop=yes
+
+[Install]
+WantedBy=sockets.target

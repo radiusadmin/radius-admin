@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block body_class %}gate{% endblock %}
+{% block content %}
+<div class="gate-wrap">
+  <div class="gate-brand">
+    <span class="brand-mark big" aria-hidden="true"></span>
+    <div>
+      <p class="gate-title">RADIUS Admin</p>
+      <p class="gate-sub">{{ server_name }} · network access control</p>
+    </div>
+  </div>
+  <section class="gate-card">
+    {% block gate %}{% endblock %}
+  </section>
+  <p class="gate-foot">{% if fips_mode %}FIPS 140 mode: {{ 'on' if fips.ok else 'off' }} · {% endif %}Access restricted to the management network</p>
+</div>
+{% endblock %}

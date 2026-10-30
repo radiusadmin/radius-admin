@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}SNMP test{% endblock %}
+{% block head %}{% if not t.done_at %}<meta http-equiv="refresh" content="3">{% endif %}{% endblock %}
+{% block content %}
+<header class="page-head"><div><h1>SNMP test · <span class="mono">{{ t.name }}</span></h1>
+<p class="lede mono">{{ t.ipaddr }}</p></div>
+<a class="btn btn-quiet" href="{{ url_for('clients.index') }}">Back to clients</a></header>
+<section class="panel narrow">
+{% if not t.done_at %}
+  {% if not p.enabled %}<p class="flash flash-info" role="status">Switch monitoring is disabled, but the test still runs if credentials are set.</p>{% endif %}
+  <p role="status"><span class="tag tag-muted">Running</span> Waiting for the monitoring service… this page refreshes every few seconds.</p>
+{% elif t.ok %}
+  <p role="status"><span class="tag tag-ok">OK</span> {{ t.message }}</p>
+{% else %}
+  <p role="alert"><span class="tag tag-warn">Failed</span> {{ t.message }}</p>
+  <p class="small muted">Check that the switch has the SNMPv3 user with SHA-2 authentication and AES-128 privacy, that its SNMP access list allows this server, and that UDP 161 is open from this server.</p>
+{% endif %}
+</section>
+{% endblock %}

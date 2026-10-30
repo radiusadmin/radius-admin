@@ -1,0 +1,19 @@
+# Loads the radius-admin nftables table (UI reachable only from the admin subnet).
+[Unit]
+Description=radius-admin host firewall rules (HTTPS from admin subnet only)
+Documentation=file:/opt/radius-admin/docs/RUNBOOK.md
+DefaultDependencies=no
+Before=network-pre.target nginx.service
+Wants=network-pre.target
+After=ufw.service nftables.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f /etc/radius-admin/firewall.nft
+ExecStop=/usr/sbin/nft delete table inet radius_admin
+ProtectHome=yes
+ProtectSystem=strict
+
+[Install]
+WantedBy=multi-user.target

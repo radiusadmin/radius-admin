@@ -1,0 +1,17 @@
+#!/usr/sbin/nft -f
+# /etc/radius-admin/firewall.nft -- loaded by radius-admin-firewall.service
+# Self-contained table: restricts ONLY the web UI port. It never flushes the global
+# ruleset, so it coexists with ufw (iptables-nft) or a site nftables.conf: a packet
+# dropped by any base chain is dropped, whatever other tables decide.
+# @ADMIN_NET@ / @LISTEN_IP@ are filled in by install.sh.
+table inet radius_admin
+delete table inet radius_admin
+table inet radius_admin {
+    chain input {
+        type filter hook input priority filter - 5; policy accept;
+        tcp dport 443 ip daddr @LISTEN_IP@ ip saddr @ADMIN_NET@ accept
+        tcp dport 443 ip daddr @LISTEN_IP@ counter drop
+        # the UI is IPv4-only
+        meta nfproto ipv6 tcp dport 443 counter drop
+    }
+}

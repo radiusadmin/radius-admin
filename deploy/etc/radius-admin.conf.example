@@ -1,0 +1,40 @@
+# /etc/radius-admin/radius-admin.conf  (root:radius-admin 0640)  -- SPEC section 2
+# Read by the web app and its CLI (RADIUS_ADMIN_CONFIG points here).
+# The [helper] section below is informational only: the root helper reads its
+# settings exclusively from the root-owned /etc/radius-admin/helper.conf.
+
+[app]
+require_fips = true
+db_dsn = dbname=radius host=/var/run/postgresql user=radius_admin
+key_file = /etc/radius-admin/keys/data.key
+helper_socket = /run/radius-admin-helper.sock
+staging_dir = /var/lib/radius-admin/staging
+session_idle_minutes = 15
+session_absolute_hours = 8
+stepup_minutes = 5
+lockout_threshold = 5
+lockout_minutes = 15
+password_min_length = 15
+password_history = 5
+pbkdf2_iterations = 600000
+log_syslog = true
+
+# Optional (defaults shown):
+# helper_timeout = 120              ; seconds the app waits for the helper (apply/rollback)
+# ip_failure_limit = 20             ; failed logins per source IP ...
+# ip_failure_window_minutes = 15    ; ... within this window -> reject
+# trust_proxy_headers = true        ; client IP from X-Real-IP set by nginx (unix socket peer)
+# totp_issuer = RADIUS Admin
+# Host name shown in the page header (the installer sets it from --server-name).
+# server_name = radius.example.net
+# db_pool_max = 8
+# radclient =                       ; path of radclient for disconnect/re-authenticate; empty = search
+#                                   ;   /usr/local/bin, /usr/bin, /opt/freeradius/bin, ...
+# radius_dict_dir =                 ; FreeRADIUS dictionary dir; empty = <radclient prefix>/share/freeradius
+
+[helper]
+# informational copy -- the helper does NOT read this file
+service = freeradius
+radiusd = /usr/sbin/radiusd
+raddb = /etc/freeradius
+freerad_user = freerad

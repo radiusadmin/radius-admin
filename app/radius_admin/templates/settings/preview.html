@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block title %}Policy preview{% endblock %}
+{% block content %}
+<header class="page-head"><div><h1>Generated policy file</h1>
+<p class="lede">What <span class="mono">/etc/freeradius/policy.d/radius-admin</span> will contain after the next apply. Access rules and settings are not in this file: FreeRADIUS reads them live from the database.</p></div>
+<a class="btn btn-quiet" href="{{ url_for('settings.custom_policy') }}">Back to custom policy</a></header>
+{% if error %}<p class="flash flash-error" role="alert">The policy cannot be rendered: {{ error }}</p>
+{% else %}<section class="panel flush"><pre class="code">{{ policy }}</pre></section>{% endif %}
+{% endblock %}

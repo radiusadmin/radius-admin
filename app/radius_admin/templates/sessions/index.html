@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block title %}Sessions{% endblock %}
+{% block content %}
+<header class="page-head">
+  <div><h1>{{ 'Session history' if history else 'Live sessions' }}</h1>
+  <p class="lede">Who is connected now, on which switch port and VLAN, from RADIUS accounting.{% if not history %} {{ open_count }} open session{{ '' if open_count == 1 else 's' }}.{% endif %}</p></div>
+</header>
+
+{% if not acct.any %}
+<section class="panel callout">
+  <h2>No accounting received yet</h2>
+  <p>Sessions appear once the switches send RADIUS accounting to this server (UDP 1813). On each Catalyst 1300:</p>
+  <pre class="code">aaa accounting dot1x start-stop group radius</pre>
+  <p class="small muted">Full switch commands, including those for disconnect/re-authenticate, are in RUNBOOK §6.4.</p>
+</section>
+{% elif acct.silent %}
+<details class="panel callout-quiet">
+  <summary>{{ acct.sending }} of {{ acct.switches }} switches sent accounting in the last 30 days. {{ acct.silent|length }} did not.</summary>
+  <p class="small">{% for c in acct.silent %}<a href="{{ url_for('clients.edit', cid=c.id) }}">{{ c.name }}</a>{{ ', ' if not loop.last }}{% endfor %}</p>
+  <p class="small muted">Add <span class="mono">aaa accounting dot1x start-stop group radius</span> on those switches (RUNBOOK §6.4).</p>
+</details>
+{% endif %}
+
+<form class="filters" method="get" role="search">
+  <label for="q" class="sr-only">Search sessions</label>
+  <input id="q" name="q" type="search" value="{{ q }}" placeholder="User, MAC, port or IP">
+  <label for="switch" class="sr-only">Switch</label>
+  <select id="switch" name="switch" class="select-auto">
+    <option value="">All switches</option>
+    {% for c in switches %}<option value="{{ c.id }}" {{ 'selected' if sw == c.id|string }}>{{ c.name }}</option>{% endfor %}
+  </select>
+  <label for="history" class="sr-only">Show</label>
+  <select id="history" name="history" class="select-auto">
+    <option value="">Open sessions</option>
+    <option value="1" {{ 'selected' if history }}>Last 30 days, including ended</option>
+  </select>
+  <button class="btn btn-quiet" type="submit">Show</button>
+</form>
+
+<section class="panel flush">
+{% if rows %}
+<div class="table-wrap table-wrap-fits"><table class="sessions-table">
+  <thead><tr><th scope="col">User / device</th><th scope="col">Station</th><th scope="col">Switch / port</th><th scope="col" class="num">VLAN</th><th scope="col">Started</th><th scope="col">{{ 'Ended' if history else 'Port status' }}</th>{% if has_role('operator') and not history %}<th scope="col"><span class="sr-only">Actions</span></th>{% endif %}</tr></thead>
+  <tbody>{% for s in rows %}
+  <tr class="{{ 'is-off' if s.acctstoptime else '' }}">
+    <td class="name-cell user-cell"><span class="mono ellip" title="{{ s.username or '' }}">{{ s.username or '—' }}</span>
+      <span class="cell-sub">{{ {'eap-tls': '802.1X certificate', 'mab': 'MAB', 'pap-admin': 'admin'}.get(s.authmethod, s.authmethod or 'method unknown') }}{% if s.framedipaddress %} · {{ s.framedipaddress }}{% endif %}</span></td>
+    <td>{% if s.callingstationid %}<span class="mono mac">{{ s.callingstationid|mac }}</span>{% if s.vendor %}<span class="cell-sub">{{ s.vendor }}</span>{% endif %}{% else %}—{% endif %}</td>
+    <td>{% if s.client %}<a class="ellip switch-link" title="{{ s.client.name }}" href="{{ url_for('clients.edit', cid=s.client.id) }}">{{ s.client.name }}</a>{% else %}<span class="mono">{{ s.nas }}</span>{% endif %}
+      <span class="cell-sub mono">{{ s.nasportid or '' }}</span></td>
+    <td class="num">{% if s.vlan %}<span class="vlan">{{ s.vlan }}</span>{% else %}—{% endif %}</td>
+    <td class="small started" title="{{ s.acctstarttime|dt }}">{{ s.acctstarttime|dtc }}<span class="cell-sub">{{ s.duration|duration }}{% if s.stale %} · <span class="warn-text">no update for over a day</span>{% endif %}</span></td>
+    <td class="small">{% if s.acctstoptime %}{{ s.acctstoptime|dtc }}<span class="cell-sub">{{ s.acctterminatecause or '' }}</span>
+      {% elif s.port %}{% if s.port.authorized %}<span class="tag tag-ok">Authorized</span>{% elif s.port.oper == 'down' %}<span class="tag tag-warn">Link down</span>{% else %}<span class="tag tag-warn">{{ s.port.state_text or 'Unauthorized' }}</span>{% endif %}
+      {% else %}<span class="muted">—</span>{% endif %}
+      {% if s.auth_id %}<span class="cell-sub"><a href="{{ url_for('logs.auth_detail', aid=s.auth_id) }}">Authentication</a></span>{% endif %}</td>
+    {% if has_role('operator') and not history %}
+    <td class="row-actions">
+      {% if s.client %}
+      <details class="row-menu"><summary class="btn btn-quiet btn-small" aria-label="Session actions for {{ s.username }}">Actions</summary>
+        <div class="menu">
+          {% for key, a in actions.items() %}
+          {{ m.post_button(url_for('sessions.coa', sid=s.radacctid), a[0], 'linklike' ~ (' danger' if key == 'disconnect' else ''), confirm=a[0] ~ ' ' ~ (s.username or s.callingstationid) ~ ' on ' ~ s.client.name ~ ' ' ~ (s.nasportid or '') ~ '? ' ~ a[1], fields={'action': key}) }}
+          {% endfor %}
+        </div></details>
+      {% endif %}
+    </td>{% endif %}
+  </tr>{% endfor %}</tbody>
+</table></div>
+{% else %}<p class="empty">{% if q or sw %}No sessions match.{% elif history %}No sessions in the last 30 days.{% else %}No open sessions.{% endif %}</p>{% endif %}
+</section>
+{{ m.pager(page, more, 'sessions.index', {'q': q, 'switch': sw, 'history': '1' if history else ''}) }}
+
+{% if recent_coa %}
+<section class="panel flush">
+  <h2 class="panel-title">Recent disconnect / re-authenticate requests</h2>
+  <div class="table-wrap"><table class="dense">
+    <thead><tr><th scope="col">Requested</th><th scope="col">Action</th><th scope="col">Switch / port</th><th scope="col">User</th><th scope="col">Result</th></tr></thead>
+    <tbody>{% for c in recent_coa %}<tr>
+      <td class="nowrap"><a href="{{ url_for('sessions.coa_result', rid=c.id) }}">{{ c.requested_at|dtc }}</a><span class="cell-sub">{{ c.requested_by }}</span></td>
+      <td>{{ actions[c.action][0] }}</td><td>{{ c.switch_name }}<span class="cell-sub mono">{{ c.nas_port_id }}</span></td><td class="mono clip">{{ c.username or c.calling_station_id }}</td>
+      <td>{% if c.done_at is none %}<span class="tag tag-muted">Pending</span>{% elif c.ok %}<span class="tag tag-ok">Done</span>{% else %}<span class="tag tag-danger">Failed</span><span class="cell-sub">{{ c.message[:120] }}</span>{% endif %}</td>
+    </tr>{% endfor %}</tbody>
+  </table></div>
+</section>
+{% endif %}
+{% endblock %}

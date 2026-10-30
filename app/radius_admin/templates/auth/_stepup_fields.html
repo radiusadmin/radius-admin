@@ -1,0 +1,13 @@
+{% set pfx = pfx|default('') %}{% set req = '' if optional|default(false) else ' required' %}
+{% if current_user and current_user.auth_source == 'saml' %}
+<p class="small">You signed in with single sign-on. <a href="{{ url_for('sso.login', stepup='1', next=request.path) }}">Confirm your identity with your identity provider</a>, then submit this form again.</p>
+{% else %}
+<label for="{{ pfx }}password">Password</label>
+<input id="{{ pfx }}password" name="{{ pfx }}password" type="password" autocomplete="current-password"{{ req }} maxlength="256">
+{% if current_user.mfa_method == 'totp' %}
+<label for="{{ pfx }}code">Authenticator code</label>
+<input id="{{ pfx }}code" name="{{ pfx }}code" class="code-input" inputmode="numeric" pattern="[0-9 ]{6,7}" maxlength="7" autocomplete="one-time-code"{{ req }}>
+{% else %}
+<p class="small">Second factor: your client certificate{% if cert %} (<span class="mono">{{ cert[1] or 'presented' }}</span>){% else %} — <strong>not presented</strong>; check that it is installed in this browser and reload{% endif %}.</p>
+{% endif %}
+{% endif %}

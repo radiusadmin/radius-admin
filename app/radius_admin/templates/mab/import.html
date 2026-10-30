@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block title %}Import MAB devices{% endblock %}
+{% block content %}
+<header class="page-head"><h1>Import MAB devices</h1></header>
+<section class="panel narrow">
+{% if errors %}<div class="flash flash-error" role="alert"><p>Nothing was imported. Fix these rows and try again:</p><ul>{% for e in errors %}<li>{{ e }}</li>{% endfor %}{% if more %}<li>…and {{ more }} more</li>{% endif %}</ul></div>{% endif %}
+<form method="post" enctype="multipart/form-data" class="stack">
+  {{ m.csrf() }}
+  <p>One device per line: <span class="mono">mac,vlan,description[,expires]</span>. <span class="mono">expires</span> is an optional date (YYYY-MM-DD, access ends at the end of that day UTC); when updating, an empty value keeps the current expiry. A header row is optional. The whole file is checked before anything is saved.</p>
+  <label for="file">CSV file</label>
+  <input id="file" name="file" type="file" accept=".csv,text/csv,text/plain">
+  <label for="text">Or paste rows</label>
+  <textarea id="text" name="text" rows="8" class="mono" spellcheck="false" placeholder="00-1A-2B-3C-4D-5E,40,Printer 2E"></textarea>
+  <fieldset><legend>Existing MAC addresses</legend>
+    <label class="check"><input type="radio" name="mode" value="add" checked> Skip them</label>
+    <label class="check"><input type="radio" name="mode" value="upsert"> Update their VLAN and description</label>
+  </fieldset>
+  <div class="actions"><button type="submit" class="btn btn-primary">Import devices</button>
+  <a class="btn btn-quiet" href="{{ url_for('mab.index') }}">Cancel</a></div>
+</form>
+</section>
+{% endblock %}

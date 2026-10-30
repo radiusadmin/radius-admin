@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block title %}Alerts{% endblock %}
+{% block content %}
+<header class="page-head">
+  <div><h1>Alerts</h1>
+  <p class="lede">Raised by the monitoring service: reject spikes, switches that stop answering, and FreeRADIUS going down. Each alert is sent once when it opens and once when it clears.</p></div>
+  {% if has_role('admin') %}<div class="head-actions">
+    {{ m.post_button(url_for('alerts.test'), 'Send test alert', 'btn btn-quiet') }}
+    <a class="btn btn-primary" href="{{ url_for('alerts.settings') }}">Alert settings</a></div>{% endif %}
+</header>
+
+{% if not mon or not mon.alive %}
+<p class="flash flash-error" role="alert">The monitoring service has not reported in the last 3 minutes{% if mon and mon.heartbeat_at %} (last seen {{ mon.heartbeat_at|ago }}){% endif %}, so no alerts are being raised. Check <span class="mono">systemctl status radius-admin-snmp</span> on the server.</p>
+{% endif %}
+
+<section class="panel">
+  <h2>Delivery and checks</h2>
+  <dl class="kv kv-inline">
+    <dt>Syslog</dt><dd>{{ m.onoff(s.syslog_enabled, 'On', 'Off') }} <span class="small muted">tag radius-admin, facility authpriv</span></dd>
+    <dt>Email</dt><dd>{{ m.onoff(s.email_enabled, 'On', 'Off') }}{% if s.email_enabled %} <span class="small muted">to {{ s.mail_to }}</span>{% endif %}</dd>
+    <dt>Reject spike</dt><dd>{% if s.reject_enabled %}{{ s.reject_threshold }} or more rejects within {{ s.reject_window_minutes }} min{% else %}<span class="muted">Off</span>{% endif %}</dd>
+    <dt>Switch not responding</dt><dd>{% if s.switch_enabled %}{{ s.switch_failed_polls }} failed SNMP poll{{ '' if s.switch_failed_polls == 1 else 's' }} in a row (switches marked for monitoring){% else %}<span class="muted">Off</span>{% endif %}</dd>
+    <dt>FreeRADIUS down</dt><dd>{% if s.radius_enabled %}checked every minute; alerts after 2 failed checks{% else %}<span class="muted">Off</span>{% endif %}
+      {% if mon and mon.radius_checked_at %}<span class="cell-sub">Last check {{ mon.radius_checked_at|ago }}: {{ mon.radius_message }}</span>{% endif %}</dd>
+  </dl>
+</section>
+
+<div class="filters-row">
+<nav class="tabs" aria-label="Alert views">
+  <a href="{{ url_for('alerts.index') }}" {% if show != 'all' %}aria-current="page"{% endif %}>Alerts</a>
+  <a href="{{ url_for('alerts.index', show='all') }}" {% if show == 'all' %}aria-current="page"{% endif %}>Including test alerts</a>
+</nav>
+</div>
+<section class="panel flush">
+{% if rows %}
+<div class="table-wrap"><table class="dense">
+  <thead><tr><th scope="col">State</th><th scope="col">Alert</th><th scope="col">Message</th><th scope="col">Opened</th><th scope="col">Cleared</th><th scope="col">Sent to</th></tr></thead>
+  <tbody>{% for a in rows %}
+  <tr class="{{ '' if a.state == 'open' else 'is-off' }}">
+    <td>{% if a.state == 'open' %}<span class="tag tag-danger">Open</span>{% else %}<span class="tag tag-muted">{{ 'Sent' if a.kind == 'test' else 'Cleared' }}</span>{% endif %}</td>
+    <td class="nowrap">{{ labels.get(a.kind, a.kind) }}</td>
+    <td>{{ a.message }}</td>
+    <td class="nowrap">{{ a.opened_at|dtc }}</td>
+    <td class="nowrap">{% if a.resolved_at and a.kind != 'test' %}{{ a.resolved_at|dtc }}<span class="cell-sub">after {{ (a.resolved_at - a.opened_at).total_seconds()|duration }}</span>{% else %}—{% endif %}</td>
+    <td class="small">{{ a.notified or '—' }}</td>
+  </tr>{% endfor %}</tbody>
+</table></div>
+{% else %}<p class="empty">No alerts{{ ' yet' if show != 'all' else '' }}.</p>{% endif %}
+</section>
+{% endblock %}

@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block title %}Auth log{% endblock %}
+{% block content %}
+<header class="page-head"><div><h1>Authentication log</h1>
+<p class="lede">Every RADIUS accept and reject recorded by FreeRADIUS. Select a time for the full record: reject reason, certificate, AD groups and the matching access rule. Passwords are never stored.</p></div></header>
+<form class="filters wrap" method="get" role="search">
+  <div><label for="user">User / host</label><input id="user" name="user" value="{{ f.user }}"></div>
+  <div><label for="nas">NAS address</label><input id="nas" name="nas" value="{{ f.nas }}" class="mono"></div>
+  <div><label for="mac">Station MAC</label><input id="mac" name="mac" value="{{ f.mac }}" class="mono"></div>
+  <div><label for="reply">Result</label><select id="reply" name="reply"><option value="">Any</option>{% for v in ['Access-Accept', 'Access-Reject'] %}<option {{ 'selected' if f.reply == v else '' }}>{{ v }}</option>{% endfor %}</select></div>
+  <div><label for="method">Method</label><select id="method" name="method"><option value="">Any</option>{% for v in ['eap-tls', 'pap-admin', 'mab', 'other'] %}<option {{ 'selected' if f.method == v else '' }}>{{ v }}</option>{% endfor %}</select></div>
+  <div><label for="since">From</label><input id="since" name="since" type="date" value="{{ since or '' }}"></div>
+  <div><label for="until">To</label><input id="until" name="until" type="date" value="{{ until or '' }}"></div>
+  <div class="filter-go"><button class="btn" type="submit">Filter</button> <a href="{{ url_for('logs.auth_log') }}" class="btn btn-quiet">Clear</a></div>
+</form>
+<section class="panel flush">
+{% if rows %}
+<div class="table-wrap"><table class="dense">
+  <thead><tr><th scope="col">Time</th><th scope="col">Result</th><th scope="col">User</th><th scope="col">Method</th><th scope="col">Switch / port</th><th scope="col">Station</th><th scope="col" class="num">VLAN</th><th scope="col">Reason</th></tr></thead>
+  <tbody>{% for r in rows %}
+  <tr><td class="nowrap"><a href="{{ url_for('logs.auth_detail', aid=r.id) }}" title="Details">{{ r.authdate|dtc }}</a></td>
+    <td>{% if r.reply == 'Access-Accept' %}<span class="tag tag-ok">Accept</span>{% elif r.reply == 'Access-Reject' %}<span class="tag tag-danger">Reject</span>{% else %}{{ r.reply or '—' }}{% endif %}</td>
+    <td class="mono clip">{{ r.username }}</td><td>{{ r.authmethod or '—' }}</td>
+    <td>{% if r.client %}{{ r.client.name }}{% else %}<span class="mono">{{ r.nas or '—' }}</span>{% endif %}{% if r.nasportid %}<span class="cell-sub mono">{{ r.nasportid }}</span>{% endif %}</td>
+    <td class="mono mac">{{ r.callingstationid|mac if r.callingstationid else '' }}</td>
+    <td class="num">{{ r.vlan or '' }}</td>
+    <td class="reason-cell">{% if r.reason_text %}<a href="{{ url_for('logs.auth_detail', aid=r.id) }}" class="reason">{{ r.reason_text }}</a>{% elif r.reply == 'Access-Reject' %}<span class="muted small">—</span>{% endif %}</td></tr>
+  {% endfor %}</tbody>
+</table></div>
+{% else %}<p class="empty">No authentications match these filters.</p>{% endif %}
+</section>
+{{ m.pager(page, more, 'logs.auth_log', {'user': f.user, 'nas': f.nas, 'mac': f.mac, 'reply': f.reply, 'method': f.method, 'since': since or '', 'until': until or ''}) }}
+{% endblock %}

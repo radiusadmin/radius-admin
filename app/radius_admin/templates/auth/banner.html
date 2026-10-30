@@ -1,0 +1,12 @@
+{% extends "auth/_frame.html" %}
+{% import "_macros.html" as m %}
+{% block title %}Notice{% endblock %}
+{% block gate %}
+<h1>Notice and consent</h1>
+<div class="banner-text">{% for para in banner.split('\n') if para.strip() %}<p>{{ para }}</p>{% endfor %}</div>
+<form method="post" action="{{ url_for('auth.banner_ack') }}">
+  {{ m.csrf() }}
+  <input type="hidden" name="accept" value="1">
+  <button type="submit" class="btn btn-primary btn-block">I understand and consent</button>
+</form>
+{% endblock %}

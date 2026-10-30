@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block title %}{{ 'Add switch admin' if is_new else 'Set password' }}{% endblock %}
+{% block content %}
+<header class="page-head"><h1>{{ 'Add switch admin' if is_new else 'Set password for ' ~ username }}</h1></header>
+<section class="panel narrow">
+<form method="post" class="stack">
+  {{ m.csrf() }}
+  {% if is_new %}
+  <label for="username">Username</label>
+  <input id="username" name="username" value="{{ username }}" required maxlength="64" class="mono" autocomplete="off"{{ m.described(errors, 'username') }}>
+  {{ m.field_error(errors, 'username') }}
+  {% endif %}
+  <label for="password">Password</label>
+  <input id="password" name="password" type="password" required minlength="{{ min_length }}" maxlength="128" autocomplete="new-password" aria-describedby="password-hint{{ ' password-error' if errors.password else '' }}"{{ ' aria-invalid=true' if errors.password else '' }}>
+  <p id="password-hint" class="small muted">At least {{ min_length }} characters. No double quotes, backslashes or line breaks. Stored as PBKDF2-HMAC-SHA256 (600,000 iterations).</p>
+  <label for="confirm">Repeat password</label>
+  <input id="confirm" name="confirm" type="password" required maxlength="128" autocomplete="new-password">
+  {{ m.field_error(errors, 'password') }}
+  <div class="actions"><button type="submit" class="btn btn-primary">{{ 'Add switch admin' if is_new else 'Set password' }}</button>
+  <a class="btn btn-quiet" href="{{ url_for('switch_admins.index') }}">Cancel</a></div>
+</form>
+</section>
+{% endblock %}

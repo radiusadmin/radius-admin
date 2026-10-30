@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block title %}Dashboard{% endblock %}
+{% block content %}
+<header class="page-head"><h1>Dashboard</h1></header>
+{% if setup %}
+<section class="panel setup-strip" aria-label="Setup">
+  <div><p class="check-title">Finish setting up this server</p>
+  <p class="small muted">{{ setup.done }} of {{ setup.total }} required steps done.</p>
+  <progress max="{{ setup.total }}" value="{{ setup.done }}">{{ setup.done }} of {{ setup.total }}</progress></div>
+  <a class="btn btn-primary" href="{{ url_for('setup.index') }}">Open the setup checklist</a>
+</section>
+{% endif %}
+
+<section class="status-board" aria-label="Server status">
+  <div class="status-cell {{ 'is-ok' if status.ok and status.service_active else 'is-bad' }}">
+    <p class="label">FreeRADIUS</p>
+    <p class="value">{% if status.ok %}{{ 'Running' if status.service_active else 'Stopped' }}{% else %}Unknown{% endif %}</p>
+    <p class="note">{% if status.ok %}{{ status.radiusd_version or '' }}{% else %}Helper: {{ status.message }}{% endif %}</p>
+  </div>
+  {% if fips_mode %}
+  <div class="status-cell {{ 'is-ok' if fips.ok and (not status.ok or status.fips_enabled) else 'is-bad' }}">
+    <p class="label">FIPS mode</p>
+    <p class="value">{{ 'On' if fips.ok else 'Off' }}</p>
+    <p class="note">Kernel {{ 'on' if fips.kernel else 'off' }} · OpenSSL {{ 'on' if fips.openssl else 'off' }}</p>
+  </div>
+  {% endif %}
+  <div class="status-cell {{ 'is-warn' if state.pending else 'is-ok' }}">
+    <p class="label">Configuration</p>
+    <p class="value">{{ 'Changes pending' if state.pending else 'In sync' }}</p>
+    <p class="note">{% if state.last %}Last applied {{ state.last.at|dt }} by {{ state.last.actor }}{% else %}Never applied from this console{% endif %}</p>
+  </div>
+</section>
+
+{% if ops and not ops.monitor_alive %}
+<p class="flash flash-error" role="alert">The monitoring service is not running{% if ops.heartbeat_at %} (last seen {{ ops.heartbeat_at|ago }}){% endif %}: no alerts, switch polling or session actions. Check <span class="mono">systemctl status radius-admin-snmp</span>.</p>
+{% endif %}
+{% if open_alerts %}
+<section class="panel callout callout-danger" aria-label="Open alerts">
+  <div class="panel-head"><h2>{{ open_alerts|length }} open alert{{ '' if open_alerts|length == 1 else 's' }}</h2><a href="{{ url_for('alerts.index') }}">All alerts</a></div>
+  <ul class="alert-list">{% for a in open_alerts %}<li><strong>{{ labels.get(a.kind, a.kind) }}</strong> <span class="small muted">since {{ a.opened_at|ago }}</span><br>{{ a.message }}</li>{% endfor %}</ul>
+</section>
+{% endif %}
+
+<section class="counts" aria-label="Inventory">
+  <a href="{{ url_for('clients.index') }}"><strong>{{ counts.clients }}</strong> RADIUS clients</a>
+  <a href="{{ url_for('rules.index') }}"><strong>{{ counts.rules }}</strong> access rules</a>
+  <a href="{{ url_for('switch_admins.index') }}"><strong>{{ counts.switch_admins }}</strong> switch admins</a>
+  <a href="{{ url_for('mab.index') }}"><strong>{{ counts.mab }}</strong> MAB devices</a>
+  {% if ops %}<a href="{{ url_for('sessions.index') }}"><strong>{{ ops.sessions }}</strong> live sessions</a>
+  {% if ops.unknown_mab %}<a href="{{ url_for('mab.pending') }}" class="hot"><strong>{{ ops.unknown_mab }}</strong> unknown devices</a>{% endif %}{% endif %}
+  <a href="{{ url_for('logs.auth_log', reply='Access-Accept') }}"><strong>{{ counts.accepts_24h }}</strong> accepts, 24 h</a>
+  <a href="{{ url_for('logs.auth_log', reply='Access-Reject') }}" class="{{ 'hot' if counts.rejects_24h else '' }}"><strong>{{ counts.rejects_24h }}</strong> rejects, 24 h</a>
+</section>
+
+<section class="panel">
+  <div class="panel-head"><h2>Recent rejects</h2><a href="{{ url_for('logs.auth_log', reply='Access-Reject') }}">Open auth log</a></div>
+  {% if rejects %}
+  <div class="table-wrap"><table>
+    <thead><tr><th scope="col">Time</th><th scope="col">User</th><th scope="col">Method</th><th scope="col">NAS</th><th scope="col">Station</th><th scope="col">Reason</th></tr></thead>
+    <tbody>{% for r in rejects %}
+      <tr><td class="nowrap"><a href="{{ url_for('logs.auth_detail', aid=r.id) }}">{{ r.authdate|dtc }}</a></td><td class="mono clip">{{ r.username }}</td><td>{{ r.authmethod or '—' }}</td><td class="mono">{{ r.nas or '—' }}</td><td class="mono mac">{{ r.callingstationid|mac if r.callingstationid else '—' }}</td><td class="small">{{ r.reason_text or '—' }}</td></tr>
+    {% endfor %}</tbody>
+  </table></div>
+  {% else %}<p class="empty">No rejected authentications recorded.</p>{% endif %}
+</section>
+{% endblock %}

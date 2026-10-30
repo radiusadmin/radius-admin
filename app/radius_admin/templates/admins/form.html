@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block title %}Add account{% endblock %}
+{% block content %}
+<header class="page-head"><h1>Add console account</h1></header>
+<section class="panel narrow">
+<form method="post" class="stack">
+  {{ m.csrf() }}
+  <input type="hidden" name="return_to" value="{{ url_for('admins.new') }}">
+  <label for="username">Username</label>
+  <input id="username" name="username" value="{{ d.username or '' }}" required maxlength="64" pattern="[a-z0-9._\-]{2,64}" class="mono" autocapitalize="none" aria-describedby="username-hint"{{ m.described(errors, 'username', True) }}>
+  <p id="username-hint" class="small muted">2–64 lowercase letters, digits, dot, underscore or hyphen.</p>
+  {{ m.field_error(errors, 'username') }}
+  <label for="display_name">Full name</label>
+  <input id="display_name" name="display_name" value="{{ d.display_name or '' }}" maxlength="200">
+  <fieldset><legend>Role</legend>
+  {% for r in roles %}<label class="check"><input type="radio" name="role" value="{{ r }}" {{ 'checked' if d.role == r else '' }}> {{ r|capitalize }}</label>{% endfor %}
+  </fieldset>
+  <p class="small muted">A one-time temporary password is shown after you create the account. The user must change it and set up two-factor at first sign-in.</p>
+  <div class="actions"><button type="submit" class="btn btn-primary">Create account</button>
+  <a class="btn btn-quiet" href="{{ url_for('admins.index') }}">Cancel</a></div>
+</form>
+</section>
+{% endblock %}

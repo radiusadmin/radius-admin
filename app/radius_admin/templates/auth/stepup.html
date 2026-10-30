@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block title %}Confirm identity{% endblock %}
+{% block content %}
+<section class="panel narrow">
+  <h1>Confirm it's you</h1>
+  <p class="muted">This action is sensitive. Re-enter your password and second factor. Confirmation lasts a few minutes.</p>
+  {% if error %}<p class="flash flash-error" role="alert">{{ error }}</p>{% endif %}
+  <form method="post" action="{{ url_for('auth.stepup') }}" class="stack">
+    {{ m.csrf() }}
+    <input type="hidden" name="next" value="{{ next }}">
+    {% include "auth/_stepup_fields.html" %}
+    <div class="actions"><button type="submit" class="btn btn-primary">Confirm</button>
+    <a class="btn btn-quiet" href="{{ url_for('dashboard.index') }}">Cancel</a></div>
+  </form>
+</section>
+{% endblock %}

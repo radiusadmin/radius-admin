@@ -1,0 +1,7 @@
+{% extends "auth/_frame.html" %}
+{% block title %}Sign-in refused{% endblock %}
+{% block gate %}
+<h1>Sign-in refused</h1>
+<p class="flash flash-error" role="alert">{{ message }}</p>
+<p><a class="btn btn-quiet btn-block" href="{{ url_for('auth.login') }}">Back to sign-in</a></p>
+{% endblock %}

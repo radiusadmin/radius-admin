@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block title %}Access rules{% endblock %}
+{% block content %}
+<header class="page-head">
+  <div><h1>Access rules</h1>
+  <p class="lede">For 802.1X (EAP-TLS) devices, the first rule whose AD group matches assigns the VLAN. Wired rules match Ethernet ports; wireless rules match the SSID. No match means reject. FreeRADIUS reads these rules on every authentication, so saved changes apply to the next one.</p></div>
+  {% if has_role('operator') %}<div class="head-actions"><a class="btn btn-primary" href="{{ url_for('rules.new') }}">Add rule</a></div>{% endif %}
+</header>
+
+<section class="panel match-test" aria-labelledby="test-h">
+  <div class="panel-head"><h2 id="test-h">Test a match</h2><span class="small muted">Asks the database function FreeRADIUS uses. Changes nothing.</span></div>
+  <form method="post" action="{{ url_for('rules.index') }}#test-h" class="test-grid">
+    {{ m.csrf() }}
+    <fieldset><legend>Connection</legend>
+      <label class="check"><input type="radio" name="t_connection" value="wired" {{ 'checked' if not test or test.connection != 'wireless' else '' }}> Wired (Ethernet)</label>
+      <label class="check"><input type="radio" name="t_connection" value="wireless" data-reveals="t-wireless" {{ 'checked' if test and test.connection == 'wireless' else '' }}> Wireless</label>
+      <div id="t-wireless" class="reveal-box">
+        <label for="t_ssid">SSID</label>
+        <input id="t_ssid" name="t_ssid" value="{{ test.ssid if test else '' }}" maxlength="32">
+        <label for="t_called">or full Called-Station-Id</label>
+        <input id="t_called" name="t_called" value="{{ test.called if test else '' }}" maxlength="253" class="mono" placeholder="AA-BB-CC-DD-EE-FF:Example_Admin">
+      </div>
+    </fieldset>
+    <div>
+      <label for="t_groups">Computer's AD groups, one per line</label>
+      <textarea id="t_groups" name="t_groups" rows="5" class="mono" spellcheck="false" placeholder="Wired-Support&#10;Domain Computers">{{ test.groups_text if test else '' }}</textarea>
+      <div class="actions"><button type="submit" class="btn">Test</button></div>
+    </div>
+  </form>
+  {% if test %}
+  <div class="test-result" role="status" aria-live="polite">
+    {% if test.errors %}
+      <p class="flash flash-error">{{ test.errors|join(' ') }}</p>
+    {% elif test.vlan %}
+      <p class="test-verdict ok">Accept, VLAN <span class="vlan">{{ test.vlan }}</span></p>
+      {% if test.rule %}<p class="small">Matched rule: order {{ test.rule.priority }}, {{ 'wired' if test.rule.connection == 'wired' else 'SSID ' ~ test.rule.ssid }}, group <span class="mono">{{ test.rule.ad_group }}</span>.</p>{% endif %}
+    {% else %}
+      <p class="test-verdict bad">Reject, no VLAN</p>
+      <p class="small">{% if test.unknown_ssid %}No enabled wireless rule exists for this SSID.{% else %}None of these groups matches an enabled {{ test.connection }} rule.{% endif %}</p>
+    {% endif %}
+    {% if not test.errors %}<p class="small muted mono">radius_admin_vlan('{{ test.port_type }}', '{{ test.called_station }}', '{{ test.groups|join(',') }}')</p>{% endif %}
+  </div>
+  {% endif %}
+</section>
+
+{% for title, ssid, rules in groups %}
+<section class="panel flush rule-group">
+  <div class="panel-head"><h2>{{ title }}</h2><span class="small muted">{{ rules|length }} rule{{ '' if rules|length == 1 else 's' }}, evaluated top to bottom</span></div>
+  {% if rules %}
+  <div class="table-wrap"><table class="rules-table">
+    <colgroup><col class="c-order"><col class="c-group"><col class="c-vlan"><col class="c-desc"><col class="c-status"><col class="c-actions"></colgroup>
+    <thead><tr><th scope="col" class="num">Order</th><th scope="col">AD group</th><th scope="col" class="num">VLAN</th><th scope="col">Description</th><th scope="col">Status</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead>
+    <tbody>{% for r in rules %}
+    <tr class="{{ '' if r.enabled else 'is-off' }}">
+      <td class="num">{{ r.priority }}</td><td class="mono">{{ r.ad_group }}</td><td class="num"><span class="vlan">{{ r.vlan }}</span></td>
+      <td>{{ r.description }}</td><td>{{ m.onoff(r.enabled) }}</td>
+      <td class="row-actions">{% if has_role('operator') %}
+        {% if not loop.first %}{{ m.post_button(url_for('rules.move', rid=r.id), 'Up', 'btn btn-quiet btn-small', confirm='Move this rule up? The new order applies to the next authentication.', fields={'direction': 'up'}) }}{% endif %}
+        {% if not loop.last %}{{ m.post_button(url_for('rules.move', rid=r.id), 'Down', 'btn btn-quiet btn-small', confirm='Move this rule down? The new order applies to the next authentication.', fields={'direction': 'down'}) }}{% endif %}
+        <a class="btn btn-quiet btn-small" href="{{ url_for('rules.edit', rid=r.id) }}">Edit</a>
+        {{ m.post_button(url_for('rules.delete', rid=r.id), 'Delete', 'btn btn-danger-quiet btn-small', confirm='Delete the rule for ' ~ r.ad_group ~ ' (VLAN ' ~ r.vlan ~ ')? This takes effect at the next authentication: devices that only match this rule will be rejected or get a different VLAN.') }}
+      {% endif %}</td>
+    </tr>{% endfor %}</tbody>
+  </table></div>
+  {% else %}<p class="empty">No wired rules: every wired 802.1X request will be rejected.</p>{% endif %}
+</section>
+{% endfor %}
+{% endblock %}

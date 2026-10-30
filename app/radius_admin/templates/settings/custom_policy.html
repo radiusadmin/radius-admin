@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block title %}Custom policy{% endblock %}
+{% block content %}
+<header class="page-head"><div><h1>Custom policy</h1>
+<p class="lede">Unlang run at the end of post-auth inside <span class="mono">radius_admin_custom</span>. Leave empty for none. File includes, environment expansion, exec and scripting modules are refused.</p></div></header>
+{{ m.apply_note() }}
+{% if error %}<p class="flash flash-error" role="alert">{{ error }}</p>{% endif %}
+<section class="panel">
+<form method="post" class="stack">
+  {{ m.csrf() }}
+  <label for="custom_policy">Policy body</label>
+  <textarea id="custom_policy" name="custom_policy" rows="22" class="mono code-edit" spellcheck="false" maxlength="65536">{{ text }}</textarea>
+  {% if need_stepup %}
+  <fieldset class="stepup-inline"><legend>Confirm it's you</legend>
+    {% with pfx = 'stepup_' %}{% include "auth/_stepup_fields.html" %}{% endwith %}
+  </fieldset>
+  {% endif %}
+  <div class="actions"><button type="submit" class="btn btn-primary">Save custom policy</button>
+  <a class="btn btn-quiet" href="{{ url_for('settings.policy_preview') }}">Preview generated file</a></div>
+</form>
+</section>
+{% endblock %}

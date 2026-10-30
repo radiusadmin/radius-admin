@@ -1,0 +1,146 @@
+dn: dc=example,dc=net
+objectClass: dcObject
+objectClass: organization
+o: example
+dc: example
+
+dn: OU=Service Accounts,DC=example,DC=net
+objectClass: organizationalUnit
+ou: Service Accounts
+
+dn: CN=RADIUS LDAP Bind,OU=Service Accounts,DC=example,DC=net
+objectClass: serviceAccount
+cn: RADIUS LDAP Bind
+userPassword: @BINDPW@
+
+dn: OU=Computers,DC=example,DC=net
+objectClass: organizationalUnit
+ou: Computers
+
+dn: OU=Groups,DC=example,DC=net
+objectClass: organizationalUnit
+ou: Groups
+
+# pc1: Wired-Office (VLAN 500) + Wireless-Office-Test (530) + WIRELESS-OFFICE (530)
+dn: CN=PC1,OU=Computers,DC=example,DC=net
+objectClass: computer
+cn: PC1
+dNSHostName: pc1.example.net
+memberOf: CN=Wired-Office,OU=Groups,DC=example,DC=net
+memberOf: CN=Wireless-Office-Test,OU=Groups,DC=example,DC=net
+memberOf: CN=WIRELESS-OFFICE,OU=Groups,DC=example,DC=net
+
+# pc2: Wired-Support + Wired-Office (Support has priority -> 510) + WIRELESS-SUPPORT (510)
+dn: CN=PC2,OU=Computers,DC=example,DC=net
+objectClass: computer
+cn: PC2
+dNSHostName: pc2.example.net
+memberOf: CN=Wired-Support,OU=Groups,DC=example,DC=net
+memberOf: CN=Wired-Office,OU=Groups,DC=example,DC=net
+memberOf: CN=WIRELESS-SUPPORT,OU=Groups,DC=example,DC=net
+
+# pc3: Wired-Utility only (520)
+dn: CN=PC3,OU=Computers,DC=example,DC=net
+objectClass: computer
+cn: PC3
+dNSHostName: pc3.example.net
+memberOf: CN=Wired-Utility,OU=Groups,DC=example,DC=net
+
+# pc4: in AD, no groups -> must be rejected everywhere
+dn: CN=PC4,OU=Computers,DC=example,DC=net
+objectClass: computer
+cn: PC4
+dNSHostName: pc4.example.net
+
+# pc5: Wired-Office but its certificate is REVOKED (OCSP)
+dn: CN=PC5,OU=Computers,DC=example,DC=net
+objectClass: computer
+cn: PC5
+dNSHostName: pc5.example.net
+memberOf: CN=Wired-Office,OU=Groups,DC=example,DC=net
+
+# pc6: only in "R&D Lab (Bldg-2)", which is itself a member of Wired-Utility (NESTED -> 520)
+dn: CN=PC6,OU=Computers,DC=example,DC=net
+objectClass: computer
+cn: PC6
+dNSHostName: pc6.example.net
+memberOf: CN=R&D Lab (Bldg-2),OU=Groups,DC=example,DC=net
+
+# pc7: only in a group whose name contains a comma ("Guests,Wired-Support"); must NOT
+# be treated as a member of Wired-Support (comma-list injection) -> reject
+dn: CN=PC7,OU=Computers,DC=example,DC=net
+objectClass: computer
+cn: PC7
+dNSHostName: pc7.example.net
+memberOf: CN=Guests\,Wired-Support,OU=Groups,DC=example,DC=net
+
+# pc8: in 300 groups; only the LAST one ("Zz Many 300") matches a rule (wired 88)
+dn: CN=PC8,OU=Computers,DC=example,DC=net
+objectClass: computer
+cn: PC8
+dNSHostName: pc8.example.net
+@PC8_MEMBEROF@
+
+# pc9: in groups whose cn contains a backslash-escape text and an apostrophe:
+#   "Evil\047,NULL) UNION ALL SELECT \047999\047 --"  and  "O'Brien Lab"
+# Neither may inject; "O'Brien Lab" matches a rule literally (wired 89).
+dn: CN=PC9,OU=Computers,DC=example,DC=net
+objectClass: computer
+cn: PC9
+dNSHostName: pc9.example.net
+memberOf: CN=Evil\5C047\2CNULL) UNION ALL SELECT \5C047999\5C047 --,OU=Groups,DC=example,DC=net
+memberOf: CN=O'Brien Lab,OU=Groups,DC=example,DC=net
+
+dn: CN=Evil\5C047\2CNULL) UNION ALL SELECT \5C047999\5C047 --,OU=Groups,DC=example,DC=net
+objectClass: group
+cn: Evil\047,NULL) UNION ALL SELECT \047999\047 --
+member: CN=PC9,OU=Computers,DC=example,DC=net
+
+dn: CN=O'Brien Lab,OU=Groups,DC=example,DC=net
+objectClass: group
+cn: O'Brien Lab
+member: CN=PC9,OU=Computers,DC=example,DC=net
+
+@PC8_GROUPS@
+dn: CN=R&D Lab (Bldg-2),OU=Groups,DC=example,DC=net
+objectClass: group
+cn: R&D Lab (Bldg-2)
+member: CN=PC6,OU=Computers,DC=example,DC=net
+
+dn: CN=Guests\,Wired-Support,OU=Groups,DC=example,DC=net
+objectClass: group
+cn: Guests,Wired-Support
+member: CN=PC7,OU=Computers,DC=example,DC=net
+
+dn: CN=Wired-Support,OU=Groups,DC=example,DC=net
+objectClass: group
+cn: Wired-Support
+member: CN=PC2,OU=Computers,DC=example,DC=net
+
+dn: CN=Wired-Office,OU=Groups,DC=example,DC=net
+objectClass: group
+cn: Wired-Office
+member: CN=PC1,OU=Computers,DC=example,DC=net
+member: CN=PC2,OU=Computers,DC=example,DC=net
+member: CN=PC5,OU=Computers,DC=example,DC=net
+
+dn: CN=Wired-Utility,OU=Groups,DC=example,DC=net
+objectClass: group
+cn: Wired-Utility
+member: CN=PC3,OU=Computers,DC=example,DC=net
+member: CN=R&D Lab (Bldg-2),OU=Groups,DC=example,DC=net
+
+dn: CN=Wireless-Office-Test,OU=Groups,DC=example,DC=net
+objectClass: group
+cn: Wireless-Office-Test
+member: CN=PC1,OU=Computers,DC=example,DC=net
+
+dn: CN=WIRELESS-SUPPORT,OU=Groups,DC=example,DC=net
+objectClass: group
+cn: WIRELESS-SUPPORT
+member: CN=PC2,OU=Computers,DC=example,DC=net
+
+dn: CN=WIRELESS-OFFICE,OU=Groups,DC=example,DC=net
+objectClass: group
+cn: WIRELESS-OFFICE
+member: CN=PC1,OU=Computers,DC=example,DC=net

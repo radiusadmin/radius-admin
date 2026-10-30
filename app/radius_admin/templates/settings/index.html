@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block title %}Settings{% endblock %}
+{% block content %}
+<header class="page-head"><h1>Settings</h1></header>
+<section class="panel narrow">
+<form method="post" class="stack" data-confirm="Save settings? Subnet and privilege changes affect the next switch login.">
+  {{ m.csrf() }}
+  <input type="hidden" name="return_to" value="{{ url_for('settings.index') }}">
+  <h2>Switch management logins</h2>
+  <p class="small muted">FreeRADIUS reads these on every switch login; saving affects the next login.</p>
+  <label for="admin_subnet">Management subnet</label>
+  <input id="admin_subnet" name="admin_subnet" value="{{ s.admin_subnet }}" required class="mono" aria-describedby="admin_subnet-hint"{{ m.described(errors, 'admin_subnet', True) }}>
+  <p id="admin_subnet-hint" class="small muted">Switch admin (PAP) logins are accepted only from switches in this network.</p>
+  {{ m.field_error(errors, 'admin_subnet') }}
+  <label class="check"><input type="checkbox" name="admin_priv15" value="1" {{ 'checked' if s.admin_priv15 else '' }}> Grant privilege level 15 on login (<span class="mono">shell:priv-lvl=15</span>)</label>
+  <h2>Sign-in notice</h2>
+  <label for="banner_text">Notice and consent text</label>
+  <textarea id="banner_text" name="banner_text" rows="7" maxlength="4000"{{ m.described(errors, 'banner_text') }}>{{ s.banner_text }}</textarea>
+  {{ m.field_error(errors, 'banner_text') }}
+  <h2>Console sessions</h2>
+  <p class="small muted">How long administrators stay signed in to this console, and how often sensitive actions (applying changes, managing accounts, revealing secrets) ask them to confirm it's them again. Longer times are more convenient and less strict.</p>
+  <div class="grid-2">
+    <div><label for="stepup_minutes">Ask to confirm it's you after (minutes)</label>
+      <input id="stepup_minutes" name="stepup_minutes" value="{{ s.limits.stepup_minutes }}" inputmode="numeric" maxlength="2"{{ m.described(errors, 'stepup_minutes', True) }}>
+      {{ m.field_error(errors, 'stepup_minutes') }}</div>
+    <div><label for="session_idle_minutes">Sign out after inactivity (minutes)</label>
+      <input id="session_idle_minutes" name="session_idle_minutes" value="{{ s.limits.session_idle_minutes }}" inputmode="numeric" maxlength="3"{{ m.described(errors, 'session_idle_minutes') }}>
+      {{ m.field_error(errors, 'session_idle_minutes') }}</div>
+    <div><label for="session_absolute_hours">Maximum session length (hours)</label>
+      <input id="session_absolute_hours" name="session_absolute_hours" value="{{ s.limits.session_absolute_hours }}" inputmode="numeric" maxlength="2"{{ m.described(errors, 'session_absolute_hours') }}>
+      {{ m.field_error(errors, 'session_absolute_hours') }}</div>
+  </div>
+  <p id="stepup_minutes-hint" class="small muted">Allowed: confirm 1–60 minutes, inactivity 5–480 minutes, session 1–24 hours. Changes apply to signed-in sessions at once.</p>
+  <div class="actions"><button type="submit" class="btn btn-primary">Save settings</button></div>
+</form>
+</section>
+{% endblock %}

@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block title %}Account{% endblock %}
+{% block content %}
+<header class="page-head"><h1>Your account</h1>
+<p class="lede">{{ current_user.username }} · {{ current_user.role }}</p></header>
+<section class="panel">
+  <dl class="kv">
+    {% if current_user.auth_source == 'saml' %}
+    <dt>Sign-in</dt><dd>Single sign-on. Your password and second factor are managed by your identity provider; your role follows your group membership at each sign-in.</dd>
+    {% else %}
+    <dt>Password changed</dt><dd>{{ current_user.password_changed_at|dt }} — <a href="{{ url_for('account.password') }}">Change password</a></dd>
+    <dt>Two-factor</dt><dd>{{ {'totp': 'Authenticator app', 'cert': 'Client certificate'}.get(current_user.mfa_method, 'none') }}{% if current_user.cert_subject %} (<span class="mono">{{ current_user.cert_subject }}</span>){% endif %} — <a href="{{ url_for('account.mfa') }}">Change method</a></dd>
+    {% endif %}
+  </dl>
+</section>
+<section class="panel">
+  <div class="panel-head"><h2>Signed-in sessions</h2>
+  {% if sessions|length > 1 %}{{ m.post_button(url_for('account.revoke_others'), 'Sign out other sessions', 'btn btn-quiet') }}{% endif %}</div>
+  <div class="table-wrap"><table>
+    <thead><tr><th scope="col">Started</th><th scope="col">Last seen</th><th scope="col">Address</th><th scope="col">Browser</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead>
+    <tbody>{% for s in sessions %}
+    <tr><td class="nowrap">{{ s.created_at|dtc }}</td><td class="nowrap">{{ s.last_seen_at|dtc }}</td><td class="mono">{{ s.ip or '—' }}</td>
+      <td class="clip" title="{{ s.user_agent }}">{{ s.user_agent or '—' }}</td>
+      <td class="row-actions">{% if s.id == this_session %}<span class="tag tag-ok">This session</span>{% else %}{{ m.post_button(url_for('account.revoke', sid=s.id), 'Revoke', 'btn btn-quiet btn-small') }}{% endif %}</td></tr>
+    {% endfor %}</tbody>
+  </table></div>
+</section>
+{% endblock %}
