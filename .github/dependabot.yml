@@ -1,0 +1,9 @@
+version: 2
+updates:
+  # Keep the GitHub Actions used by the workflows up to date (the application itself uses
+  # distribution packages only, so there is nothing else for Dependabot to track).
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    target-branch: dev

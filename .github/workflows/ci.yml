@@ -1,0 +1,105 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHONDONTWRITEBYTECODE: "1"
+  REPO: /srv/radius-admin
+
+jobs:
+  lint:
+    name: Shellcheck and site-data scan
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: shellcheck
+        run: |
+          sudo apt-get install -y -q shellcheck >/dev/null
+          shellcheck -S warning deploy/*.sh tests/freeradius/*.sh tests/migration/*.sh \
+              tests/installer/*.sh tools/*.sh tools/ci/*.sh
+      - name: Site-data scan
+        env:
+          SITE_TERMS_CONTENT: ${{ secrets.SITE_TERMS }}
+        run: |
+          if [ -z "$SITE_TERMS_CONTENT" ]; then
+            echo "::warning::Repository secret SITE_TERMS is not set: only the generic checks run."
+          else
+            printf '%s\n' "$SITE_TERMS_CONTENT" > "$RUNNER_TEMP/site-terms.txt"
+            export SITE_TERMS="$RUNNER_TEMP/site-terms.txt"
+          fi
+          # Print where a hit is (file:line), never the matching text, so the private
+          # terms cannot end up in the log.
+          set +e
+          tools/site-scan.sh > "$RUNNER_TEMP/scan.out" 2>&1
+          rc=$?
+          awk -F: '/^== / || /^site-data scan/ || /^warning/ { print; next } { print $1 ":" $2 }' "$RUNNER_TEMP/scan.out" \
+            | sed "s#$GITHUB_WORKSPACE/##"
+          rm -f "$RUNNER_TEMP/site-terms.txt"
+          exit $rc
+
+  unit:
+    name: Root helper and installer tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare sandbox
+        run: |
+          sudo mkdir -p "$REPO" && sudo cp -a "$GITHUB_WORKSPACE/." "$REPO/"
+          sudo "$REPO/tools/ci/setup.sh" "$REPO"
+      - name: Root helper tests
+        run: cd "$REPO" && sudo -E python3 -m pytest -q -p no:cacheprovider tests/helper
+      - name: Installer answers tests
+        run: cd "$REPO" && sudo bash tests/installer/test_answers.sh
+
+  bench:
+    name: App tests, FreeRADIUS bench and migration
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    if: >-
+      github.event_name != 'push' ||
+      github.ref_name == 'main' || github.ref_name == 'dev' || github.ref_name == 'testing' ||
+      startsWith(github.ref_name, 'ci/')
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare sandbox
+        run: |
+          sudo mkdir -p "$REPO" && sudo cp -a "$GITHUB_WORKSPACE/." "$REPO/"
+          sudo "$REPO/tools/ci/setup.sh" "$REPO"
+      - name: Build FreeRADIUS 3.2.10 and eapol_test
+        run: sudo "$REPO/tools/ci/build-freeradius.sh" /opt/fr-3.2.10 /opt/ci-src
+      - name: App tests
+        run: |
+          cd "$REPO/app"
+          sudo runuser -u postgres -- env PYTHONDONTWRITEBYTECODE=1 RADIUS_ADMIN_TEST_FR_PREFIX=/opt/fr-3.2.10 \
+              python3 -m pytest -q -p no:cacheprovider
+      - name: FreeRADIUS bench
+        run: |
+          cd "$REPO"
+          sudo -E python3 tests/freeradius/run-tests.py --prefix /opt/fr-3.2.10 --bench /var/tmp/ra-bench \
+              --eapol-test /opt/ci-src/eapol_test
+      - name: Migration test
+        run: |
+          cd "$REPO"
+          sudo bash tests/migration/test_migrate.sh \
+              /opt/ci-src/freeradius-server-3.2.10/raddb/mods-config/sql/main/sqlite/schema.sql /var/tmp/ra-mig
+      - name: Collect logs
+        if: failure()
+        run: |
+          mkdir -p "$RUNNER_TEMP/logs"
+          sudo sh -c 'cp /var/tmp/ra-bench/*.log /opt/ci-src/*.log /var/log/postgresql/*.log "$0" 2>/dev/null; chmod -R a+r "$0"' "$RUNNER_TEMP/logs" || true
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: bench-logs
+          path: ${{ runner.temp }}/logs
+          retention-days: 7
