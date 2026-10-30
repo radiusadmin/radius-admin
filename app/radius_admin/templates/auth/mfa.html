@@ -1,0 +1,25 @@
+{% extends "auth/_frame.html" %}
+{% import "_macros.html" as m %}
+{% block title %}Verify{% endblock %}
+{% block gate %}
+<h1>Second factor</h1>
+<p class="muted">Signed in as <strong>{{ user.username }}</strong>.</p>
+{% if error %}<p class="flash flash-error" role="alert">{{ error }}</p>{% endif %}
+<form method="post" class="stack">
+  {{ m.csrf() }}
+  {% if user.mfa_method == 'totp' %}
+  <label for="code">6-digit code from your authenticator</label>
+  <input id="code" name="code" class="code-input" inputmode="numeric" pattern="[0-9 ]{6,7}" maxlength="7" autocomplete="one-time-code" required autofocus>
+  <button type="submit" class="btn btn-primary btn-block">Verify</button>
+  {% else %}
+  {% if cert %}
+  <p>Your browser presented this certificate:</p>
+  <p class="cert-line"><span class="mono">{{ cert[1] or 'certificate' }}</span></p>
+  <button type="submit" class="btn btn-primary btn-block">Sign in with this certificate</button>
+  {% else %}
+  <p class="flash flash-error">No verified client certificate was presented. Make sure your certificate is installed in this browser, then reload this page and pick your certificate when the browser asks.</p>
+  {% endif %}
+  {% endif %}
+</form>
+<form method="post" action="{{ url_for('auth.logout') }}" class="gate-alt">{{ m.csrf() }}<button class="linklike" type="submit">Cancel and sign out</button></form>
+{% endblock %}

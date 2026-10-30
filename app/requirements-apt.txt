@@ -1,0 +1,13 @@
+# Ubuntu 24.04 (noble) apt packages for radius-admin (main/universe only; no pip).
+# Install: apt-get install -y $(grep -v '^#' requirements-apt.txt)
+python3                # 3.12.3 (noble default)
+python3-flask          # 3.0.2  (pulls python3-jinja2, python3-werkzeug, python3-markupsafe, python3-itsdangerous)
+python3-psycopg2       # 2.9.9  (links system libpq)
+python3-cryptography   # 41.0.7 (links system libssl3 / OpenSSL 3 FIPS provider) - AES-256-GCM
+gunicorn               # 20.1.0 (python3-gunicorn)
+python3-qrcode         # 7.4.2  optional: TOTP enrolment QR as SVG (falls back to showing the key)
+python3-pysaml2        # 7.1.0  portal single sign-on (SAML 2.0 service provider), universe
+xmlsec1                # 1.2.39 XML signature verification used by pysaml2 (OpenSSL backend)
+# Test only (not needed on the server):
+# python3-pytest
+# radsecproxy            1.10.0 FreeRADIUS bench: plays a RadSec access point

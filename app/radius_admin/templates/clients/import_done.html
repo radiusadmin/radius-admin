@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}Import complete{% endblock %}
+{% block content %}
+<header class="page-head"><h1>Import complete</h1></header>
+<section class="panel narrow">
+  <p class="flash flash-success" role="status">{{ counts['new'] }} created, {{ counts['update'] }} updated, {{ counts['unchanged'] }} unchanged, {{ counts['skip'] }} skipped.</p>
+  <p><strong>Pending changes:</strong> FreeRADIUS does not use these clients until you apply changes.</p>
+  {% if no_key %}<p>Created disabled because the file had no plaintext key: <span class="mono">{{ no_key|map(attribute='hostname')|join(', ') }}</span>. Enter or generate a key on each client's edit page, then enable it.</p>{% endif %}
+  <div class="actions"><a class="btn btn-staged" href="{{ url_for('apply.index') }}">Review and apply</a>
+  <a class="btn btn-quiet" href="{{ url_for('clients.index') }}">Back to RADIUS clients</a></div>
+</section>
+{% endblock %}

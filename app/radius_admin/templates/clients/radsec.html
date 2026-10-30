@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block title %}RadSec listener{% endblock %}
+{% block content %}
+<header class="page-head"><div><h1>RadSec listener</h1>
+<p class="lede">RADIUS over TLS (RFC 6614) for clients that support it, such as many access points and controllers. Each client chooses UDP or RadSec on its own page; this listener serves the RadSec ones.</p></div></header>
+{{ m.apply_note() }}
+{% for e in errors %}<p class="flash flash-error" role="alert">{{ e }}</p>{% endfor %}
+<section class="panel narrow">
+<form method="post" class="stack">
+  {{ m.csrf() }}
+  <label class="check"><input type="checkbox" name="enabled" value="1" {{ 'checked' if s.enabled in (true, 'true', '1') else '' }}> Listen for RadSec connections</label>
+  <div class="grid-2">
+    <div><label for="listen">Listen address</label>
+      <input id="listen" name="listen" value="{{ s.listen }}" maxlength="64" class="mono" placeholder="*"></div>
+    <div><label for="port">TCP port</label>
+      <input id="port" name="port" value="{{ s.port }}" maxlength="5" inputmode="numeric" class="mono"></div>
+  </div>
+  <p class="small muted"><span class="mono">*</span> listens on every address. 2083 is the RadSec standard port.</p>
+  <div class="grid-2">
+    <div><label for="max_connections">Maximum connections</label>
+      <input id="max_connections" name="max_connections" value="{{ s.max_connections }}" maxlength="4" inputmode="numeric"></div>
+    <div><label for="idle_timeout">Idle timeout (seconds)</label>
+      <input id="idle_timeout" name="idle_timeout" value="{{ s.idle_timeout }}" maxlength="4" inputmode="numeric"></div>
+  </div>
+  <fieldset>
+    <legend>Certificate revocation</legend>
+    <label class="check"><input type="checkbox" name="ocsp" value="1" {{ 'checked' if s.ocsp in (true, 'true', '1') else '' }}> Check client certificates with OCSP (connections fail when the responder cannot confirm them)</label>
+    <label for="ocsp_url">OCSP responder URL</label>
+    <input id="ocsp_url" name="ocsp_url" value="{{ s.ocsp_url }}" maxlength="300" class="mono" placeholder="http://ocsp.example.net/ocsp" aria-describedby="ocsp_url-hint">
+    <p id="ocsp_url-hint" class="small muted">Leave empty to use the responder named in each certificate.</p>
+  </fieldset>
+  <div class="actions"><button type="submit" class="btn btn-primary">Save RadSec settings</button>
+  <a class="btn btn-quiet" href="{{ url_for('clients.index') }}">Back to clients</a></div>
+</form>
+</section>
+<section class="panel">
+  <h2>Certificates</h2>
+  <p>The listener presents this server's RADIUS certificate and accepts client certificates issued by the site CA, the same files EAP-TLS uses:</p>
+  <ul class="mono small"><li>{{ cert_dir }}/radius.pem</li><li>{{ cert_dir }}/ca.pem</li></ul>
+  <p class="small muted">TLS 1.2 or 1.3 only. Allow TCP port {{ s.port }} from the RadSec clients in any firewall in front of this server.</p>
+</section>
+<section class="panel">
+  <h2>RadSec clients</h2>
+  {% if tls_clients %}
+  <div class="table-wrap"><table>
+    <thead><tr><th scope="col">Name</th><th scope="col">Address</th><th scope="col">Expected certificate name</th><th scope="col">Status</th></tr></thead>
+    <tbody>{% for c in tls_clients %}
+    <tr class="{{ '' if c.enabled else 'is-off' }}"><td class="mono"><a href="{{ url_for('clients.edit', cid=c.id) }}">{{ c.name }}</a></td><td class="mono">{{ c.ipaddr }}</td>
+      <td class="mono">{{ c.radsec_peer_name or 'any certificate from the CA' }}</td>
+      <td>{% if c.enabled %}<span class="tag tag-ok">Enabled</span>{% else %}<span class="tag tag-muted">Disabled</span>{% endif %}</td></tr>
+    {% endfor %}</tbody>
+  </table></div>
+  {% else %}
+  <p class="muted">No client uses RadSec yet. Choose “RadSec” as the transport when you <a href="{{ url_for('clients.new') }}">add</a> or edit a client. The listener only starts once at least one enabled client uses it.</p>
+  {% endif %}
+</section>
+{% endblock %}

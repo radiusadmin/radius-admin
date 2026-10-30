@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block title %}Authentication {{ r.id }}{% endblock %}
+{% block content %}
+<header class="page-head">
+  <div><h1>{% if r.reply == 'Access-Accept' %}Accepted{% elif r.reply == 'Access-Reject' %}Rejected{% else %}{{ r.reply }}{% endif %}: <span class="mono">{{ r.username }}</span></h1>
+  <p class="lede">{{ r.authdate|dt }} · {{ r.authmethod or 'other' }}{% if client %} · {{ client.name }}{% endif %}{% if r.nasportid %} port <span class="mono">{{ r.nasportid }}</span>{% endif %}</p></div>
+  <div class="head-actions"><a class="btn btn-quiet" href="{{ url_for('logs.auth_log') }}">Back to log</a></div>
+</header>
+
+{% if r.reply == 'Access-Reject' %}
+<section class="panel callout callout-danger">
+  <h2>Why it was rejected</h2>
+  {% if reason %}<p class="mono-soft">{{ reason }}</p>{% endif %}
+  {% if hint %}<p>{{ hint }}</p>{% endif %}
+  <div class="actions">
+  {% if r.authmethod == 'mab' and pending and has_role('operator') %}<a class="btn btn-primary" href="{{ url_for('mab.pending', q=r.callingstationid|mac) }}">Approve in Unknown devices</a>{% endif %}
+  {% if r.authmethod == 'mab' and mab and has_role('operator') %}<a class="btn btn-quiet" href="{{ url_for('mab.edit', mid=mab.id) }}">Open the MAB entry</a>{% endif %}
+  {% if rule is none and groups and has_role('admin') %}<a class="btn btn-quiet" href="{{ url_for('rules.new') }}">Add an access rule</a>{% endif %}
+  </div>
+</section>
+{% endif %}
+
+<div class="detail-grid">
+<section class="panel">
+  <h2>Request</h2>
+  <dl class="kv">
+    <dt>Result</dt><dd>{% if r.reply == 'Access-Accept' %}<span class="tag tag-ok">Accept</span>{% else %}<span class="tag tag-danger">{{ r.reply or '—' }}</span>{% endif %}</dd>
+    <dt>Time</dt><dd>{{ r.authdate|dt }}</dd>
+    <dt>User-Name</dt><dd class="mono">{{ r.username }}</dd>
+    <dt>Method</dt><dd>{{ {'eap-tls': '802.1X certificate (EAP-TLS)', 'mab': 'MAC authentication bypass', 'pap-admin': 'Switch admin login', 'other': 'Other / not reached the site policy'}.get(r.authmethod, r.authmethod or '—') }}</dd>
+    <dt>Switch</dt><dd>{% if client %}<a href="{{ url_for('clients.edit', cid=client.id) }}">{{ client.name }}</a> <span class="mono small muted">{{ r.nas }}</span>{% else %}<span class="mono">{{ r.nas or '—' }}</span>{% endif %}</dd>
+    <dt>Port</dt><dd class="mono">{{ r.nasportid or '—' }}{% if r.nasporttype %} <span class="small muted">({{ r.nasporttype }})</span>{% endif %}</dd>
+    <dt>Station</dt><dd>{% if r.callingstationid %}{{ m.mac(r.callingstationid) }}{% else %}—{% endif %}</dd>
+    {% if r.calledstationid %}<dt>Called station</dt><dd class="mono">{{ r.calledstationid }}</dd>{% endif %}
+    <dt>VLAN assigned</dt><dd>{% if r.vlan %}<span class="vlan">{{ r.vlan }}</span>{% else %}—{% endif %}</dd>
+  </dl>
+  {% if session %}<p class="small"><a href="{{ url_for('sessions.index', q=r.callingstationid, history='1') }}">Session {% if session.acctstoptime %}ended {{ session.acctstoptime|ago }}{% else %}active since {{ session.acctstarttime|ago }}{% endif %}</a></p>{% endif %}
+</section>
+
+{% if r.authmethod == 'eap-tls' or r.cert_subject or r.certsan %}
+<section class="panel">
+  <h2>Client certificate</h2>
+  <dl class="kv">
+    <dt>DNS name (SAN)</dt><dd class="mono">{{ r.certsan or '—' }}</dd>
+    <dt>Common name</dt><dd class="mono">{{ r.cert_cn or '—' }}</dd>
+    <dt>Subject</dt><dd class="mono wrap-any">{{ r.cert_subject or '—' }}</dd>
+    <dt>Issuer</dt><dd class="mono wrap-any">{{ r.cert_issuer or '—' }}</dd>
+    <dt>Serial</dt><dd class="mono wrap-any">{{ r.cert_serial or '—' }}</dd>
+    <dt>Expires</dt><dd>{% if expiry %}{{ expiry|dt }} {% if expired %}<span class="tag tag-danger">Expired</span>{% else %}<span class="small muted">({{ expiry|ago }})</span>{% endif %}{% else %}—{% endif %}</dd>
+  </dl>
+  {% if not r.cert_subject %}<p class="small muted">Certificate details are recorded for authentications from this release on.</p>{% endif %}
+</section>
+{% endif %}
+
+{% if r.authmethod == 'eap-tls' %}
+<section class="panel">
+  <h2>Access rule</h2>
+  {% if rule %}
+  <p>Rule <strong>{{ rule.priority }}</strong>: AD group <span class="mono">{{ rule.ad_group }}</span> → VLAN <span class="vlan">{{ rule.vlan }}</span>
+    ({{ 'wired' if rule.connection == 'wired' else 'wireless, SSID ' ~ rule.ssid }}){% if rule.description %} — {{ rule.description }}{% endif %}.</p>
+  {% if r.vlan and rule.vlan|string != r.vlan|string %}<p class="warn-text small">The rule's VLAN has changed since this authentication.</p>{% endif %}
+  {% if not rule.enabled %}<p class="warn-text small">This rule is now disabled.</p>{% endif %}
+  {% if has_role('admin') %}<p class="small"><a href="{{ url_for('rules.edit', rid=rule.id) }}">Open the rule</a></p>{% endif %}
+  {% elif r.rule_id %}<p>Rule #{{ r.rule_id }} (since deleted).</p>
+  {% elif r.reply == 'Access-Accept' %}<p class="muted">Not recorded (authentication logged before this release).</p>
+  {% else %}<p>No rule matched.</p>{% endif %}
+  <h3>AD groups seen ({{ groups|length }})</h3>
+  {% if groups %}<ul class="group-list">{% for gname in groups %}<li class="mono{% if rule and gname|lower == rule.ad_group|lower %} matched{% endif %}">{{ gname }}{% if rule and gname|lower == rule.ad_group|lower %} <span class="tag tag-ok">matched</span>{% endif %}</li>{% endfor %}</ul>
+  {% elif r.reply == 'Access-Reject' and reason and 'no enabled access rule' in reason %}<p>The computer is in no AD groups visible to this server.</p>
+  {% else %}<p class="small muted">Groups are recorded once the certificate is accepted and the computer is found in AD.</p>{% endif %}
+</section>
+{% endif %}
+
+{% if r.authmethod == 'mab' %}
+<section class="panel">
+  <h2>MAB registration</h2>
+  {% if mab %}<p>Registered for VLAN <span class="vlan">{{ mab.vlan }}</span>, {{ 'enabled' if mab.enabled else 'disabled' }}{% if mab.expires_at %}, expires {{ mab.expires_at|dt }}{% endif %}.</p>
+  {% elif pending %}<p>Not registered; waiting in the unknown-device queue{% if pending.ignored %} (hidden){% endif %}.</p>
+  {% else %}<p>Not registered.</p>{% endif %}
+</section>
+{% endif %}
+</div>
+
+<section class="panel flush">
+  <h2 class="panel-title">Other attempts from this {{ 'station' if r.callingstationid else 'user' }}</h2>
+  {% if history %}
+  <div class="table-wrap"><table class="dense">
+    <thead><tr><th scope="col">Time</th><th scope="col">Result</th><th scope="col" class="num">VLAN</th><th scope="col">Reason</th></tr></thead>
+    <tbody>{% for h in history %}<tr><td class="nowrap"><a href="{{ url_for('logs.auth_detail', aid=h.id) }}">{{ h.authdate|dtc }}</a></td>
+      <td>{% if h.reply == 'Access-Accept' %}<span class="tag tag-ok">Accept</span>{% else %}<span class="tag tag-danger">Reject</span>{% endif %}</td>
+      <td class="num">{{ h.vlan or '' }}</td><td class="small">{{ (h.reason or '')|replace('radius-admin: ', '') }}</td></tr>{% endfor %}</tbody>
+  </table></div>
+  {% else %}<p class="empty">No other attempts recorded.</p>{% endif %}
+</section>
+{% endblock %}

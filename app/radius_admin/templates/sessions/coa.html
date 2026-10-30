@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block title %}{{ actions[r.action][0] }}{% endblock %}
+{% block head %}{% if r.done_at is none %}<meta http-equiv="refresh" content="2">{% endif %}{% endblock %}
+{% block content %}
+<header class="page-head"><div><h1>{{ actions[r.action][0] }}</h1>
+<p class="lede">{{ r.switch_name }} <span class="mono">{{ r.nas }}</span>{% if r.nas_port_id %} port <span class="mono">{{ r.nas_port_id }}</span>{% endif %} · <span class="mono">{{ r.username or r.calling_station_id }}</span></p></div>
+<div class="head-actions"><a class="btn btn-quiet" href="{{ url_for('sessions.index') }}">Back to sessions</a></div></header>
+<section class="panel narrow">
+{% if r.done_at is none %}
+  <p><span class="tag tag-muted">Sending</span> The monitoring service sends the request within a few seconds. This page refreshes by itself.</p>
+  {% if mon and mon.radclient.startswith('unavailable') %}<p class="warn-text">Session actions cannot be sent: {{ mon.radclient[13:] }}</p>{% endif %}
+  {% if not mon or not mon.heartbeat_at %}<p class="warn-text">The monitoring service has not reported in. Check <span class="mono">systemctl status radius-admin-snmp</span>.</p>{% endif %}
+{% elif r.ok %}
+  <p><span class="tag tag-ok">Done</span> {{ r.message }}</p>
+  {% if r.action != 'reauth' %}<p class="small muted">The session list updates when the switch sends Accounting-Stop.</p>{% endif %}
+{% else %}
+  <p><span class="tag tag-danger">Failed</span> {{ r.message }}</p>
+  <p class="small">Check that the switch has dynamic authorization configured for this server with the same shared key (RUNBOOK §6.4), runs firmware 4.1.3.36 or later, and that UDP {{ coa_port }} on the switch is reachable from this server.</p>
+{% endif %}
+<dl class="kv small">
+  <dt>Requested</dt><dd>{{ r.requested_at|dt }} by {{ r.requested_by }}</dd>
+  {% if r.done_at %}<dt>Finished</dt><dd>{{ r.done_at|dt }}</dd>{% endif %}
+  <dt>Session</dt><dd class="mono">{{ r.acct_session_id or '—' }}</dd>
+</dl>
+</section>
+{% endblock %}

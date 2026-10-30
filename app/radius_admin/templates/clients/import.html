@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block title %}Import RADIUS clients{% endblock %}
+{% block content %}
+<header class="page-head"><div><h1>Import RADIUS clients</h1>
+<p class="lede">Add or update many clients from a CSV file. The whole file is checked first and you review every change before anything is saved. Imported clients reach FreeRADIUS after you apply changes.</p></div>
+<a class="btn btn-quiet" href="{{ url_for('clients.import_template') }}">Download CSV template</a></header>
+{{ m.apply_note() }}
+<section class="panel narrow">
+{% if errors %}<div class="flash flash-error" role="alert"><p>Nothing was imported. Fix these problems and upload again:</p><ul>{% for e in errors %}<li>{{ e }}</li>{% endfor %}{% if more %}<li>…and {{ more }} more</li>{% endif %}</ul></div>{% endif %}
+<form method="post" enctype="multipart/form-data" class="stack">
+  {{ m.csrf() }}
+  <p>Columns: <span class="mono">ip,secret,hostname,secret_type,key_scope,dot1x_ports</span> (header row recommended; without one the columns are read in this order, and key_scope / dot1x_ports may be left off). <span class="mono">secret_type</span> is plaintext, encrypted or none; <span class="mono">key_scope</span> is server, global or none. Encrypted values are never stored; such clients are created disabled until a plaintext key is set. Up to 5000 rows, 1 MiB.</p>
+  <label for="file">CSV file</label>
+  <input id="file" name="file" type="file" accept=".csv,text/csv,text/plain" required>
+  <fieldset><legend>Clients that already exist (same IP, or same hostname)</legend>
+    <label class="check"><input type="radio" name="existing" value="update" {{ 'checked' if opts.existing == 'update' else '' }}> Update them (hostname, IP, plaintext key, key scope, ports)</label>
+    <label class="check"><input type="radio" name="existing" value="skip" {{ 'checked' if opts.existing == 'skip' else '' }}> Skip them</label>
+  </fieldset>
+  <label for="require_ma">Require Message-Authenticator for new clients</label>
+  <select id="require_ma" name="require_ma">{% for t in tristate %}<option {{ 'selected' if opts.require_ma == t else '' }}>{{ t }}</option>{% endfor %}</select>
+  <label class="check"><input type="checkbox" name="is_switch" value="1" {{ 'checked' if opts.is_switch else '' }}> Mark new clients as switches (include in SNMP monitoring)</label>
+  <p class="small muted">An optional <span class="mono">is_switch</span> column (yes/no) in a file with a header row overrides this per row, and also updates existing clients.</p>
+  <div class="actions"><button type="submit" class="btn btn-primary">Check file</button>
+  <a class="btn btn-quiet" href="{{ url_for('clients.index') }}">Cancel</a></div>
+</form>
+</section>
+{% endblock %}

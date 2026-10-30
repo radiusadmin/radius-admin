@@ -1,0 +1,71 @@
+{% macro csrf() %}<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">{% endmacro %}
+
+{# Pages whose saved changes only reach FreeRADIUS after "Apply changes" say so once,
+   under the title. Everywhere else saving takes effect right away, so nothing is shown. #}
+{% macro apply_note() %}
+<p class="apply-note">Changes here reach FreeRADIUS when you <a href="{{ url_for('apply.index') }}">apply them</a>.</p>
+{% endmacro %}
+
+{% macro field_error(errors, name) %}
+{% if errors and errors.get(name) %}<p class="field-error" id="{{ name }}-error">{{ errors[name] }}</p>{% endif %}
+{% endmacro %}
+
+{% macro described(errors, name, hint=False) -%}
+{%- if errors and errors.get(name) %} aria-invalid="true" aria-describedby="{{ name }}-error{% if hint %} {{ name }}-hint{% endif %}"{% elif hint %} aria-describedby="{{ name }}-hint"{% endif -%}
+{%- endmacro %}
+
+{% macro post_button(action, label, cls='btn', confirm=None, fields=None) %}
+<form method="post" action="{{ action }}" class="inline"{% if confirm %} data-confirm="{{ confirm }}"{% endif %}>
+  {{ csrf() }}
+  {% if fields %}{% for k, v in fields.items() %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endfor %}{% endif %}
+  <button type="submit" class="{{ cls }}">{{ label }}</button>
+</form>
+{% endmacro %}
+
+{% macro onoff(v, on='Enabled', off='Disabled') %}
+{% if v %}<span class="tag tag-ok">{{ on }}</span>{% else %}<span class="tag tag-muted">{{ off }}</span>{% endif %}
+{% endmacro %}
+
+{% macro pager(page, more, endpoint, args) %}
+{% if page > 1 or more %}
+<nav class="pager" aria-label="Pages">
+  {% if page > 1 %}<a class="btn btn-quiet" href="{{ url_for(endpoint, page=page-1, **args) }}">Newer</a>{% endif %}
+  <span>Page {{ page }}</span>
+  {% if more %}<a class="btn btn-quiet" href="{{ url_for(endpoint, page=page+1, **args) }}">Older</a>{% endif %}
+</nav>
+{% endif %}
+{% endmacro %}
+
+{# 802.1X port list: first two groups as chips, the rest behind "+N more" (pop-up). #}
+{% macro ports(value, dlg_id, title, reported=none) %}
+{%- set s = value|ports -%}
+{%- if not s.groups and reported is none -%}<span class="muted small">–</span>
+{%- elif not s.groups -%}<span class="muted small">–</span>{% if reported %} <button type="button" class="port-more" data-dialog-open="{{ dlg_id }}" aria-haspopup="dialog">switch: {{ (reported|ports).total }}</button>{% endif %}
+<dialog id="{{ dlg_id }}" class="port-dialog" aria-labelledby="{{ dlg_id }}-t"><form method="dialog">
+  <header><h2 id="{{ dlg_id }}-t">802.1X ports · <span class="mono">{{ title }}</span></h2><button type="submit" class="btn btn-quiet btn-small">Close</button></header>
+  <p class="small">No ports recorded. The switch reports port-control auto on: <span class="mono">{{ reported or 'none' }}</span></p></form></dialog>
+{%- else -%}
+<span class="port-list">
+  {%- for g in s.groups[:2] %}<span class="port-chip{{ ' port-chip-odd' if g.count is none else '' }}">{{ g.label }}</span>{% endfor -%}
+  {%- if s.groups|length > 2 %}<button type="button" class="port-more" data-dialog-open="{{ dlg_id }}" aria-haspopup="dialog">+{{ s.groups|length - 2 }} more</button>
+  {%- elif s.groups|length > 1 or (s.groups[0].count or 0) > 1 %}<button type="button" class="port-more" data-dialog-open="{{ dlg_id }}" aria-haspopup="dialog" aria-label="Show all 802.1X ports for {{ title }}">⤢</button>{% endif -%}
+</span>
+<dialog id="{{ dlg_id }}" class="port-dialog" aria-labelledby="{{ dlg_id }}-t">
+  <form method="dialog">
+    <header><h2 id="{{ dlg_id }}-t">802.1X ports · <span class="mono">{{ title }}</span></h2>
+      <button type="submit" class="btn btn-quiet btn-small" aria-label="Close">Close</button></header>
+    <p class="small muted">{{ s.total }} port{{ '' if s.total == 1 else 's' }} in {{ s.groups|length }} group{{ '' if s.groups|length == 1 else 's' }}{% if s.unknown %} (some entries not recognised as interface ranges and shown as exported){% endif %}.</p>
+    <ul class="port-grid">
+      {%- for g in s.groups %}<li><span class="port-chip{{ ' port-chip-odd' if g.count is none else '' }}">{{ g.label }}</span>{% if g.count and g.count > 1 %}<span class="small muted"> {{ g.count }} ports</span>{% endif %}</li>{% endfor -%}
+    </ul>
+    <p class="small muted">As recorded: <span class="mono">{{ value }}</span></p>
+    {% if reported is not none %}<p class="small{{ '' if same_ports(value or '', reported) else ' warn-text' }}">Switch reports (SNMP, port-control auto): <span class="mono">{{ reported or 'none' }}</span>{% if same_ports(value or '', reported) %} – matches.{% else %} – differs.{% endif %}</p>{% endif %}
+  </form>
+</dialog>
+{%- endif -%}
+{% endmacro %}
+
+{# MAC address with its vendor underneath (IEEE registry, offline). #}
+{% macro mac(value, show_vendor=True) -%}
+<span class="mono">{{ value|mac }}</span>{% if show_vendor %}{% set v = value|vendor %}{% if v %}<span class="cell-sub">{{ v }}</span>{% endif %}{% endif %}
+{%- endmacro %}

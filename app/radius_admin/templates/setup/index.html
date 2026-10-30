@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block title %}Setup checklist{% endblock %}
+{% block content %}
+<header class="page-head"><div><h1>Setup checklist</h1>
+<p class="lede">{% if finished %}Setup was completed. The checklist stays here as a reference.{% else %}{{ done }} of {{ total }} required steps done. Each step links to the page where it is done; the status updates by itself.{% endif %}</p></div></header>
+<section class="panel flush">
+<ol class="checklist">
+{% for key, title, required, ok, detail, endpoint in items %}
+  {% set is_skipped = (not required) and key in skipped and not ok %}
+  <li class="{{ 'is-done' if ok else ('is-skipped' if is_skipped else 'is-todo') }}">
+    <span class="check-mark" aria-hidden="true">{{ '✓' if ok else ('–' if is_skipped else '') }}</span>
+    <div class="check-body">
+      <p class="check-title"><a href="{{ url_for(endpoint) }}">{{ title }}</a>
+        {% if required %}<span class="tag tag-muted">Required</span>{% else %}<span class="tag tag-muted">Optional</span>{% endif %}
+        <span class="sr-only">{{ 'done' if ok else ('skipped' if is_skipped else 'to do') }}</span></p>
+      <p class="small muted">{{ detail }}</p>
+    </div>
+    {% if not required and not ok %}
+    <form method="post" class="inline">{{ m.csrf() }}<input type="hidden" name="item" value="{{ key }}">
+      <button type="submit" name="action" value="{{ 'restore' if is_skipped else 'skip' }}" class="btn btn-quiet btn-small">{{ 'Restore' if is_skipped else 'Skip' }}</button></form>
+    {% endif %}
+  </li>
+{% endfor %}
+</ol>
+</section>
+<form method="post" class="actions">{{ m.csrf() }}
+{% if finished %}<button type="submit" name="action" value="reopen" class="btn btn-quiet">Show the checklist on the dashboard again</button>
+{% else %}<button type="submit" name="action" value="finish" class="btn btn-primary" {{ 'disabled' if done < total else '' }}>Finish setup</button>
+<span class="small muted">{{ 'All required steps are done.' if done == total else 'Available once every required step is done.' }}</span>{% endif %}
+</form>
+{% endblock %}

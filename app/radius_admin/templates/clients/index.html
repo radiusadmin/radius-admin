@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block title %}RADIUS clients{% endblock %}
+{% block content %}
+<header class="page-head">
+  <div><h1>RADIUS clients</h1>
+  <p class="lede">Switches, access points and other NAS devices allowed to send RADIUS requests.</p></div>
+  {% if has_role('operator') %}<div class="head-actions">{% if has_role('admin') %}<a class="btn btn-quiet" href="{{ url_for('clients.radsec') }}">RadSec listener</a>{% endif %}
+  <a class="btn btn-quiet" href="{{ url_for('clients.import_upload') }}">Import CSV</a>
+  <a class="btn btn-primary" href="{{ url_for('clients.new') }}">Add client</a></div>{% endif %}
+</header>
+{{ m.apply_note() }}
+{% set tls_on = clients|selectattr('transport', 'eq', 'radsec')|selectattr('enabled')|list %}
+{% if tls_on and not radsec_enabled %}<p class="flash flash-error" role="status"><strong>The RadSec listener is off.</strong> {{ tls_on|length }} enabled client{{ '' if tls_on|length == 1 else 's' }} use{{ 's' if tls_on|length == 1 else '' }} RadSec and cannot connect until an admin turns the listener on{% if has_role('admin') %} under <a href="{{ url_for('clients.radsec') }}">RadSec listener</a>{% endif %}.</p>{% endif %}
+{% set nokey = clients|selectattr('key_status', 'ne', 'ok')|list %}
+{% if nokey %}<p class="flash flash-info" role="status"><strong>{{ nokey|length }} client{{ '' if nokey|length == 1 else 's' }} without a usable key.</strong> FreeRADIUS needs the plaintext shared secret. Clients marked “Encrypted key” or “No key” stay disabled until a plaintext key is entered or generated on their edit page.</p>{% endif %}
+<form class="filters" method="get" role="search">
+  <label for="q" class="sr-only">Search clients</label>
+  <input id="q" name="q" type="search" value="{{ q }}" placeholder="Search name, address, description">
+  <button class="btn btn-quiet" type="submit">Search</button>
+</form>
+<section class="panel flush">
+{% if clients %}
+<div class="table-wrap table-wrap-fits"><table class="clients-table">
+  <thead><tr><th scope="col">Name</th><th scope="col">Address</th><th scope="col" class="col-opt">RADIUS options</th><th scope="col">Secret</th><th scope="col">802.1X ports</th>{% if mon and mon.enabled %}<th scope="col">Switch (SNMP)</th>{% endif %}<th scope="col">Status</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead>
+  <tbody>
+  {% for c in clients %}
+  <tr class="{{ '' if c.enabled else 'is-off' }}">
+    <td class="name-cell"><span class="mono nowrap">{{ c.name }}</span>{% if c.description %}<span class="cell-sub">{{ c.description }}</span>{% endif %}</td>
+    <td class="mono nowrap">{{ c.ipaddr }}</td>
+    {% if c.transport == 'radsec' %}
+    <td class="nowrap col-opt">{{ c.nas_type }}<span class="cell-sub"><span class="tag tag-ok" title="RADIUS over TLS (RFC 6614), TCP port of the RadSec listener">RadSec</span></span></td>
+    <td class="nowrap"><span class="muted" title="RadSec clients authenticate with a certificate from the site CA">Certificate</span>{% if c.radsec_peer_name %}<span class="cell-sub mono">{{ c.radsec_peer_name }}</span>{% endif %}</td>
+    {% else %}
+    <td class="nowrap col-opt">{{ c.nas_type }}<span class="cell-sub" title="require_message_authenticator / limit_proxy_state">Msg-Auth {{ c.require_ma }} · Proxy-State {{ c.limit_proxy_state }}</span></td>
+    <td class="nowrap">{% if c.key_status == 'encrypted' %}<span class="tag tag-warn" title="The switch exported an encrypted (type 7/AES) key. FreeRADIUS needs the plaintext shared secret; the client stays disabled until one is set.">Encrypted key</span>
+      {% elif c.key_status == 'missing' %}<span class="tag tag-warn" title="No shared secret is known. FreeRADIUS needs the plaintext shared secret.">No key</span>
+      {% elif has_role('admin') %}<a href="{{ url_for('clients.reveal', cid=c.id) }}" class="mask" aria-label="Reveal secret for {{ c.name }}">••••••••</a>{% else %}<span class="mask" aria-label="hidden">••••••••</span>{% endif %}
+      {% if c.key_scope == 'global' %}<span class="cell-sub"><span class="tag tag-muted" title="The switch has no per-server key and uses its global radius-server key. Rotating it on the switch changes the key for every RADIUS server configured there.">Global key</span></span>{% endif %}</td>
+    {% endif %}
+    {% set reported = c.snmp_dot1x_ports if (c.is_switch and c.snmp_reachable and c.snmp_dot1x_supported) else none %}
+    <td class="ports-cell">{{ m.ports(c.dot1x_ports, 'ports-%d' % c.id, c.name, reported) }}
+      {% if reported is not none and not same_ports(c.dot1x_ports or '', reported) %}<span class="cell-sub"><span class="tag tag-warn" title="The switch reports 802.1X (port-control auto) on: {{ reported or 'no ports' }}">Differs from switch</span></span>{% endif %}</td>
+    {% if mon and mon.enabled %}<td class="switch-cell">{% if not c.is_switch %}<span class="muted small" title="Not marked as a switch: not polled">Not monitored</span>
+      {% elif c.snmp_polled_at is none %}<span class="tag tag-muted" title="Not polled yet">Pending</span>
+      {% elif c.snmp_reachable %}<span class="tag tag-ok" title="{{ c.snmp_sys_descr }} · polled {{ c.snmp_polled_at|dt }}">Up</span>
+        {% set bad = (c.snmp_radius_servers or [])|map(attribute='bad_authenticators')|select|list %}{% if bad %} <span class="tag tag-warn" title="The switch counted RADIUS replies with a bad authenticator: usually a shared-secret mismatch">Bad authenticators</span>{% endif %}
+        {% if c.snmp_sys_name %}<span class="cell-sub mono clip-text" title="{{ c.snmp_sys_name }}">{{ c.snmp_sys_name }}</span>{% endif %}
+      {% else %}<span class="tag tag-warn" title="{{ c.snmp_error }} · {{ c.snmp_polled_at|dt }}">No answer</span>{% endif %}</td>{% endif %}
+    <td>{{ m.onoff(c.enabled) }}</td>
+    <td class="row-actions">{% if has_role('operator') %}
+      <a class="btn btn-quiet btn-small row-edit" href="{{ url_for('clients.edit', cid=c.id) }}">{{ 'Set key' if c.key_status != 'ok' else 'Edit' }}</a>
+      <details class="row-menu"><summary class="btn btn-quiet btn-small" aria-label="More actions for {{ c.name }}">⋯</summary>
+        <div class="menu">
+        <a class="menu-edit" href="{{ url_for('clients.edit', cid=c.id) }}">{{ 'Set key' if c.key_status != 'ok' else 'Edit' }}</a>
+        {% if c.enabled %}{{ m.post_button(url_for('clients.set_enabled', cid=c.id), 'Disable', 'linklike', fields={'enabled': '0'}) }}
+        {% elif c.key_status == 'ok' %}{{ m.post_button(url_for('clients.set_enabled', cid=c.id), 'Enable', 'linklike', fields={'enabled': '1'}) }}
+        {% else %}<button type="button" class="linklike" disabled title="Enter or generate a plaintext key first">Enable</button>{% endif %}
+        {{ m.post_button(url_for('clients.delete', cid=c.id), 'Delete', 'linklike danger', confirm='Delete client ' ~ c.name ~ '? It stops working after the next apply.') }}
+        </div></details>{% endif %}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table></div>
+{% else %}<p class="empty">{% if q %}No clients match “{{ q }}”.{% else %}No RADIUS clients yet. Add one so switches can authenticate.{% endif %}</p>{% endif %}
+</section>
+{% endblock %}

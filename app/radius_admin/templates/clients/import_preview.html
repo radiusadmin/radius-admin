@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block title %}Review import{% endblock %}
+{% block content %}
+<header class="page-head"><div><h1>Review import</h1>
+<p class="lede"><span class="mono">{{ filename }}</span>: {{ counts['new'] }} new, {{ counts['update'] }} updated, {{ counts['unchanged'] }} unchanged, {{ counts['skip'] }} skipped. Existing clients: {{ opts.existing }}; Message-Authenticator for new clients: {{ opts.require_ma }}.</p>
+<p class="small muted">{% if header_found %}Header row found: columns read by name.{% else %}No header row: columns read in the standard order ip, secret, hostname, secret_type, key_scope, dot1x_ports.{% endif %}</p></div></header>
+{% if error %}<p class="flash flash-error" role="alert">{{ error }}</p>{% endif %}
+<section class="panel flush">
+<div class="table-wrap"><table class="dense">
+  <thead><tr><th scope="col" class="num">Line</th><th scope="col">Action</th><th scope="col">Hostname</th><th scope="col">IP</th><th scope="col">Key</th><th scope="col">Changes and notes</th></tr></thead>
+  <tbody>{% for it in items %}
+  <tr class="{{ 'is-off' if it.action in ('skip', 'unchanged') else '' }}">
+    <td class="num mono">{{ it.line }}</td>
+    <td>{% if it.action == 'new' %}<span class="tag tag-ok">New</span>{% elif it.action == 'update' %}<span class="tag tag-warn">Update</span>{% elif it.action == 'skip' %}<span class="tag tag-muted">Skip</span>{% else %}<span class="tag tag-muted">Unchanged</span>{% endif %}</td>
+    <td class="mono">{{ it.hostname }}</td><td class="mono">{{ it.ip }}</td>
+    <td>{{ it.secret_type }}{% if it.key_scope %} · {{ it.key_scope }}{% endif %}</td>
+    <td class="small">{% if it.action == 'skip' %}Exists as {{ it.current_name }} ({{ it.current_ip }}); not changed.{% endif %}
+      {% if it.changes %}{{ it.changes|join(', ') }}{% endif %}
+      {% if it.action == 'new' %}{{ 'created enabled' if it.enabled else 'created disabled' }}{% endif %}
+      {% for w in it.warnings %}<br><span class="warn-text">{{ w }}</span>{% endfor %}</td>
+  </tr>{% endfor %}</tbody>
+</table></div>
+</section>
+<section class="panel narrow">
+{% if counts['new'] or counts['update'] %}
+<form method="post" action="{{ url_for('clients.import_confirm') }}" class="stack">
+  {{ m.csrf() }}
+  <input type="hidden" name="import_id" value="{{ import_id }}">
+  {% if not g.session.stepup_ok %}
+  <fieldset class="stepup-inline"><legend>Confirm it's you</legend>
+    <p class="small">Importing sets shared secrets, so your password and second factor are required.</p>
+    {% with pfx = 'stepup_' %}{% include "auth/_stepup_fields.html" %}{% endwith %}
+  </fieldset>
+  {% endif %}
+  <p class="small muted">All rows are saved in one step. RADIUS clients reach FreeRADIUS after you apply changes. This preview expires in 15 minutes.</p>
+  <div class="actions"><button type="submit" class="btn btn-primary">Import {{ counts['new'] + counts['update'] }} client{{ '' if counts['new'] + counts['update'] == 1 else 's' }}</button></div>
+</form>
+{% else %}<p>Nothing to import: every row is unchanged or skipped.</p>{% endif %}
+<form method="post" action="{{ url_for('clients.import_cancel') }}" class="inline">{{ m.csrf() }}<input type="hidden" name="import_id" value="{{ import_id }}"><button type="submit" class="btn btn-quiet">Cancel import</button></form>
+</section>
+{% endblock %}

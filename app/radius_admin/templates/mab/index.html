@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block title %}MAB devices{% endblock %}
+{% block content %}
+<header class="page-head">
+  <div><h1>MAB devices</h1>
+  <p class="lede">Wired devices without 802.1X (printers, cameras, phones) admitted by MAC address into a fixed VLAN. FreeRADIUS reads this list on every request.</p></div>
+  {% if has_role('operator') %}<div class="head-actions"><a class="btn btn-quiet" href="{{ url_for('mab.import_csv') }}">Import CSV</a>
+  <a class="btn btn-primary" href="{{ url_for('mab.new') }}">Add device</a></div>{% endif %}
+</header>
+{% include "mab/_tabs.html" %}
+<form class="filters" method="get" role="search">
+  <label for="q" class="sr-only">Search devices</label>
+  <input id="q" name="q" type="search" value="{{ q }}" placeholder="MAC, description or VLAN">
+  <label for="show" class="sr-only">Show</label>
+  <select id="show" name="show">
+    <option value="" {{ 'selected' if not show }}>All devices</option>
+    <option value="expiring" {{ 'selected' if show == 'expiring' }}>Expiring within 14 days ({{ counts.expiring }})</option>
+    <option value="expired" {{ 'selected' if show == 'expired' }}>Expired ({{ counts.expired }})</option>
+  </select>
+  <button class="btn btn-quiet" type="submit">Search</button>
+  <span class="small muted">{{ total }} device{{ '' if total == 1 else 's' }}</span>
+</form>
+<section class="panel flush">
+{% if devices %}
+<div class="table-wrap"><table>
+  <thead><tr><th scope="col">MAC address</th><th scope="col" class="num">VLAN</th><th scope="col">Description</th><th scope="col">Status</th><th scope="col">Expires</th><th scope="col" class="col-upd">Updated</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead>
+  <tbody>{% for d in devices %}
+  <tr class="{{ '' if d.enabled and not d.expired else 'is-off' }}">
+    <td class="name-cell">{{ m.mac(d.mac) }}</td><td class="num"><span class="vlan">{{ d.vlan }}</span></td><td>{{ d.description }}</td>
+    <td>{% if d.expired %}<span class="tag tag-warn">Expired</span>{% else %}{{ m.onoff(d.enabled) }}{% endif %}</td>
+    <td class="small">{% if d.expires_at %}{{ d.expires_at|dtc }}<span class="cell-sub">{{ d.expires_at|ago }}</span>{% else %}<span class="muted">Never</span>{% endif %}</td>
+    <td class="nowrap small col-upd">{{ d.updated_at|dtc }}</td>
+    <td class="row-actions">{% if has_role('operator') %}<a class="btn btn-quiet btn-small" href="{{ url_for('mab.edit', mid=d.id) }}">Edit</a>
+      {{ m.post_button(url_for('mab.delete', mid=d.id), 'Delete', 'btn btn-danger-quiet btn-small', confirm='Remove ' ~ d.mac ~ '? It loses network access at its next authentication.') }}{% endif %}</td>
+  </tr>{% endfor %}</tbody>
+</table></div>
+{% else %}<p class="empty">{% if q %}No devices match “{{ q }}”.{% else %}No MAB devices registered.{% endif %}</p>{% endif %}
+</section>
+{% if pages > 1 %}
+<nav class="pager" aria-label="Pages">
+  {% if page > 1 %}<a class="btn btn-quiet" href="{{ url_for('mab.index', page=page-1, q=q, show=show) }}">Previous</a>{% endif %}
+  <span>Page {{ page }} of {{ pages }}</span>
+  {% if page < pages %}<a class="btn btn-quiet" href="{{ url_for('mab.index', page=page+1, q=q, show=show) }}">Next</a>{% endif %}
+</nav>
+{% endif %}
+{% endblock %}

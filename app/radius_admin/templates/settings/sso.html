@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block title %}Single sign-on{% endblock %}
+{% block content %}
+<header class="page-head"><div><h1>Single sign-on (SAML)</h1>
+<p class="lede">Let administrators sign in to this console with your identity provider, such as Microsoft Entra ID. Roles come from group membership; multi-factor authentication is enforced by the identity provider.</p></div></header>
+{% for e in errors %}<p class="flash flash-error" role="alert">{{ e }}</p>{% endfor %}
+<section class="panel">
+  <h2>1. Register this console with the identity provider</h2>
+  <p>In Entra ID: Enterprise applications → New application → Create your own → Set up single sign-on → SAML, then enter:</p>
+  <dl class="kv">
+    <dt>Identifier (Entity ID)</dt><dd class="mono" id="sp-entity">{{ sp_entity }}</dd>
+    <dt>Reply URL (ACS)</dt><dd class="mono" id="sp-acs">{{ acs_url }}</dd>
+    <dt>Metadata</dt><dd><a href="{{ url_for('sso.metadata') }}">Download service-provider metadata</a></dd>
+  </dl>
+  <p class="small muted">Signing: SHA-256 (SHA-1 is refused). Under Attributes &amp; Claims, add a group claim with “Groups assigned to the application” so users in many groups still get a group list, then assign the groups that should have access to the application.</p>
+</section>
+<section class="panel narrow">
+<h2>2. Identity provider and options</h2>
+<form method="post" class="stack">
+  {{ m.csrf() }}
+  <label for="idp_metadata">Identity provider metadata (XML)</label>
+  <textarea id="idp_metadata" name="idp_metadata" rows="8" class="mono" spellcheck="false" aria-describedby="idp-hint">{{ s.idp_metadata }}</textarea>
+  <p id="idp-hint" class="small muted">Paste the Federation Metadata XML. It is stored here and never fetched from a URL.{% if idp %} Current: <span class="mono">{{ idp.entity_id }}</span>, {{ idp.certs }} signing certificate{{ '' if idp.certs == 1 else 's' }}.{% endif %}</p>
+  <label for="entity_id">Entity ID of this console (optional)</label>
+  <input id="entity_id" name="entity_id" value="{{ s.entity_id }}" maxlength="300" class="mono" placeholder="{{ sp_entity }}">
+  <label for="group_attribute">Group claim</label>
+  <input id="group_attribute" name="group_attribute" value="{{ s.group_attribute }}" maxlength="300" class="mono">
+  <label for="name_attribute">Display name claim</label>
+  <input id="name_attribute" name="name_attribute" value="{{ s.name_attribute }}" maxlength="300" class="mono">
+  <label for="local_login">Local passwords while single sign-on is on</label>
+  <select id="local_login" name="local_login">
+    <option value="all" {{ 'selected' if s.local_login == 'all' else '' }}>Every local account may still sign in</option>
+    <option value="admins" {{ 'selected' if s.local_login == 'admins' else '' }}>Only local administrator accounts (break-glass)</option>
+  </select>
+  <label class="check"><input type="checkbox" name="enabled" value="1" {{ 'checked' if s.enabled else '' }}> Offer “Sign in with single sign-on”</label>
+  <div class="actions"><button type="submit" class="btn btn-primary">Save single sign-on settings</button></div>
+</form>
+</section>
+<section class="panel">
+  <h2>3. Groups and roles</h2>
+  <p>A user gets the highest role among their mapped groups at each sign-in; a user in no mapped group is refused. For Entra ID, enter the group's <strong>Object ID</strong>.</p>
+  {% if groups %}
+  <div class="table-wrap"><table>
+    <thead><tr><th scope="col">Group</th><th scope="col">Group ID</th><th scope="col">Role</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead>
+    <tbody>{% for g_ in groups %}
+    <tr><td>{{ g_.label or '—' }}</td><td class="mono">{{ g_.group_id }}</td><td>{{ g_.role }}</td>
+      <td class="row-actions">{{ m.post_button(url_for('sso.delete_group', mid=g_.id), 'Remove', 'btn btn-quiet btn-small', confirm='Remove the mapping for ' ~ (g_.label or g_.group_id) ~ '?') }}</td></tr>
+    {% endfor %}</tbody>
+  </table></div>
+  {% else %}<p class="muted">No groups mapped yet.</p>{% endif %}
+  <form method="post" action="{{ url_for('sso.add_group') }}" class="stack">
+    {{ m.csrf() }}
+    <div class="grid-2">
+      <div><label for="group_id">Group ID</label><input id="group_id" name="group_id" required maxlength="256" class="mono" placeholder="3f2504e0-4f89-11d3-9a0c-0305e82c3301"></div>
+      <div><label for="label">Name (for this list)</label><input id="label" name="label" maxlength="200" placeholder="RADIUS operators"></div>
+      <div><label for="role">Role</label><select id="role" name="role">{% for r in roles %}<option>{{ r }}</option>{% endfor %}</select></div>
+    </div>
+    <div class="actions"><button type="submit" class="btn btn-quiet">Add mapping</button></div>
+  </form>
+</section>
+{% endblock %}

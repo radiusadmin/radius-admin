@@ -1,0 +1,47 @@
+--- a/mods-available/sql
++++ b/mods-available/sql
+@@ -37,7 +37,7 @@
+ 	#	sqlite
+ 	#	mongo
+ 	#
+-	dialect = "sqlite"
++	dialect = "postgresql"
+ 
+ 	#
+ 	#  The driver module used to execute the queries.  Since we
+@@ -57,7 +57,7 @@
+ 	#	rlm_sql_iodbc
+ 	#	rlm_sql_unixodbc
+ 	#
+-	driver = "rlm_sql_null"
++	driver = "rlm_sql_postgresql"
+ #	driver = "rlm_sql_${dialect}"
+ 
+ 	#
+@@ -69,7 +69,7 @@
+ 	#
+ 	sqlite {
+ 		# Path to the sqlite database
+-		filename = "/tmp/freeradius.db"
++		filename = "/var/lib/freeradius/sqlite/freeradius.db"
+ 
+ 		# How long to wait for write locks on the database to be
+ 		# released (in ms) before giving up.
+@@ -182,7 +182,7 @@
+ 	# server = mongodb://<DERIVED USERNAME>@192.168.0.2:PORT/DATABASE?authSource=$external&ssl=true&authMechanism=MONGODB-X509
+ 
+ 	# Database table configuration for everything except Oracle
+-	radius_db = "radius"
++	radius_db = "dbname=radius host=/var/run/postgresql user=radius_fr"
+ 
+ 	# If you are using Oracle then use this instead
+ #	radius_db = "(DESCRIPTION=(ADDRESS=(PROTOCOL=TCP)(HOST=localhost)(PORT=1521))(CONNECT_DATA=(SID=your_sid)))"
+@@ -401,7 +401,7 @@
+ 	#
+ 	#  Set this option to yes to use the database driver provided escape
+ 	#  function.
+-#	auto_escape = no
++	auto_escape = yes
+ 
+ 	#  When the SQL module is called in accounting and post-auth one or
+ 	#  more queries may be run, until at least one record is updated.

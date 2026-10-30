@@ -1,0 +1,19 @@
+# radius-admin: modules to REMOVE from /etc/freeradius/mods-enabled/ (delete the symlink;
+# the files in mods-available/ are left untouched). One name per line.
+# None of these is referenced by the modified sites-available/default once
+# inner-tunnel is removed from sites-enabled (validated with `radiusd -XC`).
+chap
+digest
+dpsk
+dynamic_clients
+echo
+mschap
+ntlm_auth
+passwd
+unix
+totp
+replicate
+radutmp
+sradutmp
+proxy_rate_limit
+exec

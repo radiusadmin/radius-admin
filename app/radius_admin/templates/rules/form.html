@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block title %}{{ 'Add rule' if is_new else 'Edit rule' }}{% endblock %}
+{% block content %}
+<header class="page-head"><h1>{{ 'Add access rule' if is_new else 'Edit access rule' }}</h1></header>
+<section class="panel narrow">
+<p class="flash flash-info">Saving takes effect at the next authentication; no apply or restart.</p>
+<form method="post" class="stack"{% if not is_new %} data-confirm="Save this rule? It takes effect at the next authentication."{% endif %}>
+  {{ m.csrf() }}
+  <fieldset><legend>Connection</legend>
+    <label class="check"><input type="radio" name="connection" value="wired" {{ 'checked' if r.connection != 'wireless' else '' }}> Wired (Ethernet)</label>
+    <label class="check"><input type="radio" name="connection" value="wireless" data-reveals="ssid-box" {{ 'checked' if r.connection == 'wireless' else '' }}> Wireless</label>
+  </fieldset>
+  {{ m.field_error(errors, 'connection') }}
+  <div id="ssid-box" class="reveal-box">
+    <label for="ssid">SSID</label>
+    <input id="ssid" name="ssid" value="{{ r.ssid or '' }}" maxlength="32"{{ m.described(errors, 'ssid') }}>
+    {{ m.field_error(errors, 'ssid') }}
+  </div>
+  <label for="ad_group">AD group</label>
+  <input id="ad_group" name="ad_group" value="{{ r.ad_group or '' }}" required maxlength="64" class="mono"{{ m.described(errors, 'ad_group') }}>
+  {{ m.field_error(errors, 'ad_group') }}
+  <div class="grid-2">
+    <div><label for="vlan">VLAN</label>
+    <input id="vlan" name="vlan" value="{{ r.vlan or '' }}" required inputmode="numeric" maxlength="4"{{ m.described(errors, 'vlan') }}>
+    {{ m.field_error(errors, 'vlan') }}</div>
+    <div><label for="priority">Order</label>
+    <input id="priority" name="priority" value="{{ r.priority }}" required inputmode="numeric" maxlength="6" aria-describedby="priority-hint"{{ m.described(errors, 'priority', True) }}>
+    <p id="priority-hint" class="small muted">Lower runs first.</p>
+    {{ m.field_error(errors, 'priority') }}</div>
+  </div>
+  <label for="description">Description</label>
+  <input id="description" name="description" value="{{ r.description or '' }}" maxlength="200">
+  <label class="check"><input type="checkbox" name="enabled" value="1" {{ 'checked' if r.enabled else '' }}> Enabled</label>
+  <p class="small muted">Disabled rules are ignored from the next authentication.</p>
+  <div class="actions"><button type="submit" class="btn btn-primary">{{ 'Add rule' if is_new else 'Save rule' }}</button>
+  <a class="btn btn-quiet" href="{{ url_for('rules.index') }}">Cancel</a></div>
+</form>
+</section>
+{% endblock %}

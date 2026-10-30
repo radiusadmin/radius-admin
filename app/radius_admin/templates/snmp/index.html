@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block title %}Switch monitoring{% endblock %}
+{% block content %}
+<header class="page-head"><div><h1>Switch monitoring</h1>
+<p class="lede">Read-only SNMPv3 polling of the RADIUS clients marked as switches: reachability, model, 802.1X ports and their live state (authorized, user or MAC, VLAN) and RADIUS counters. The monitoring service is the only part of this console that talks to the switches; the user needs read-only access only.</p></div>
+{% if p.enabled %}<div class="head-actions">{{ m.post_button(url_for('snmp.refresh'), 'Refresh now', 'btn btn-quiet') }}</div>{% endif %}</header>
+
+<section class="panel">
+  <h2>Status</h2>
+  <p>{% if not p.enabled %}<span class="tag tag-muted">Disabled</span> Monitoring is off.
+  {% elif not ov.polled %}<span class="tag tag-warn">Waiting</span> No poll has completed yet.
+  {% else %}<span class="tag tag-ok">On</span> {{ ov.reachable }} of {{ ov.total }} switches answered; last poll {{ ov.last_poll|dt }}.{% endif %}
+  {% if p.refresh_requested_at %}<span class="small muted">Last refresh requested {{ p.refresh_requested_at|dt }}.</span>{% endif %}</p>
+</section>
+
+<section class="panel narrow">
+<form method="post" class="stack" autocomplete="off">
+  {{ m.csrf() }}
+  <h2>SNMPv3 user</h2>
+  <p class="small muted">Security level authPriv. Configure the same user on every switch with a read-only view. Passphrases are stored encrypted and are never shown again; leave them empty to keep the current ones.</p>
+  <label for="username">Username</label>
+  <input id="username" name="username" value="{{ p.username or '' }}" maxlength="32" class="mono" autocomplete="off"{{ m.described(errors, 'username') }}>
+  {{ m.field_error(errors, 'username') }}
+  <div class="grid-2">
+    <div><label for="auth_protocol">Authentication</label>
+      <select id="auth_protocol" name="auth_protocol">{% for a in protocols %}<option value="{{ a }}" {{ 'selected' if p.auth_protocol == a else '' }}>{{ a }}</option>{% endfor %}</select>
+      {{ m.field_error(errors, 'auth_protocol') }}</div>
+    <div><span class="label-like">Privacy</span><p class="static-field mono">AES-128</p></div>
+  </div>
+  <label for="auth_pass">Authentication passphrase {% if p.auth_set %}<span class="tag tag-ok">set</span>{% else %}<span class="tag tag-muted">not set</span>{% endif %}</label>
+  <input id="auth_pass" name="auth_pass" type="password" maxlength="64" autocomplete="new-password"{{ m.described(errors, 'auth_pass') }}>
+  {{ m.field_error(errors, 'auth_pass') }}
+  <label for="priv_pass">Privacy passphrase {% if p.priv_set %}<span class="tag tag-ok">set</span>{% else %}<span class="tag tag-muted">not set</span>{% endif %}</label>
+  <input id="priv_pass" name="priv_pass" type="password" maxlength="64" autocomplete="new-password"{{ m.described(errors, 'priv_pass') }}>
+  {{ m.field_error(errors, 'priv_pass') }}
+
+  <h2>Polling</h2>
+  <label class="check"><input type="checkbox" name="enabled" value="1" {{ 'checked' if p.enabled else '' }}> Enable switch monitoring</label>
+  <label for="poll_minutes">Poll every (minutes)</label>
+  <input id="poll_minutes" name="poll_minutes" type="number" min="5" max="1440" value="{{ p.poll_minutes }}"{{ m.described(errors, 'poll_minutes') }}>
+  {{ m.field_error(errors, 'poll_minutes') }}
+  <label class="check"><input type="checkbox" name="auto_update_ports" value="1" {{ 'checked' if p.auto_update_ports else '' }}> Keep each client's 802.1X ports in sync with the switch</label>
+  <p class="small muted">When on, the 802.1X port list of a client is replaced by what its switch reports (every change is audited). When off, differences are only flagged in the client list.</p>
+
+  <h2>Session actions</h2>
+  <label for="coa_port">Switch port for disconnect / re-authenticate (UDP)</label>
+  <input id="coa_port" name="coa_port" type="number" min="1" max="65535" value="{{ p.coa_port or 1700 }}" class="select-auto" aria-describedby="coa_port-hint"{{ m.described(errors, 'coa_port', True) }}>
+  <p id="coa_port-hint" class="small muted">Catalyst 1300 listens on UDP 1700 (RFC 5176 uses 3799). The switch needs <span class="mono">aaa server radius dynamic-author</span> with this server as client and the same shared key (RUNBOOK §6.4).</p>
+  {{ m.field_error(errors, 'coa_port') }}
+  {% if p.updated_by %}<p class="small muted">Last changed by {{ p.updated_by }} {{ p.updated_at|dt }}.</p>{% endif %}
+  <div class="actions"><button type="submit" class="btn btn-primary">Save</button></div>
+</form>
+</section>
+
+<section class="panel" id="devices">
+  <h2>Monitored devices</h2>
+  <p class="small muted">Only clients marked as switches are polled. Untick access points, firewalls and anything else that should not receive SNMP requests. The same setting is on each client's edit page and can be set by CSV import.</p>
+  {% if clients %}
+  <form method="post" action="{{ url_for('snmp.devices') }}">
+    {{ m.csrf() }}
+    <div class="check-grid">
+    {%- for c in clients %}
+      <label class="check"><input type="checkbox" name="switch" value="{{ c.id }}" {{ 'checked' if c.is_switch else '' }}>
+        <span><span class="mono">{{ c.name }}</span> <span class="small muted mono">{{ c.ipaddr }}</span></span></label>
+    {%- endfor %}
+    </div>
+    <div class="actions"><button type="submit" class="btn btn-primary">Save monitored devices</button>
+      <span class="small muted">{{ clients|selectattr('is_switch')|list|length }} of {{ clients|length }} selected</span></div>
+  </form>
+  {% else %}<p class="muted">No RADIUS clients yet.</p>{% endif %}
+</section>
+
+<section class="panel">
+  <h2>Test one switch</h2>
+  {% if clients %}
+  <form method="post" action="{{ url_for('snmp.test') }}" class="filters">
+    {{ m.csrf() }}
+    <label for="client_id" class="sr-only">Client</label>
+    <select id="client_id" name="client_id" class="select-auto">{% for c in clients %}<option value="{{ c.id }}">{{ c.name }} ({{ c.ipaddr }})</option>{% endfor %}</select>
+    <button type="submit" class="btn btn-quiet">Run test</button>
+  </form>
+  {% else %}<p class="muted">No RADIUS clients yet.</p>{% endif %}
+  {% if tests %}
+  <div class="table-wrap"><table>
+    <thead><tr><th scope="col">Requested</th><th scope="col">Client</th><th scope="col">By</th><th scope="col">Result</th></tr></thead>
+    <tbody>{% for t in tests %}<tr><td>{{ t.requested_at|dtc }}</td><td class="mono">{{ t.name }}</td><td>{{ t.requested_by }}</td>
+      <td>{% if not t.done_at %}<span class="tag tag-muted">Pending</span>{% elif t.ok %}<span class="tag tag-ok">OK</span>{% else %}<span class="tag tag-warn">Failed</span>{% endif %} <span class="small">{{ t.message }}</span></td></tr>{% endfor %}</tbody>
+  </table></div>
+  {% endif %}
+</section>
+{% endblock %}

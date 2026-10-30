@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block title %}Reports{% endblock %}
+{% block content %}
+<header class="page-head"><div><h1>Reports</h1>
+<p class="lede">Evidence for audits and reviews. Open a report to read or print it (your browser's Print → Save as PDF), or download CSV for a spreadsheet. Every report you open or download is recorded in the audit log.</p></div></header>
+<form class="filters" method="get" id="period">
+  <label for="since" class="small">Period from</label><input id="since" name="since" type="date" value="{{ since }}" class="select-auto">
+  <label for="until" class="small">to</label><input id="until" name="until" type="date" value="{{ until }}" class="select-auto">
+  <button class="btn btn-quiet" type="submit">Set period</button>
+  <span class="small muted">Whole days, UTC. Applies to reports marked “period”.</span>
+</form>
+<section class="panel flush">
+<div class="table-wrap"><table class="reports-table">
+  <thead><tr><th scope="col">Report</th><th scope="col">Covers</th><th scope="col"><span class="sr-only">Open</span></th></tr></thead>
+  <tbody>{% for key, r in reports.items() %}{% if has_role(r[3]) %}
+  <tr><td class="name-cell"><strong>{{ r[0] }}</strong><span class="cell-sub">{{ r[1] }}</span></td>
+    <td class="nowrap small">{% if r[2] %}period {{ since }} – {{ until }}{% else %}current state{% endif %}</td>
+    <td class="row-actions"><a class="btn btn-quiet btn-small" href="{{ url_for('reports.view', key=key, since=since, until=until) }}">View / print</a>
+      <a class="btn btn-quiet btn-small" href="{{ url_for('reports.view', key=key, since=since, until=until, format='csv') }}">CSV</a></td></tr>
+  {% endif %}{% endfor %}</tbody>
+</table></div>
+</section>
+{% endblock %}

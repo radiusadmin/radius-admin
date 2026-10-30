@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}{{ action|capitalize }} result{% endblock %}
+{% block content %}
+<header class="page-head"><h1>{% if action == 'validate' %}Validation {{ 'passed' if ok else 'failed' }}{% elif action == 'apply' %}{{ 'Configuration applied' if ok else 'Apply failed' }}{% else %}{{ 'Rollback complete' if ok else 'Rollback failed' }}{% endif %}</h1></header>
+<section class="panel">
+  <p class="flash {{ 'flash-success' if ok else 'flash-error' }}" role="{{ 'status' if ok else 'alert' }}">{{ resp.message or ('Done.' if ok else 'The helper reported an error.') }}</p>
+  {% if resp.rolled_back %}<p>The previous configuration was restored and FreeRADIUS restarted with it.</p>{% endif %}
+  {% if resp.backup_id %}<p>Backup of the previous files: <span class="mono">{{ resp.backup_id }}</span></p>{% endif %}
+  {% if output %}<h2>radiusd output</h2><pre class="code">{{ output }}</pre>{% endif %}
+  <p><a class="btn" href="{{ url_for('apply.index') }}">Back to Apply changes</a></p>
+</section>
+{% endblock %}

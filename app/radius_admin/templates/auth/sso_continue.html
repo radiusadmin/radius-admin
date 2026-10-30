@@ -1,0 +1,10 @@
+{% extends "auth/_frame.html" %}
+{% block title %}Signing in{% endblock %}
+{# A same-site navigation (not a redirect chained from the identity provider's POST), so the
+   browser sends the new SameSite=Strict session cookie. Meta refresh: no script needed. #}
+{% block head %}<meta http-equiv="refresh" content="0;url={{ next }}">{% endblock %}
+{% block gate %}
+<h1>Signed in</h1>
+<p>Continuing to the console…</p>
+<p><a class="btn btn-primary btn-block" href="{{ next }}">Continue</a></p>
+{% endblock %}

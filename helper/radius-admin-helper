@@ -1,0 +1,1165 @@
+#!/usr/bin/python3 -I
+# radius-admin-helper -- privileged helper for the radius-admin web UI (SPEC section 6).
+#
+# Runs as root, one process per connection (systemd socket activation, Accept=yes):
+# stdin/stdout are the accepted AF_UNIX connection. Reads ONE JSON request line,
+# writes ONE JSON response line, exits.
+#
+# Security properties:
+#   * Settings come only from a root-owned config file (default
+#     /etc/radius-admin/helper.conf, overridable only on the command line, i.e. by
+#     the root-owned systemd unit). Nothing in the request selects paths or programs.
+#   * The only request inputs are "action" (fixed set) and "backup_id" (strict regex).
+#   * Staged files are opened with O_NOFOLLOW relative to an O_NOFOLLOW directory fd,
+#     must be regular files owned by the staging owner, single-linked, <= 1 MiB.
+#   * Staged content is checked against a whitelist grammar (clients) or a
+#     forbidden-token list (policy) before radiusd ever parses it.
+#   * Validation runs `radiusd -XC` (as root, like the service; radiusd drops to its
+#     configured user itself) against a private copy of raddb; nothing is executed
+#     with arguments derived from file content.
+#   * Every action is logged to syslog (ident radius-admin-helper).
+#   * Python standard library only; compatible with Python 3.10+ (target 3.12).
+import configparser
+import datetime
+import errno
+import fcntl
+import grp
+import hashlib
+import ipaddress
+import json
+import os
+import pwd
+import re
+import shutil
+import signal
+import socket
+import stat
+import struct
+import subprocess
+import sys
+import syslog
+import tempfile
+import time
+
+VERSION = "1.0"
+DEFAULT_CONFIG = "/etc/radius-admin/helper.conf"
+MAX_REQUEST = 64 * 1024
+MAX_STAGED = 1024 * 1024
+OUTPUT_LINES = 200
+BACKUP_ID_RE = re.compile(r"^\d{8}T\d{6}Z$")
+SAFE_ENV = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C", "LC_ALL": "C"}
+ACTIONS = ("status", "validate", "apply", "rollback")
+
+POLICY_NAME = "radius-admin"                 # <raddb>/policy.d/radius-admin
+CLIENTS_NAME = "radius-admin-clients.conf"   # <raddb>/radius-admin-clients.conf
+STAGED_POLICY = "policy"
+STAGED_CLIENTS = "clients"
+
+
+class HelperError(Exception):
+    """An expected failure, reported to the caller with ok=false."""
+
+
+# --------------------------------------------------------------------------- config
+
+CONFIG_DEFAULTS = {
+    "service": "freeradius",
+    "radiusd": "/usr/sbin/radiusd",
+    "raddb": "/etc/freeradius",
+    "freerad_user": "freerad",
+    "freerad_group": "",                     # default: primary group of freerad_user
+    "config_name": "radiusd",                # radiusd -n <name> (reads <raddb>/<name>.conf)
+    "staging_dir": "/var/lib/radius-admin/staging",
+    "staging_owner": "radius-admin",
+    "work_dir": "/var/lib/radius-admin-helper",
+    "allowed_users": "radius-admin,root",
+    "systemctl": "/usr/bin/systemctl",
+    "runuser": "/usr/sbin/runuser",
+    "ss": "/usr/bin/ss",
+    "fips_file": "/proc/sys/crypto/fips_enabled",
+    "radius_port": "1812",
+    "restart_wait": "15",
+    "restart_timeout": "20",
+    "validate_timeout": "30",
+    "lock_timeout": "10",
+    "keep_backups": "50",
+    "syslog_facility": "authpriv",
+    "require_root_config": "true",
+}
+# Worst case for apply with defaults: lock 10 + validate 30 + (restart 20 + wait 15)
+# + rollback (restart 20 + wait 15) = 110 s, inside the app's helper_timeout (120 s).
+
+_FACILITIES = {
+    "authpriv": syslog.LOG_AUTHPRIV, "auth": syslog.LOG_AUTH, "daemon": syslog.LOG_DAEMON,
+    "local0": syslog.LOG_LOCAL0, "local1": syslog.LOG_LOCAL1, "local2": syslog.LOG_LOCAL2,
+    "local3": syslog.LOG_LOCAL3, "local4": syslog.LOG_LOCAL4, "local5": syslog.LOG_LOCAL5,
+    "local6": syslog.LOG_LOCAL6, "local7": syslog.LOG_LOCAL7,
+}
+
+
+def _abs(cfg, key):
+    v = cfg[key]
+    if not v.startswith("/") or "\n" in v or "\0" in v:
+        raise HelperError("helper.conf: %s must be an absolute path" % key)
+    return os.path.normpath(v)
+
+
+def load_config(path):
+    """Load [helper] settings from a root-owned, non-writable-by-others file."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    except OSError as e:
+        raise HelperError("cannot open helper config %s: %s" % (path, e.strerror))
+    try:
+        st = os.fstat(fd)
+        with os.fdopen(fd, "r", encoding="utf-8", closefd=False) as fh:
+            text = fh.read(65536)
+    finally:
+        os.close(fd)
+    cp = configparser.ConfigParser(interpolation=None, inline_comment_prefixes=("#", ";"))
+    cp.read_string(text, source=path)
+    cfg = dict(CONFIG_DEFAULTS)
+    if cp.has_section("helper"):
+        for k, v in cp.items("helper"):
+            if k not in CONFIG_DEFAULTS:
+                raise HelperError("helper.conf: unknown key %r" % k)
+            cfg[k] = v.strip()
+    if cfg["require_root_config"].lower() in ("1", "true", "yes", "on"):
+        if not stat.S_ISREG(st.st_mode) or st.st_uid != 0 or st.st_mode & 0o022:
+            raise HelperError("helper config %s must be a regular file owned by root "
+                              "and not group/world writable" % path)
+    for key in ("radiusd", "raddb", "staging_dir", "work_dir", "systemctl", "runuser",
+                "ss", "fips_file"):
+        cfg[key] = _abs(cfg, key)
+    if not re.match(r"^[A-Za-z0-9@_.:-]{1,128}$", cfg["service"]):
+        raise HelperError("helper.conf: invalid service name")
+    if not re.match(r"^[A-Za-z0-9_-]{1,64}$", cfg["config_name"]):
+        raise HelperError("helper.conf: invalid config_name")
+    for key in ("radius_port", "restart_wait", "restart_timeout", "validate_timeout",
+                "lock_timeout", "keep_backups"):
+        try:
+            cfg[key] = int(cfg[key])
+        except ValueError:
+            raise HelperError("helper.conf: %s must be an integer" % key)
+    if cfg["keep_backups"] < 1:
+        raise HelperError("helper.conf: keep_backups must be >= 1")
+    try:
+        pw = pwd.getpwnam(cfg["freerad_user"])
+        cfg["freerad_uid"] = pw.pw_uid
+        cfg["freerad_gid"] = (grp.getgrnam(cfg["freerad_group"]).gr_gid
+                              if cfg["freerad_group"] else pw.pw_gid)
+        cfg["staging_uid"] = pwd.getpwnam(cfg["staging_owner"]).pw_uid
+    except KeyError as e:
+        raise HelperError("helper.conf: unknown user/group %s" % e)
+    allowed = set()
+    for name in cfg["allowed_users"].split(","):
+        name = name.strip()
+        if name:
+            try:
+                allowed.add(pwd.getpwnam(name).pw_uid)
+            except KeyError:
+                pass
+    cfg["allowed_uids"] = allowed
+    cfg["policy_target"] = os.path.join(cfg["raddb"], "policy.d", POLICY_NAME)
+    cfg["clients_target"] = os.path.join(cfg["raddb"], CLIENTS_NAME)
+    cfg["facility"] = _FACILITIES.get(cfg["syslog_facility"].lower(), syslog.LOG_AUTHPRIV)
+    return cfg
+
+
+# --------------------------------------------------------------------------- logging
+
+def log(level, msg):
+    try:
+        syslog.syslog(level, msg.replace("\n", " ")[:2000])
+    except Exception:
+        pass
+
+
+# --------------------------------------------------------------------------- subprocess
+
+def run(argv, timeout, input_data=None):
+    """Run a fixed program (argv[0] from config) with a clean env. Returns (rc, output)."""
+    try:
+        p = subprocess.run(argv, stdin=subprocess.DEVNULL if input_data is None else None,
+                           input=input_data, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                           env=SAFE_ENV, cwd="/", timeout=timeout, close_fds=True,
+                           start_new_session=True)
+        return p.returncode, p.stdout.decode("utf-8", "replace")
+    except subprocess.TimeoutExpired as e:
+        out = (e.stdout or b"").decode("utf-8", "replace")
+        return 124, out + "\n[radius-admin-helper: %s timed out after %ss]" % (
+            os.path.basename(argv[0]), timeout)
+    except OSError as e:
+        return 127, "[radius-admin-helper: cannot execute %s: %s]" % (argv[0], e.strerror)
+
+
+_SECRET_LINE = re.compile(r'(?i)(\b(?:secret|password)\s*=\s*)(\S.*)$')
+
+
+def tail(output, n=OUTPUT_LINES):
+    lines = output.splitlines()[-n:]
+    out = []
+    for ln in lines:
+        ln = _SECRET_LINE.sub(lambda m: m.group(1) + "<redacted>", ln)
+        out.append(ln[:500])
+    return "\n".join(out)
+
+
+# --------------------------------------------------------------------------- content checks
+
+POLICY_FORBIDDEN = [
+    (re.compile(r"\$-?INCLUDE", re.I), "$INCLUDE"),
+    (re.compile(r"\$ENV", re.I), "$ENV"),
+    (re.compile(r"\$TEMPLATE", re.I), "$TEMPLATE"),
+    (re.compile(r"%\{\s*exec\s*:", re.I), "%{exec:"),
+    (re.compile(r"Exec-Program", re.I), "Exec-Program"),
+    # numeric attribute aliases resolve to ANY dictionary attribute, e.g. Attr-502 =
+    # Exec-Program, Attr-503 = Exec-Program-Wait, Vendor-<n>-Attr-<m>: refuse them all
+    (re.compile(r"(?<![A-Za-z0-9_-])Attr-\d", re.I), "numeric attribute alias Attr-<n>"),
+    (re.compile(r"\bVendor-[\w-]*-Attr-\d", re.I), "numeric attribute alias Vendor-*-Attr-<n>"),
+    (re.compile(r"-Attr-\d", re.I), "numeric attribute alias *-Attr-<n>"),
+    (re.compile(r"`"), "backtick"),
+    # defense in depth: rlm_exec instances shipped by FreeRADIUS and interpreter modules
+    (re.compile(r"%\{\s*(echo|ntlm_auth|perl|python3?|ruby|lua)\s*:", re.I), "exec-type xlat"),
+]
+
+_CLIENT_OPEN = re.compile(r"^client[ \t]+([A-Za-z0-9._-]{1,63})[ \t]*\{$")
+_PAIR = re.compile(r"^([a-z_0-9]+)[ \t]*=[ \t]*(.*?)$")
+_CLIENT_KEYS = {"ipaddr", "ipv4addr", "ipv6addr", "secret", "shortname", "nas_type",
+                "require_message_authenticator", "limit_proxy_state"}
+_YNA = {"yes", "no", "auto"}
+
+
+def check_text(data, what):
+    if len(data) > MAX_STAGED:
+        raise HelperError("%s file exceeds 1 MiB" % what)
+    if b"\0" in data:
+        raise HelperError("%s file contains NUL bytes" % what)
+    try:
+        text = data.decode("utf-8", "strict")
+    except UnicodeDecodeError:
+        raise HelperError("%s file is not valid UTF-8" % what)
+    for ch in text:
+        o = ord(ch)
+        if (o < 0x20 and ch not in "\n\t") or o == 0x7f:
+            raise HelperError("%s file contains control characters" % what)
+    return text
+
+
+def check_policy(data):
+    text = check_text(data, "policy")
+    for rx, label in POLICY_FORBIDDEN:
+        m = rx.search(text)
+        if m:
+            line = text.count("\n", 0, m.start()) + 1
+            raise HelperError("policy file contains forbidden construct %s (line %d)"
+                              % (label, line))
+    return text
+
+
+def _unquote(v):
+    if len(v) >= 2 and v[0] == '"' and v[-1] == '"':
+        return v[1:-1], True
+    return v, False
+
+
+def _check_client_value(key, raw, lineno):
+    v, quoted = _unquote(raw)
+    if '"' in v or "\\" in v:
+        raise HelperError("clients line %d: invalid characters in %s" % (lineno, key))
+    if "${" in v or "$ENV" in v.upper():
+        raise HelperError("clients line %d: variable expansion not allowed in %s" % (lineno, key))
+    if key == "secret":
+        if not quoted:
+            raise HelperError("clients line %d: secret must be double-quoted" % lineno)
+        if not re.match(r"^[\x21-\x7e]{16,128}$", v):
+            raise HelperError("clients line %d: secret must be 16-128 printable ASCII "
+                              "characters without whitespace" % lineno)
+        return
+    if key in ("ipaddr", "ipv4addr", "ipv6addr"):
+        if not re.match(r"^[0-9A-Fa-f:.]+(/\d{1,3})?$", v):
+            raise HelperError("clients line %d: invalid address" % lineno)
+        try:
+            net = ipaddress.ip_network(v, strict=False)
+        except ValueError:
+            raise HelperError("clients line %d: invalid address" % lineno)
+        if key == "ipv4addr" and net.version != 4:
+            raise HelperError("clients line %d: ipv4addr is not IPv4" % lineno)
+        if key == "ipv6addr" and net.version != 6:
+            raise HelperError("clients line %d: ipv6addr is not IPv6" % lineno)
+        return
+    if key == "shortname":
+        if not re.match(r"^[A-Za-z0-9._-]{1,63}$", v):
+            raise HelperError("clients line %d: invalid shortname" % lineno)
+        return
+    if key == "nas_type":
+        if not re.match(r"^[A-Za-z0-9_-]{1,32}$", v):
+            raise HelperError("clients line %d: invalid nas_type" % lineno)
+        return
+    if key in ("require_message_authenticator", "limit_proxy_state"):
+        if v not in _YNA:
+            raise HelperError("clients line %d: %s must be yes, no or auto" % (lineno, key))
+        return
+    raise HelperError("clients line %d: key %s not allowed" % (lineno, key))
+
+
+_SECTION_OPEN = re.compile(r"^([a-z_]{1,32})(?:[ \t]+([A-Za-z0-9._-]{1,63}))?[ \t]*\{$")
+_ADDR_KEYS = {"ipaddr", "ipv4addr", "ipv6addr"}
+# RadSec (RFC 6614): one TLS listener plus one clients section, exactly as rendered by
+# app/radius_admin/unlang.py. Every key and value is pinned; certificate paths may only
+# name the site certificate files that mods-available/eap uses.
+RADSEC_SECTION = "radius_admin_radsec"
+_TLS_CLIENT_KEYS = {"ipaddr", "ipv4addr", "ipv6addr", "proto", "secret", "shortname", "nas_type",
+                    "radsec_peer_name"}
+_PEER_NAME = re.compile(r'^"[A-Za-z0-9*][A-Za-z0-9 ._*-]{0,252}"$|^""$')
+_OCSP_URL = re.compile(r'^"https?://[A-Za-z0-9.-]{1,253}(:[0-9]{1,5})?(/[A-Za-z0-9._~/-]{0,200})?"$')
+
+
+def _parse_blocks(text):
+    """Comments, blank lines, `name [arg] {` ... `}` sections and `key = value` pairs,
+    one per line. Returns the top-level node {"pairs", "children"}."""
+    root = {"name": None, "arg": None, "pairs": {}, "children": [], "line": 0}
+    stack = [root]
+    for lineno, line in enumerate(text.split("\n"), 1):
+        s = line.strip()
+        if not s or s.startswith("#"):
+            continue
+        if s == "}":
+            if len(stack) == 1:
+                raise HelperError("clients line %d: unexpected }" % lineno)
+            stack.pop()
+            continue
+        m = _SECTION_OPEN.match(s)
+        if m:
+            if len(stack) > 4:
+                raise HelperError("clients line %d: sections nested too deeply" % lineno)
+            node = {"name": m.group(1), "arg": m.group(2), "pairs": {}, "children": [], "line": lineno}
+            stack[-1]["children"].append(node)
+            stack.append(node)
+            continue
+        m = _PAIR.match(s)
+        if not m or len(stack) == 1:
+            raise HelperError("clients line %d: expected 'client <name> {' or a comment" % lineno)
+        key, val = m.group(1), m.group(2).strip()
+        if key in stack[-1]["pairs"]:
+            raise HelperError("clients line %d: duplicate key %s" % (lineno, key))
+        stack[-1]["pairs"][key] = (val, lineno)
+    if len(stack) != 1:
+        raise HelperError("clients file: section %s is not closed" % (stack[-1]["arg"] or stack[-1]["name"]))
+    return root
+
+
+def _int_value(node, key, lo, hi):
+    val, lineno = node["pairs"][key]
+    if not re.match(r"^[0-9]{1,6}$", val) or not lo <= int(val) <= hi:
+        raise HelperError("clients line %d: %s must be a number from %d to %d" % (lineno, key, lo, hi))
+
+
+def _only_keys(node, allowed, required=()):
+    for key, (_, lineno) in node["pairs"].items():
+        if key not in allowed:
+            raise HelperError("clients line %d: key %s not allowed" % (lineno, key))
+    for key in required:
+        if key not in node["pairs"]:
+            raise HelperError("clients line %d: %s needs %s" % (node["line"], node["name"], key))
+
+
+def _fixed(node, key, *values):
+    if key in node["pairs"]:
+        val, lineno = node["pairs"][key]
+        if val not in values:
+            raise HelperError("clients line %d: %s must be %s" % (lineno, key, " or ".join(values)))
+
+
+def _no_children(node, allowed=()):
+    for c in node["children"]:
+        if c["name"] not in allowed or c["arg"] is not None:
+            raise HelperError("clients line %d: section %s not allowed here" % (c["line"], c["name"]))
+
+
+def _one_address(node, what):
+    if len(set(node["pairs"]) & _ADDR_KEYS) != 1:
+        raise HelperError("%s: exactly one of ipaddr/ipv4addr/ipv6addr required" % what)
+
+
+def _check_udp_client(node):
+    name = node["arg"]
+    _no_children(node)
+    _only_keys(node, _CLIENT_KEYS)
+    if "secret" not in node["pairs"]:
+        raise HelperError("client %s: missing secret" % name)
+    _one_address(node, "client %s" % name)
+    for key, (val, lineno) in node["pairs"].items():
+        _check_client_value(key, val, lineno)
+
+
+def _check_tls_client(node):
+    name = node["arg"]
+    _no_children(node)
+    _only_keys(node, _TLS_CLIENT_KEYS, ("proto", "secret"))
+    _one_address(node, "RadSec client %s" % name)
+    _fixed(node, "proto", "tls")
+    _fixed(node, "secret", '"radsec"')
+    for key, (val, lineno) in node["pairs"].items():
+        if key == "radsec_peer_name":
+            if not _PEER_NAME.match(val):
+                raise HelperError("clients line %d: invalid radsec_peer_name" % lineno)
+        elif key not in ("proto", "secret"):
+            _check_client_value(key, val, lineno)
+
+
+def _check_listen(node, cert_dir):
+    _only_keys(node, {"type", "ipaddr", "ipv4addr", "ipv6addr", "port", "proto", "virtual_server",
+                      "clients"}, ("type", "port", "proto", "virtual_server", "clients"))
+    _one_address(node, "RadSec listen section")
+    _fixed(node, "type", "auth+acct")
+    _fixed(node, "proto", "tcp")
+    _fixed(node, "virtual_server", "default")
+    _fixed(node, "clients", RADSEC_SECTION)
+    _int_value(node, "port", 1, 65535)
+    for key in _ADDR_KEYS & set(node["pairs"]):
+        val, lineno = node["pairs"][key]
+        if not (key == "ipaddr" and val == "*"):
+            _check_client_value(key, val, lineno)
+            if "/" in val:
+                raise HelperError("clients line %d: listen address must not be a network" % lineno)
+    _no_children(node, ("limit", "tls"))
+    names = [c["name"] for c in node["children"]]
+    if names.count("tls") != 1 or names.count("limit") > 1:
+        raise HelperError("RadSec listen section needs exactly one tls section")
+    for c in node["children"]:
+        if c["name"] == "limit":
+            _no_children(c)
+            _only_keys(c, {"max_connections", "lifetime", "idle_timeout"})
+            for key in c["pairs"]:
+                _int_value(c, key, 1 if key == "max_connections" else 0, 1024 if key == "max_connections" else 86400)
+        else:
+            _check_listen_tls(c, cert_dir)
+
+
+def _check_listen_tls(node, cert_dir):
+    _only_keys(node, {"private_key_file", "certificate_file", "ca_file", "require_client_cert",
+                      "tls_min_version", "tls_max_version", "cipher_list", "ecdh_curve", "fragment_size"},
+               ("private_key_file", "certificate_file", "ca_file", "require_client_cert"))
+    _fixed(node, "private_key_file", os.path.join(cert_dir, "radius.key"))
+    _fixed(node, "certificate_file", os.path.join(cert_dir, "radius.pem"))
+    _fixed(node, "ca_file", os.path.join(cert_dir, "ca.pem"))
+    _fixed(node, "require_client_cert", "yes")
+    _fixed(node, "tls_min_version", '"1.2"', '"1.3"')
+    _fixed(node, "tls_max_version", '"1.2"', '"1.3"')
+    for key, rx in (("cipher_list", r'^"[A-Za-z0-9:+-]{1,512}"$'), ("ecdh_curve", r'^"[a-z0-9:]{1,64}"$')):
+        if key in node["pairs"]:
+            val, lineno = node["pairs"][key]
+            if not re.match(rx, val):
+                raise HelperError("clients line %d: invalid %s" % (lineno, key))
+    if "fragment_size" in node["pairs"]:
+        _int_value(node, "fragment_size", 1024, 16384)
+    _no_children(node, ("ocsp",))
+    if len(node["children"]) > 1:
+        raise HelperError("RadSec tls section: at most one ocsp section")
+    for c in node["children"]:
+        _no_children(c)
+        _only_keys(c, {"enable", "override_cert_url", "url", "use_nonce", "timeout", "softfail"}, ("enable",))
+        for key in ("enable", "override_cert_url", "use_nonce", "softfail"):
+            _fixed(c, key, "yes", "no")
+        if "timeout" in c["pairs"]:
+            _int_value(c, "timeout", 1, 60)
+        if "url" in c["pairs"]:
+            val, lineno = c["pairs"]["url"]
+            if not _OCSP_URL.match(val):
+                raise HelperError("clients line %d: invalid OCSP url" % lineno)
+
+
+def check_clients(data, cert_dir="/etc/freeradius/certs/site"):
+    """Whitelist grammar: comments, blank lines, `client NAME {` ... `}` blocks with
+    whitelisted `key = value` pairs, one per line; optionally one RadSec `listen {}`
+    section with one `clients radius_admin_radsec {}` section (both or neither).
+    Returns the number of clients."""
+    root = _parse_blocks(check_text(data, "clients"))
+    names = set()
+    count = 0
+    listens = [c for c in root["children"] if c["name"] == "listen"]
+    sections = [c for c in root["children"] if c["name"] == "clients"]
+    for c in root["children"]:
+        if c["name"] == "client" and c["arg"]:
+            clients = [c]
+            _check_udp_client(c)
+        elif c["name"] == "clients" and c["arg"] == RADSEC_SECTION and len(sections) == 1:
+            _only_keys(c, set())
+            for x in c["children"]:
+                if x["name"] != "client" or not x["arg"]:
+                    raise HelperError("clients line %d: only client sections allowed in %s"
+                                      % (x["line"], RADSEC_SECTION))
+            clients = c["children"]
+            if not clients:
+                raise HelperError("RadSec clients section is empty")
+            for tc in clients:
+                _check_tls_client(tc)
+        elif c["name"] == "listen" and c["arg"] is None and len(listens) == 1:
+            _check_listen(c, cert_dir)
+            continue
+        else:
+            raise HelperError("clients line %d: expected 'client <name> {' or a comment" % c["line"])
+        for cl in clients:
+            if cl["arg"] in names:
+                raise HelperError("clients line %d: duplicate client %s" % (cl["line"], cl["arg"]))
+            names.add(cl["arg"])
+            count += 1
+    if len(listens) != len(sections):
+        raise HelperError("RadSec needs both its listen section and its clients section")
+    return count
+
+
+# --------------------------------------------------------------------------- staging
+
+def read_staged(cfg):
+    """Read both staged files without following symlinks. Returns (policy, clients) bytes."""
+    try:
+        dfd = os.open(cfg["staging_dir"], os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+                      | os.O_CLOEXEC)
+    except OSError as e:
+        raise HelperError("staging directory unavailable: %s" % e.strerror)
+    try:
+        st = os.fstat(dfd)
+        if st.st_uid not in (0, cfg["staging_uid"]) or st.st_mode & 0o022:
+            raise HelperError("staging directory has unsafe ownership or permissions")
+        out = []
+        for name in (STAGED_POLICY, STAGED_CLIENTS):
+            try:
+                fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
+                             | getattr(os, "O_NOCTTY", 0), dir_fd=dfd)
+            except OSError as e:
+                if e.errno == errno.ELOOP:
+                    raise HelperError("staged %s is a symlink" % name)
+                raise HelperError("staged %s missing: %s" % (name, e.strerror))
+            try:
+                fst = os.fstat(fd)
+                if not stat.S_ISREG(fst.st_mode):
+                    raise HelperError("staged %s is not a regular file" % name)
+                if fst.st_uid != cfg["staging_uid"]:
+                    raise HelperError("staged %s is not owned by %s" % (name, cfg["staging_owner"]))
+                if fst.st_nlink != 1:
+                    raise HelperError("staged %s has multiple hard links" % name)
+                if fst.st_size > MAX_STAGED:
+                    raise HelperError("staged %s exceeds 1 MiB" % name)
+                chunks = []
+                remaining = MAX_STAGED + 1
+                while remaining > 0:
+                    b = os.read(fd, min(65536, remaining))
+                    if not b:
+                        break
+                    chunks.append(b)
+                    remaining -= len(b)
+                data = b"".join(chunks)
+                if len(data) > MAX_STAGED:
+                    raise HelperError("staged %s exceeds 1 MiB" % name)
+                out.append(data)
+            finally:
+                os.close(fd)
+        return out[0], out[1]
+    finally:
+        os.close(dfd)
+
+
+def read_root_file(path):
+    """Read a file from the helper's own (root-only) area or the live raddb; None if absent."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    except FileNotFoundError:
+        return None
+    except OSError as e:
+        raise HelperError("cannot read %s: %s" % (path, e.strerror))
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            raise HelperError("%s is not a regular file" % path)
+        if st.st_size > MAX_STAGED:
+            raise HelperError("%s exceeds 1 MiB" % path)
+        with os.fdopen(fd, "rb", closefd=False) as fh:
+            return fh.read(MAX_STAGED + 1)
+    finally:
+        os.close(fd)
+
+
+# --------------------------------------------------------------------------- filesystem helpers
+
+def sha256(b):
+    return hashlib.sha256(b).hexdigest()
+
+
+def fsync_dir(path):
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+    except OSError:
+        pass
+
+
+def atomic_write(path, data, uid, gid, mode):
+    """Write data to path atomically (temp file in same dir + rename). The temp name
+    starts with '.' so FreeRADIUS' `$INCLUDE policy.d/` never picks it up."""
+    d = os.path.dirname(path)
+    st = os.lstat(d)
+    if not stat.S_ISDIR(st.st_mode):
+        raise HelperError("%s is not a directory" % d)
+    if os.path.islink(path):
+        raise HelperError("refusing to replace symlink %s" % path)
+    fd, tmp = tempfile.mkstemp(prefix=".radius-admin.", dir=d)
+    try:
+        os.fchown(fd, uid, gid)
+        os.fchmod(fd, mode)
+        view = memoryview(data)
+        while view:
+            n = os.write(fd, view)
+            view = view[n:]
+        os.fsync(fd)
+        os.close(fd)
+        fd = -1
+        os.replace(tmp, path)
+        tmp = None
+        fsync_dir(d)
+    finally:
+        if fd >= 0:
+            os.close(fd)
+        if tmp:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+
+
+def remove_file(path):
+    try:
+        os.unlink(path)
+        fsync_dir(os.path.dirname(path))
+    except FileNotFoundError:
+        pass
+
+
+def ensure_work_dirs(cfg):
+    w = cfg["work_dir"]
+    os.makedirs(w, mode=0o711, exist_ok=True)
+    st = os.lstat(w)
+    if not stat.S_ISDIR(st.st_mode) or st.st_uid != 0:
+        raise HelperError("work_dir must be a root-owned directory")
+    os.chmod(w, 0o711)  # traverse-only for freerad (needed to reach validate/)
+    b = os.path.join(w, "backups")
+    os.makedirs(b, mode=0o700, exist_ok=True)
+    os.chmod(b, 0o700)
+    v = os.path.join(w, "validate")
+    os.makedirs(v, mode=0o750, exist_ok=True)
+    os.chown(v, 0, cfg["freerad_gid"])
+    os.chmod(v, 0o750)
+    return b, v
+
+
+class Lock:
+    def __init__(self, cfg):
+        self.path = os.path.join(cfg["work_dir"], "lock")
+        self.timeout = cfg["lock_timeout"]
+        self.fd = None
+
+    def __enter__(self):
+        self.fd = os.open(self.path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+        deadline = time.monotonic() + self.timeout
+        while True:
+            try:
+                fcntl.flock(self.fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return self
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    os.close(self.fd)
+                    self.fd = None
+                    raise HelperError("another apply/validate is in progress; try again later")
+                time.sleep(0.2)
+
+    def __exit__(self, *exc):
+        if self.fd is not None:
+            fcntl.flock(self.fd, fcntl.LOCK_UN)
+            os.close(self.fd)
+            self.fd = None
+
+
+# --------------------------------------------------------------------------- validation
+
+def _plain_mode(st):
+    """Permission bits without setuid/setgid. The helper unit runs with
+    RestrictSUIDSGID=yes, so chmod() with S_ISUID/S_ISGID fails with EPERM -- and the
+    live /etc/freeradius tree typically has setgid directories (drwxr-s--x). The bits
+    are irrelevant for a throw-away validation copy, so they are dropped."""
+    return stat.S_IMODE(st.st_mode) & ~(stat.S_ISUID | stat.S_ISGID)
+
+
+def _copy_tree(src_root, dst_root):
+    """Copy src_root to dst_root (must not exist): regular files, directories and
+    symlinks only, ownership preserved, setuid/setgid bits dropped. Special files are
+    skipped. Directory modes are applied last, deepest first."""
+    os.mkdir(dst_root, 0o700)
+    dirs = [(src_root, dst_root)]
+    for dirpath, dirnames, filenames in os.walk(src_root):
+        rel = os.path.relpath(dirpath, src_root)
+        ddir = dst_root if rel == "." else os.path.join(dst_root, rel)
+        keep = []
+        for name in sorted(dirnames) + sorted(filenames):
+            s = os.path.join(dirpath, name)
+            t = os.path.join(ddir, name)
+            try:
+                st = os.lstat(s)
+            except OSError:
+                continue
+            if stat.S_ISLNK(st.st_mode):
+                os.symlink(os.readlink(s), t)
+                os.lchown(t, st.st_uid, st.st_gid)
+            elif stat.S_ISDIR(st.st_mode):
+                os.mkdir(t, 0o700)
+                dirs.append((s, t))
+                keep.append(name)
+            elif stat.S_ISREG(st.st_mode):
+                shutil.copyfile(s, t, follow_symlinks=False)
+                os.chown(t, st.st_uid, st.st_gid)
+                os.chmod(t, _plain_mode(st))
+            # FIFOs, sockets, devices: skipped
+        dirnames[:] = [d for d in dirnames if d in keep]
+    for s, t in reversed(dirs):
+        st = os.lstat(s)
+        os.chown(t, st.st_uid, st.st_gid)
+        os.chmod(t, _plain_mode(st))
+
+
+def build_validation_tree(cfg, vroot, policy, clients):
+    """Copy raddb into a private dir (root:freerad 0750) with the candidate files
+    overlaid at their live positions, and point raddbdir at the copy."""
+    tmp = tempfile.mkdtemp(prefix="raddb.", dir=vroot)
+    os.chown(tmp, 0, cfg["freerad_gid"])
+    os.chmod(tmp, 0o750)
+    rd = os.path.join(tmp, "raddb")
+
+    _copy_tree(cfg["raddb"], rd)
+    # absolute symlinks that point into the live raddb (e.g. mods-enabled/sql ->
+    # /etc/freeradius/mods-available/sql) are repointed into the copy
+    live = cfg["raddb"].rstrip("/") + "/"
+    for dirpath, dirnames, filenames in os.walk(rd):
+        for name in dirnames + filenames:
+            p = os.path.join(dirpath, name)
+            if os.path.islink(p):
+                t = os.readlink(p)
+                if t.startswith(live):
+                    os.unlink(p)
+                    os.symlink(os.path.join(rd, t[len(live):]), p)
+    # radiusd refuses world-writable config dirs; the copy root must be traversable by freerad
+    os.chown(rd, 0, cfg["freerad_gid"])
+    os.chmod(rd, 0o750)
+    pd = os.path.join(rd, "policy.d")
+    if not os.path.isdir(pd) or os.path.islink(pd):
+        raise HelperError("raddb has no policy.d directory")
+    for path, data in ((os.path.join(pd, POLICY_NAME), policy),
+                       (os.path.join(rd, CLIENTS_NAME), clients)):
+        if os.path.lexists(path):
+            os.unlink(path)
+        atomic_write(path, data, 0, cfg["freerad_gid"], 0o640)
+    # radiusd.conf normally pins `raddbdir = /etc/freeradius`; repoint it at the copy so
+    # ${confdir}/... references resolve inside the candidate tree.
+    main = os.path.join(rd, cfg["config_name"] + ".conf")
+    if os.path.islink(main):
+        real = os.path.realpath(main)
+        os.unlink(main)
+        shutil.copyfile(real, main)
+    if os.path.isfile(main):
+        with open(main, "r", encoding="utf-8", errors="surrogateescape") as fh:
+            txt = fh.read()
+        txt, n = re.subn(r"(?m)^([ \t]*raddbdir[ \t]*=).*$", lambda m: m.group(1) + " " + rd, txt)
+        st = os.lstat(os.path.join(cfg["raddb"], cfg["config_name"] + ".conf"))
+        atomic_write(main, txt.encode("utf-8", "surrogateescape"), st.st_uid, st.st_gid,
+                     _plain_mode(st))
+    return tmp, rd
+
+
+def run_check(cfg, rd):
+    # Run as root, exactly as the service does: radiusd parses its configuration as
+    # root (some live files, e.g. switches.conf or clients.conf, may be root-only) and
+    # switches to "user = freerad" itself before any module is instantiated. Staged
+    # content has already passed check_policy/check_clients ($INCLUDE, $ENV, exec and
+    # raw attribute forms refused), so parsing it as root adds nothing that a normal
+    # service restart would not do anyway.
+    argv = [cfg["radiusd"], "-XC", "-d", rd, "-n", cfg["config_name"]]
+    return run(argv, cfg["validate_timeout"])
+
+
+def validate_candidate(cfg, vroot, policy, clients):
+    """Content checks + radiusd -XC on a private copy. Returns (ok, output_tail, n_clients)."""
+    check_policy(policy)
+    n = check_clients(clients, os.path.join(cfg["raddb"], "certs", "site"))
+    tmp = None
+    try:
+        tmp, rd = build_validation_tree(cfg, vroot, policy, clients)
+        rc, out = run_check(cfg, rd)
+    finally:
+        if tmp:
+            shutil.rmtree(tmp, ignore_errors=True)
+    ok = rc == 0 and ("Configuration appears to be OK" in out or "appears to be OK" in out)
+    return ok, tail(out), n
+
+
+# --------------------------------------------------------------------------- service control
+
+def service_active(cfg):
+    rc, out = run([cfg["systemctl"], "is-active", "--quiet", cfg["service"]], 15)
+    return rc == 0
+
+
+def udp_listening(cfg):
+    rc, out = run([cfg["ss"], "-H", "-lunp"], 10)
+    if rc != 0:
+        return False
+    port = ":%d" % cfg["radius_port"]
+    prog = os.path.basename(cfg["radiusd"])
+    for line in out.splitlines():
+        cols = line.split()
+        # State Recv-Q Send-Q Local:Port Peer:Port [Process]   (-H: no header)
+        if len(cols) < 5 or not cols[3].endswith(port):
+            continue
+        procs = " ".join(cols[5:])
+        # with -p, ss names the owning process; require it to be radiusd when shown
+        if not procs or ('"%s"' % prog) in procs:
+            return True
+    return False
+
+
+def restart_and_wait(cfg):
+    rc, out = run([cfg["systemctl"], "restart", cfg["service"]], cfg["restart_timeout"])
+    deadline = time.monotonic() + cfg["restart_wait"]
+    active = listening = False
+    while True:
+        active = service_active(cfg)
+        listening = active and udp_listening(cfg)
+        if active and listening:
+            return True, "service %s active and listening on UDP %d" % (
+                cfg["service"], cfg["radius_port"])
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(0.5)
+    why = []
+    if rc != 0:
+        why.append("systemctl restart exited %d: %s" % (rc, tail(out, 5)))
+    if not active:
+        why.append("service not active")
+    elif not listening:
+        why.append("UDP %d not listening" % cfg["radius_port"])
+    return False, "; ".join(why)
+
+
+# --------------------------------------------------------------------------- backups / state
+
+def utc_id():
+    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+
+def list_backups(bdir):
+    try:
+        names = [n for n in os.listdir(bdir) if BACKUP_ID_RE.match(n)
+                 and os.path.isdir(os.path.join(bdir, n))
+                 and not os.path.islink(os.path.join(bdir, n))]
+    except FileNotFoundError:
+        return []
+    return sorted(names, reverse=True)
+
+
+def make_backup(cfg, bdir, reason):
+    for _ in range(3):
+        bid = utc_id()
+        path = os.path.join(bdir, bid)
+        try:
+            os.mkdir(path, 0o700)
+            break
+        except FileExistsError:
+            time.sleep(1.05)
+    else:
+        raise HelperError("could not allocate a backup id")
+    meta = {"id": bid, "reason": reason, "files": {}}
+    for key, name in (("policy_target", "policy"), ("clients_target", "clients")):
+        data = read_root_file(cfg[key])
+        if data is None:
+            meta["files"][name] = None
+        else:
+            atomic_write(os.path.join(path, name), data, 0, 0, 0o600)
+            meta["files"][name] = sha256(data)
+    atomic_write(os.path.join(path, "meta.json"),
+                 json.dumps(meta, sort_keys=True).encode(), 0, 0, 0o600)
+    return bid
+
+
+def load_backup(bdir, bid):
+    if not isinstance(bid, str) or not BACKUP_ID_RE.match(bid):
+        raise HelperError("invalid backup_id")
+    path = os.path.join(bdir, bid)
+    st = None
+    try:
+        st = os.lstat(path)
+    except FileNotFoundError:
+        pass
+    if st is None or not stat.S_ISDIR(st.st_mode):
+        raise HelperError("backup %s not found" % bid)
+    raw = read_root_file(os.path.join(path, "meta.json"))
+    if raw is None:
+        raise HelperError("backup %s is incomplete" % bid)
+    meta = json.loads(raw.decode())
+    files = {}
+    for name in ("policy", "clients"):
+        if meta["files"].get(name) is None:
+            files[name] = None
+            continue
+        data = read_root_file(os.path.join(path, name))
+        if data is None or sha256(data) != meta["files"][name]:
+            raise HelperError("backup %s is corrupt (%s)" % (bid, name))
+        files[name] = data
+    return files
+
+
+def install_files(cfg, policy, clients):
+    for key, data in (("policy_target", policy), ("clients_target", clients)):
+        if data is None:
+            remove_file(cfg[key])
+        else:
+            atomic_write(cfg[key], data, 0, cfg["freerad_gid"], 0o640)
+
+
+def prune_backups(cfg, bdir, protect=()):
+    names = list_backups(bdir)
+    for n in names[cfg["keep_backups"]:]:
+        if n in protect:
+            continue
+        shutil.rmtree(os.path.join(bdir, n), ignore_errors=True)
+
+
+def read_state(cfg):
+    raw = read_root_file(os.path.join(cfg["work_dir"], "state.json"))
+    if not raw:
+        return {}
+    try:
+        return json.loads(raw.decode())
+    except ValueError:
+        return {}
+
+
+def write_state(cfg, state):
+    atomic_write(os.path.join(cfg["work_dir"], "state.json"),
+                 json.dumps(state, sort_keys=True).encode(), 0, 0, 0o600)
+
+
+# --------------------------------------------------------------------------- actions
+
+def act_status(cfg, req):
+    bdir = os.path.join(cfg["work_dir"], "backups")
+    fips = False
+    try:
+        with open(cfg["fips_file"]) as fh:
+            fips = fh.read().strip() == "1"
+    except OSError:
+        pass
+    rc, out = run([cfg["radiusd"], "-v"], 15)
+    version = ""
+    for ln in out.splitlines():
+        if "Version" in ln:
+            version = ln.strip()[:200]
+            break
+    st = read_state(cfg)
+    active = service_active(cfg)
+    return {"ok": True, "message": "ok", "service_active": active,
+            "listening": bool(active and udp_listening(cfg)),
+            "fips_enabled": fips, "radiusd_version": version,
+            "last_apply": st.get("last_apply"), "backups": list_backups(bdir)[:20]}
+
+
+def act_validate(cfg, req):
+    _, vroot = ensure_work_dirs(cfg)
+    with Lock(cfg):
+        policy, clients = read_staged(cfg)
+        ok, out, n = validate_candidate(cfg, vroot, policy, clients)
+    return {"ok": ok, "message": ("configuration valid (%d clients)" % n) if ok
+            else "radiusd -XC reported errors", "output": out,
+            "policy_sha256": sha256(policy), "clients_sha256": sha256(clients)}
+
+
+def _deploy(cfg, bdir, vroot, policy, clients, reason, extra):
+    """Shared by apply and rollback: validate, back up, install, restart, auto-rollback."""
+    if policy is None or clients is None:
+        raise HelperError("both policy and clients files are required")
+    ok, out, n = validate_candidate(cfg, vroot, policy, clients)
+    if not ok:
+        return dict(extra, ok=False, rolled_back=False, output=out,
+                    message="validation failed; nothing changed")
+    bid = make_backup(cfg, bdir, reason)
+    prev = load_backup(bdir, bid)
+    try:
+        install_files(cfg, policy, clients)
+    except Exception as e:
+        install_files(cfg, prev["policy"], prev["clients"])
+        raise HelperError("install failed (%s); previous files restored" % e)
+    started, why = restart_and_wait(cfg)
+    if started:
+        return dict(extra, ok=True, rolled_back=False, backup_id=bid, output=out,
+                    policy_sha256=sha256(policy), clients_sha256=sha256(clients),
+                    message="%s; %s" % (reason, why))
+    log(syslog.LOG_ERR, "%s: restart failed (%s); restoring backup %s" % (reason, why, bid))
+    install_files(cfg, prev["policy"], prev["clients"])
+    restarted, why2 = restart_and_wait(cfg)
+    return dict(extra, ok=False, rolled_back=True, rollback_ok=restarted, backup_id=bid,
+                output=out, message="restart failed (%s); previous configuration restored%s"
+                % (why, "" if restarted else " BUT SERVICE STILL NOT HEALTHY: " + why2))
+
+
+def _record(cfg, action, resp):
+    st = read_state(cfg)
+    entry = {"at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+             "action": action, "ok": bool(resp.get("ok")),
+             "backup_id": resp.get("backup_id"),
+             "policy_sha256": resp.get("policy_sha256"),
+             "clients_sha256": resp.get("clients_sha256"),
+             "rolled_back": bool(resp.get("rolled_back")), "message": resp.get("message", "")}
+    if resp.get("restored"):
+        entry["restored"] = resp["restored"]
+    st["last_attempt"] = entry
+    if entry["ok"]:
+        st["last_apply"] = entry
+    write_state(cfg, st)
+
+
+def act_apply(cfg, req):
+    bdir, vroot = ensure_work_dirs(cfg)
+    with Lock(cfg):
+        policy, clients = read_staged(cfg)
+        resp = _deploy(cfg, bdir, vroot, policy, clients, "apply", {})
+        _record(cfg, "apply", resp)
+        prune_backups(cfg, bdir)
+    return resp
+
+
+def act_rollback(cfg, req):
+    bid = req.get("backup_id")
+    if not isinstance(bid, str) or not BACKUP_ID_RE.match(bid):
+        raise HelperError("invalid backup_id (expected YYYYMMDDTHHMMSSZ)")
+    bdir, vroot = ensure_work_dirs(cfg)
+    with Lock(cfg):
+        files = load_backup(bdir, bid)
+        resp = _deploy(cfg, bdir, vroot, files["policy"], files["clients"],
+                       "rollback to %s" % bid, {"restored": bid})
+        _record(cfg, "rollback", resp)
+        prune_backups(cfg, bdir, protect=(bid,))
+    return resp
+
+
+HANDLERS = {"status": act_status, "validate": act_validate, "apply": act_apply,
+            "rollback": act_rollback}
+
+
+# --------------------------------------------------------------------------- request I/O
+
+def peer_uid(sock):
+    try:
+        creds = sock.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i"))
+        pid, uid, gid = struct.unpack("3i", creds)
+        return pid, uid
+    except OSError:
+        return None, None
+
+
+def read_request(sock):
+    sock.settimeout(15)
+    buf = b""
+    while b"\n" not in buf:
+        chunk = sock.recv(65536)
+        if not chunk:
+            break
+        buf += chunk
+        if len(buf) > MAX_REQUEST + 1:
+            raise HelperError("request too large")
+    line = buf.split(b"\n", 1)[0]
+    if len(line) > MAX_REQUEST:
+        raise HelperError("request too large")
+    try:
+        req = json.loads(line.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        raise HelperError("malformed JSON request")
+    if not isinstance(req, dict):
+        raise HelperError("request must be a JSON object")
+    return req
+
+
+def handle(cfg, req):
+    action = req.get("action")
+    if action not in ACTIONS:
+        return {"ok": False, "action": str(action)[:32], "message": "unknown action"}
+    try:
+        resp = HANDLERS[action](cfg, req)
+    except HelperError as e:
+        resp = {"ok": False, "message": str(e)}
+    except Exception as e:  # never leak a traceback to the client; log it
+        log(syslog.LOG_ERR, "%s: internal error: %s: %s" % (action, type(e).__name__, e))
+        resp = {"ok": False, "message": "internal helper error (see syslog)"}
+    resp["action"] = action
+    return resp
+
+
+def main(argv):
+    config_path = DEFAULT_CONFIG
+    if len(argv) == 3 and argv[1] == "--config":
+        config_path = argv[2]
+    elif len(argv) != 1:
+        sys.stderr.write("usage: radius-admin-helper [--config PATH]\n")
+        return 2
+    os.umask(0o077)
+    signal.signal(signal.SIGPIPE, signal.SIG_DFL)
+    syslog.openlog("radius-admin-helper", syslog.LOG_PID, syslog.LOG_AUTHPRIV)
+    try:
+        sock = socket.socket(fileno=os.dup(0))
+    except OSError:
+        sys.stderr.write("stdin must be a connected AF_UNIX socket (systemd Accept=yes)\n")
+        return 2
+    action = "?"
+    try:
+        try:
+            cfg = load_config(config_path)
+            syslog.openlog("radius-admin-helper", syslog.LOG_PID, cfg["facility"])
+        except (HelperError, configparser.Error) as e:
+            log(syslog.LOG_ERR, "configuration error: %s" % e)
+            resp = {"ok": False, "action": "?", "message": "helper misconfigured (see syslog)"}
+        else:
+            pid, uid = peer_uid(sock)
+            if uid is None or uid not in cfg["allowed_uids"]:
+                log(syslog.LOG_WARNING, "refused connection from uid=%s pid=%s" % (uid, pid))
+                resp = {"ok": False, "action": "?", "message": "peer not authorized"}
+            else:
+                try:
+                    req = read_request(sock)
+                    action = str(req.get("action"))[:32]
+                    log(syslog.LOG_INFO, "request action=%s peer_uid=%s peer_pid=%s%s" % (
+                        action, uid, pid,
+                        (" backup_id=%s" % req["backup_id"]) if isinstance(
+                            req.get("backup_id"), str) and BACKUP_ID_RE.match(req["backup_id"])
+                        else ""))
+                    resp = handle(cfg, req)
+                except (HelperError, OSError) as e:
+                    resp = {"ok": False, "action": action, "message": str(e)}
+        level = syslog.LOG_INFO if resp.get("ok") else syslog.LOG_WARNING
+        details = " ".join("%s=%s" % (k, resp[k]) for k in
+                           ("backup_id", "restored", "rolled_back", "policy_sha256",
+                            "clients_sha256") if resp.get(k) is not None)
+        log(level, "result action=%s ok=%s %s message=%s" % (
+            resp.get("action"), resp.get("ok"), details, resp.get("message", "")))
+        data = (json.dumps(resp, separators=(",", ":")) + "\n").encode("utf-8")
+        try:
+            sock.settimeout(15)
+            sock.sendall(data)
+            sock.shutdown(socket.SHUT_WR)
+        except OSError:
+            pass
+    finally:
+        sock.close()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

@@ -1,0 +1,61 @@
+# One instance per connection (Accept=yes): stdin/stdout = the accepted connection.
+# Needs root: writes /etc/freeradius/{policy.d/radius-admin,radius-admin-clients.conf},
+# runs `runuser -u freerad -- radiusd -XC`, `systemctl restart <freeradius unit>`,
+# `ss -lunp`. Everything else is restricted.
+[Unit]
+Description=radius-admin privileged helper (connection %i)
+Documentation=file:/opt/radius-admin/docs/SECURITY.md
+CollectMode=inactive-or-failed
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 -I /usr/local/libexec/radius-admin/radius-admin-helper
+StandardInput=socket
+StandardOutput=socket
+StandardError=journal
+SyslogIdentifier=radius-admin-helper
+# No explicit User= line: the service runs as root by default. An explicit User=root
+# makes systemd treat the service as having switched users, and together with
+# NoNewPrivileges=yes radiusd -XC can then no longer drop from root to freerad
+# ("Failed switching to uid freerad"). Verified on the target server with
+# deploy/diag-helper-sandbox.sh: removing only User=root (keeping NoNewPrivileges and
+# every other setting) makes the check pass.
+UMask=0077
+TimeoutStartSec=150
+# The helper is already root: runuser/systemctl need no setuid, so NNP is safe.
+# systemctl talks to PID 1 over /run/systemd/private (AF_UNIX).
+NoNewPrivileges=yes
+ProtectSystem=strict
+# Writes: the two generated files (atomic rename needs the directories) + its work dir.
+ReadWritePaths=/etc/freeradius /var/lib/radius-admin-helper
+ReadOnlyPaths=/var/lib/radius-admin/staging
+ProtectHome=yes
+# radiusd -XC as freerad must be able to read the validation copy in
+# /var/lib/radius-admin-helper/validate; it does not use /tmp.
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+# AF_NETLINK: ss (sock_diag) and PAM audit in runuser. AF_INET/AF_INET6: inherited by
+# `radiusd -XC`, which may resolve hostnames in its config (LDAP server, home servers).
+RestrictAddressFamilies=AF_UNIX AF_NETLINK AF_INET AF_INET6
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+# MemoryDenyWriteExecute is deliberately NOT set: radiusd -XC runs as a child of this
+# unit and dlopen()s ~30 modules from the custom build; W^X failures there would show
+# up as confusing validation errors. (The web app unit does set it.)
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+# CAP_SETUID/SETGID/AUDIT_WRITE: runuser; CHOWN/FOWNER: install root:freerad 0640;
+# DAC_OVERRIDE/DAC_READ_SEARCH: read freerad-owned raddb (0640/0750) when copying;
+# no CAP_SYS_PTRACE, so `ss -p` may not name the owning process; the helper then
+# accepts any UDP :1812 listener after a fresh restart of the unit.
+CapabilityBoundingSet=CAP_SETUID CAP_SETGID CAP_AUDIT_WRITE CAP_CHOWN CAP_FOWNER CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH
+TasksMax=32

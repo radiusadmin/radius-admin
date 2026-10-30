@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block title %}UI admins{% endblock %}
+{% block content %}
+<header class="page-head"><div><h1>Console accounts</h1>
+<p class="lede">Viewer: read only. Operator: edit clients, rules, switch admins, MAB and apply. Admin: everything, including settings, custom policy, rollback, secrets and these accounts.</p></div>
+<a class="btn btn-primary" href="{{ url_for('admins.new') }}">Add account</a></header>
+<section class="panel flush">
+<div class="table-wrap"><table>
+  <thead><tr><th scope="col">Account</th><th scope="col">Role</th><th scope="col">Two-factor</th><th scope="col">Status</th><th scope="col">Last sign-in</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead>
+  <tbody>{% for u in users %}
+  <tr class="{{ '' if u.enabled else 'is-off' }}">
+    <td><span class="mono">{{ u.username }}</span>{% if u.display_name %}<br><span class="small muted">{{ u.display_name }}</span>{% endif %}</td>
+    {% if u.auth_source == 'saml' %}
+    <td>{{ u.role }}<br><span class="small muted">from group mappings</span></td>
+    <td><span class="tag tag-ok" title="Password and second factor are managed by the identity provider">Single sign-on</span></td>
+    {% else %}
+    <td><form method="post" action="{{ url_for('admins.set_role', uid=u.id) }}" class="inline-form compact" data-autosubmit>
+      {{ m.csrf() }}<input type="hidden" name="return_to" value="{{ url_for('admins.index') }}">
+      <label for="role-{{ u.id }}" class="sr-only">Role for {{ u.username }}</label>
+      <select id="role-{{ u.id }}" name="role">{% for r in roles %}<option {{ 'selected' if u.role == r else '' }}>{{ r }}</option>{% endfor %}</select>
+      <button type="submit" class="btn btn-quiet btn-small js-hide">Set</button></form></td>
+    <td>{{ {'totp': 'Authenticator', 'cert': 'Certificate'}.get(u.mfa_method, '') or '' }}{% if not u.mfa_method %}<span class="tag tag-muted">Not enrolled</span>{% endif %}</td>
+    {% endif %}
+    <td>{{ m.onoff(u.enabled) }}{% if u.locked %} <span class="tag tag-danger">Locked</span>{% endif %}{% if u.must_change_password %} <span class="tag tag-warn">Temp password</span>{% endif %}</td>
+    <td class="nowrap small">{{ u.last_login_at|dtc }}{% if u.last_login_ip %}<br><span class="mono">{{ u.last_login_ip }}</span>{% endif %}</td>
+    <td class="row-actions">
+      <details class="row-menu"><summary class="btn btn-quiet btn-small">Manage</summary><div class="menu">
+      {% if u.locked %}{{ m.post_button(url_for('admins.unlock', uid=u.id), 'Unlock', 'linklike', fields={'return_to': url_for('admins.index')}) }}{% endif %}
+      {% if u.id != current_user.id and u.auth_source != 'saml' %}{{ m.post_button(url_for('admins.reset_password', uid=u.id), 'Issue temporary password', 'linklike', confirm='Issue a new temporary password for ' ~ u.username ~ '? Their sessions end.', fields={'return_to': url_for('admins.index')}) }}{% endif %}
+      {% if u.mfa_method and u.auth_source != 'saml' %}{{ m.post_button(url_for('admins.reset_mfa', uid=u.id), 'Reset two-factor', 'linklike', confirm='Reset two-factor for ' ~ u.username ~ '? They must enrol again.', fields={'return_to': url_for('admins.index')}) }}{% endif %}
+      {% if u.id != current_user.id %}
+        {{ m.post_button(url_for('admins.set_enabled', uid=u.id), 'Disable' if u.enabled else 'Enable', 'linklike', fields={'enabled': '0' if u.enabled else '1', 'return_to': url_for('admins.index')}) }}
+        {{ m.post_button(url_for('admins.delete', uid=u.id), 'Delete account', 'linklike danger', confirm='Delete ' ~ u.username ~ '?', fields={'return_to': url_for('admins.index')}) }}
+      {% endif %}
+      </div></details>
+    </td>
+  </tr>{% endfor %}</tbody>
+</table></div>
+</section>
+{% endblock %}

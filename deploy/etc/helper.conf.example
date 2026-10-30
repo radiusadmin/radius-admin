@@ -1,0 +1,33 @@
+# /etc/radius-admin/helper.conf  (root:root 0644)  -- SPEC section 6
+# The ONLY source of settings for /usr/local/libexec/radius-admin/radius-admin-helper.
+# The helper refuses to run if this file is not a root-owned regular file that is
+# not group/world writable. install.sh fills in service/radiusd from detection.
+[helper]
+# systemd unit of FreeRADIUS (detected: freeradius.service or radiusd.service)
+service = freeradius
+# radiusd binary of the custom 3.2.10 build
+radiusd = /usr/sbin/radiusd
+raddb = /etc/freeradius
+freerad_user = freerad
+# freerad_group =               ; default: primary group of freerad_user
+# config_name = radiusd         ; radiusd -n NAME -> <raddb>/NAME.conf
+
+staging_dir = /var/lib/radius-admin/staging
+staging_owner = radius-admin
+work_dir = /var/lib/radius-admin-helper
+# peers (SO_PEERCRED) allowed to talk to the helper
+allowed_users = radius-admin,root
+
+systemctl = /usr/bin/systemctl
+runuser = /usr/sbin/runuser
+ss = /usr/bin/ss
+radius_port = 1812
+
+# timeouts (seconds). Worst-case apply = lock + validate + 2 x (restart + wait)
+# = 10 + 30 + 2 x (20 + 15) = 110 s; must stay below the app's helper_timeout (120).
+lock_timeout = 10
+validate_timeout = 30
+restart_timeout = 20
+restart_wait = 15
+keep_backups = 50
+syslog_facility = authpriv

@@ -1,0 +1,4 @@
+<nav class="tabs" aria-label="MAB views">
+  <a href="{{ url_for('mab.index') }}" {% if request.endpoint == 'mab.index' %}aria-current="page"{% endif %}>Registered devices</a>
+  <a href="{{ url_for('mab.pending') }}" {% if request.endpoint == 'mab.pending' %}aria-current="page"{% endif %}>Unknown devices{% if counts and counts.pending %} <span class="count">{{ counts.pending }}</span>{% endif %}</a>
+</nav>

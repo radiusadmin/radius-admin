@@ -1,0 +1,14 @@
+{% extends "auth/_frame.html" if forced else "base.html" %}
+{% block title %}Two-factor setup{% endblock %}
+{% block gate %}
+<h1>Set up two-factor sign-in</h1>
+<p class="muted">Every account needs a second factor. Choose one; you can switch later from Account.</p>
+{% include "auth/_enroll_body.html" %}
+{% endblock %}
+{% block content %}
+{% if forced %}{{ super() }}{% else %}
+<header class="page-head"><h1>Two-factor method</h1>
+<p class="lede">Current method: <strong>{{ {'totp': 'Authenticator app', 'cert': 'Client certificate'}.get(current_user.mfa_method, 'none') }}</strong>. Setting up a new one replaces it.</p></header>
+<section class="panel narrow">{% include "auth/_enroll_body.html" %}</section>
+{% endif %}
+{% endblock %}

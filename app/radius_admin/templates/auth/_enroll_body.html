@@ -1,0 +1,37 @@
+{% import "_macros.html" as m %}
+{% if error %}<p class="flash flash-error" role="alert">{{ error }}</p>{% endif %}
+<div class="tabs" role="tablist" aria-label="Method">
+  <a role="tab" href="?method=totp" aria-selected="{{ 'true' if method != 'cert' else 'false' }}">Authenticator app</a>
+  <a role="tab" href="?method=cert" aria-selected="{{ 'true' if method == 'cert' else 'false' }}">Client certificate</a>
+</div>
+{% if method != 'cert' %}
+<form method="post" action="{{ action }}" class="stack">
+  {{ m.csrf() }}
+  <input type="hidden" name="method" value="totp">
+  <input type="hidden" name="candidate" value="{{ candidate }}">
+  <ol class="steps">
+    <li>Scan this code with an approved authenticator app{% if not qr %} (QR rendering unavailable — enter the key manually){% endif %}.
+      {% if qr %}<img class="qr" src="{{ qr }}" alt="QR code for the authenticator key" width="200" height="200">{% endif %}
+      <p class="small">Or enter this key manually: <span class="mono key">{{ secret_b32 }}</span><br>Type: time-based, SHA-1, 6 digits, 30 seconds.</p>
+    </li>
+    <li><label for="code">Enter the 6-digit code it shows</label>
+      <input id="code" name="code" class="code-input" inputmode="numeric" pattern="[0-9 ]{6,7}" maxlength="7" autocomplete="one-time-code" required></li>
+  </ol>
+  <button type="submit" class="btn btn-primary btn-block">Turn on authenticator</button>
+</form>
+{% else %}
+<form method="post" action="{{ action }}" class="stack">
+  {{ m.csrf() }}
+  <input type="hidden" name="method" value="cert">
+  {% if cert %}
+  <p>Bind this certificate to your account. Future sign-ins will require it.</p>
+  <dl class="kv">
+    <dt>Subject</dt><dd class="mono">{{ cert[1] or '—' }}</dd>
+    <dt>SHA-256</dt><dd class="mono wrap">{{ cert[0] }}</dd>
+  </dl>
+  <button type="submit" class="btn btn-primary btn-block">Use this certificate</button>
+  {% else %}
+  <p class="flash flash-error">No verified client certificate was presented. Make sure your certificate is installed in this browser (or its certificate store), reload this page and choose your certificate when the browser asks. Only certificates issued by the trusted internal CA are accepted.</p>
+  {% endif %}
+</form>
+{% endif %}

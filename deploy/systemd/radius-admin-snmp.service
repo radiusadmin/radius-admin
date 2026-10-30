@@ -1,0 +1,63 @@
+# radius-admin monitor: read-only SNMPv3 switch polling (SPEC section 12), alerts and
+# session disconnect / re-authenticate (CoA, SPEC section 13).
+# TEMPLATE: install.sh replaces @ADMIN_NET@ with the management subnet.
+# This is the ONLY radius-admin component allowed onto the network, and only to
+# the management subnet (switches: SNMP UDP 161, CoA UDP 1700). It uses Net-SNMP
+# (system OpenSSL) for SNMPv3 SHA-2/AES-128 and radclient from the FreeRADIUS build
+# for CoA; credentials come from the database, decrypted with the app data key.
+# Email alerts to a relay outside the management subnet need a drop-in:
+#   systemctl edit radius-admin-snmp  ->  [Service] IPAddressAllow=<relay address>
+[Unit]
+Description=radius-admin monitor (switch SNMP, alerts, session actions)
+Documentation=file:/opt/radius-admin/docs/RUNBOOK.md
+After=network-online.target postgresql.service
+Wants=network-online.target postgresql.service
+
+[Service]
+Type=simple
+User=radius-admin
+Group=radius-admin
+Environment=RADIUS_ADMIN_CONFIG=/etc/radius-admin/radius-admin.conf
+Environment=PYTHONPATH=/opt/radius-admin/app
+Environment=PYTHONDONTWRITEBYTECODE=1
+WorkingDirectory=/var/lib/radius-admin
+ExecStart=/usr/bin/python3 -s -m radius_admin.snmp_poller
+Restart=on-failure
+RestartSec=10
+UMask=0077
+
+# --- sandboxing ---
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+IPAddressDeny=any
+IPAddressAllow=@ADMIN_NET@
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RemoveIPC=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+SystemCallErrorNumber=EPERM
+DevicePolicy=closed
+InaccessiblePaths=-/etc/freeradius -/var/lib/radius-admin-helper -/etc/radius-admin/helper.conf -/var/lib/radius-admin/staging
+LimitNOFILE=1024
+TasksMax=64
+
+[Install]
+WantedBy=multi-user.target

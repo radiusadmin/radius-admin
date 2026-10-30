@@ -1,0 +1,78 @@
+# radius-admin web application (gunicorn, unix socket only). SPEC sections 2 and 9.
+[Unit]
+Description=radius-admin web UI for FreeRADIUS (gunicorn)
+Documentation=file:/opt/radius-admin/docs/RUNBOOK.md
+After=network.target postgresql.service radius-admin-helper.socket
+Wants=postgresql.service radius-admin-helper.socket
+
+[Service]
+Type=notify
+NotifyAccess=main
+User=radius-admin
+# Primary group radius-admin-web: systemd creates /run/radius-admin as
+# radius-admin:radius-admin-web 0750, and the socket gunicorn creates there (euid
+# radius-admin, egid radius-admin-web, --umask 0007) is srwxrwx---
+# radius-admin:radius-admin-web, so only www-data (member of radius-admin-web) can
+# connect. Group radius-admin (config file, helper socket) comes in as a supplementary
+# group, set by systemd before exec. No chgrp/setgid tricks, no CAP_SETGID needed.
+Group=radius-admin-web
+SupplementaryGroups=radius-admin
+Environment=RADIUS_ADMIN_CONFIG=/etc/radius-admin/radius-admin.conf
+Environment=PYTHONPATH=/opt/radius-admin/app
+Environment=PYTHONDONTWRITEBYTECODE=1
+WorkingDirectory=/var/lib/radius-admin
+RuntimeDirectory=radius-admin
+RuntimeDirectoryMode=0750
+ExecStart=/usr/bin/gunicorn --bind unix:/run/radius-admin/app.sock --umask 0007 \
+    --workers 3 --timeout 180 --graceful-timeout 30 \
+    --max-requests 2000 --max-requests-jitter 200 \
+    --access-logfile - --error-logfile - --no-sendfile \
+    radius_admin.wsgi:app
+ExecReload=/bin/kill -s HUP $MAINPID
+KillMode=mixed
+Restart=on-failure
+RestartSec=3
+UMask=0077
+
+# --- sandboxing ---
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/radius-admin/staging
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+# (no ProcSubset=pid: the app and OpenSSL must read /proc/sys/crypto/fips_enabled)
+ProtectProc=invisible
+RestrictAddressFamilies=AF_UNIX
+IPAddressDeny=any
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RemoveIPC=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+# gunicorn workers always call setuid() with their *current* uid (gunicorn 20.1
+# util.set_owner_process); @privileged blocks it and every worker dies with EPERM.
+# Re-allow only setuid: with CapabilityBoundingSet= empty and NoNewPrivileges=yes it
+# can only 'change' to the uid the process already has. (setgroups stays blocked;
+# gunicorn ignores EPERM from initgroups.)
+SystemCallFilter=setuid setuid32
+SystemCallErrorNumber=EPERM
+DevicePolicy=closed
+InaccessiblePaths=-/etc/freeradius -/var/lib/radius-admin-helper -/etc/radius-admin/helper.conf
+LimitNOFILE=4096
+TasksMax=64
+
+[Install]
+WantedBy=multi-user.target

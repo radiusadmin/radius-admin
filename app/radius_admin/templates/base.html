@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en"{% if theme in ('light', 'dark') %} data-theme="{{ theme }}"{% endif %}>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="same-origin">
+<title>{% block title %}{% endblock %} · RADIUS Admin</title>
+<link rel="stylesheet" href="{{ asset_url('app.css') }}">
+<script src="{{ asset_url('app.js') }}" defer></script>
+{% block head %}{% endblock %}
+</head>
+<body class="{% block body_class %}{% if current_user %}app{% else %}bare{% endif %}{% endblock %}">
+<a class="skip" href="#main">Skip to content</a>
+{% if current_user %}
+<header class="topbar">
+  <button class="nav-toggle" type="button" aria-controls="sidenav" aria-expanded="false" data-nav-toggle>
+    <span class="sr-only">Menu</span><span class="burger" aria-hidden="true"></span>
+  </button>
+  <a class="brand" href="{{ url_for('dashboard.index') }}">
+    <span class="brand-mark" aria-hidden="true"></span>RADIUS Admin
+  </a>
+  <span class="host">{{ server_name }}</span>
+  {% if fips_mode and not fips.ok %}<span class="tag tag-danger" title="FIPS mode is required, but the kernel or OpenSSL FIPS mode is off">FIPS not active</span>{% endif %}
+  <details class="account-menu">
+    <summary><span class="avatar" aria-hidden="true">{{ current_user.username[:1]|upper }}</span>
+      <span class="who">{{ current_user.display_name or current_user.username }}<small>{{ current_user.role }}</small></span></summary>
+    <div class="menu">
+      <a href="{{ url_for('account.index') }}">Account and sessions</a>
+      {% if current_user.auth_source != 'saml' %}
+      <a href="{{ url_for('account.password') }}">Change password</a>
+      <a href="{{ url_for('account.mfa') }}">Two-factor method</a>
+      {% endif %}
+      <form method="post" action="{{ url_for('account.theme') }}" class="theme-switch" aria-label="Colour theme">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="return_to" value="{{ request.full_path if request.query_string else request.path }}">
+        <span class="theme-label" id="theme-label">Theme</span>
+        <span class="seg" role="group" aria-labelledby="theme-label">
+        {% for value, label in (('system', 'System'), ('light', 'Light'), ('dark', 'Dark')) %}
+          <button type="submit" name="theme" value="{{ value }}" aria-pressed="{{ 'true' if theme == value else 'false' }}">{{ label }}</button>
+        {% endfor %}
+        </span>
+      </form>
+      <form method="post" action="{{ url_for('auth.logout') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="linklike">Sign out</button>
+      </form>
+    </div>
+  </details>
+</header>
+<nav id="sidenav" class="sidenav" aria-label="Main">
+  {% set ep = request.endpoint or '' %}
+  <ul>
+    <li><a href="{{ url_for('dashboard.index') }}" {% if ep.startswith('dashboard.') %}aria-current="page"{% endif %}>Dashboard</a></li>
+  </ul>
+  <p class="nav-group">Network access</p>
+  <ul>
+    <li><a href="{{ url_for('clients.index') }}" {% if ep.startswith('clients.') %}aria-current="page"{% endif %}>RADIUS clients</a></li>
+    <li><a href="{{ url_for('rules.index') }}" {% if ep.startswith('rules.') %}aria-current="page"{% endif %}>Access rules</a></li>
+    <li><a href="{{ url_for('mab.index') }}" {% if ep.startswith('mab.') %}aria-current="page"{% endif %}>MAB devices{% if nav_counts and nav_counts.unknown_mab %}<span class="badge" title="Unknown devices waiting for approval">{{ nav_counts.unknown_mab }}<span class="sr-only"> unknown devices</span></span>{% endif %}</a></li>
+    <li><a href="{{ url_for('switch_admins.index') }}" {% if ep.startswith('switch_admins.') %}aria-current="page"{% endif %}>Switch admins</a></li>
+    {% if has_role('admin') %}
+    <li><a href="{{ url_for('settings.custom_policy') }}" {% if ep in ('settings.custom_policy', 'settings.policy_preview') %}aria-current="page"{% endif %}>Custom policy</a></li>
+    {% endif %}
+    <li><a class="nav-apply" href="{{ url_for('apply.index') }}" {% if ep.startswith('apply.') %}aria-current="page"{% endif %}>Apply changes{% if pending and pending.pending %}<span class="dot" aria-label="pending changes"></span>{% endif %}</a></li>
+  </ul>
+  <p class="nav-group">Monitoring</p>
+  <ul>
+    <li><a href="{{ url_for('sessions.index') }}" {% if ep.startswith('sessions.') %}aria-current="page"{% endif %}>Sessions</a></li>
+    <li><a href="{{ url_for('alerts.index') }}" {% if ep.startswith('alerts.') %}aria-current="page"{% endif %}>Alerts{% if nav_counts and nav_counts.alerts %}<span class="badge badge-danger" title="Open alerts">{{ nav_counts.alerts }}<span class="sr-only"> open alerts</span></span>{% endif %}</a></li>
+    {% if has_role('admin') %}
+    <li><a href="{{ url_for('snmp.index') }}" {% if ep.startswith('snmp.') %}aria-current="page"{% endif %}>Switch monitoring</a></li>
+    {% endif %}
+  </ul>
+  <p class="nav-group">Records</p>
+  <ul>
+    <li><a href="{{ url_for('logs.auth_log') }}" {% if ep.startswith('logs.auth') %}aria-current="page"{% endif %}>Auth log</a></li>
+    <li><a href="{{ url_for('logs.audit_log') }}" {% if ep.startswith('logs.audit') %}aria-current="page"{% endif %}>Audit log</a></li>
+    <li><a href="{{ url_for('reports.index') }}" {% if ep.startswith('reports.') %}aria-current="page"{% endif %}>Reports</a></li>
+  </ul>
+  {% if has_role('admin') %}
+  <p class="nav-group">Administration</p>
+  <ul>
+    <li><a href="{{ url_for('settings.index') }}" {% if ep == 'settings.index' %}aria-current="page"{% endif %}>Settings</a></li>
+    <li><a href="{{ url_for('sso.settings') }}" {% if ep.startswith('sso.') %}aria-current="page"{% endif %}>Single sign-on</a></li>
+    <li><a href="{{ url_for('admins.index') }}" {% if ep.startswith('admins.') %}aria-current="page"{% endif %}>UI admins</a></li>
+    <li><a href="{{ url_for('setup.index') }}" {% if ep.startswith('setup.') %}aria-current="page"{% endif %}>Setup checklist</a></li>
+  </ul>
+  {% endif %}
+</nav>
+{% if pending and pending.pending and not (request.endpoint or '').startswith('apply.') %}
+<div class="pending-strip" role="status">
+  <p><strong>Pending changes.</strong>
+  {% if pending.error %}The configuration cannot be rendered: {{ pending.error }}
+  {% elif pending.never_applied %}No configuration has been applied from this console yet.
+  {% elif pending.format_upgrade %}This release updates the FreeRADIUS policy file (reject reasons, MAB expiry and approval queue); apply once to install it.
+  {% else %}{% if pending.policy %}Custom policy{% endif %}{% if pending.policy and pending.clients %} and {% endif %}{% if pending.clients %}RADIUS clients{% endif %} differ from what FreeRADIUS is running.{% endif %}</p>
+  <a class="btn btn-staged" href="{{ url_for('apply.index') }}">Review and apply</a>
+</div>
+{% endif %}
+{% endif %}
+<main id="main" class="main" tabindex="-1">
+  {% with msgs = get_flashed_messages(with_categories=true) %}
+  {% if msgs %}
+  <div class="flashes">
+    {% for cat, m in msgs %}<p class="flash flash-{{ cat }}" role="{{ 'alert' if cat == 'error' else 'status' }}">{{ m }}</p>{% endfor %}
+  </div>
+  {% endif %}
+  {% endwith %}
+  {% block content %}{% endblock %}
+</main>
+</body>
+</html>

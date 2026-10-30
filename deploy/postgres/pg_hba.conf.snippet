@@ -1,0 +1,10 @@
+# BEGIN radius-admin (managed by deploy/install.sh; must precede generic "local" lines)
+# Local peer authentication only; OS users are mapped to roles via pg_ident map radiusmap.
+local   radius          radius_fr                               peer map=radiusmap
+local   radius          radius_admin                            peer map=radiusmap
+# Nobody else may reach database radius over the socket except the postgres superuser.
+local   radius          postgres                                peer
+local   radius          all                                     reject
+host    radius          all             all                     reject
+hostssl radius          all             all                     reject
+# END radius-admin

@@ -1,0 +1,137 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block title %}{{ 'Add client' if is_new else 'Edit client' }}{% endblock %}
+{% block content %}
+<header class="page-head"><div><h1>{{ 'Add RADIUS client' if is_new else 'Edit ' ~ c.name }}</h1></div></header>
+{{ m.apply_note() }}
+<section class="panel narrow">
+{% if not is_new and c.key_status and c.key_status != 'ok' %}
+<p class="flash flash-error" role="status"><strong>{{ key_labels[c.key_status] }}.</strong> FreeRADIUS needs the plaintext shared secret. This client stays disabled until you enter or generate a plaintext key below (then configure the same key on the device).</p>
+{% endif %}
+{% if c.key_scope == 'global' %}
+<p class="flash flash-info">This switch uses its <strong>global</strong> radius-server key. Rotating the key on the switch changes it for every RADIUS server configured there.</p>
+{% endif %}
+<form method="post" class="stack">
+  {{ m.csrf() }}
+  <label for="name">Name</label>
+  <input id="name" name="name" value="{{ c.name or '' }}" required maxlength="63" pattern="[A-Za-z0-9._\-]{1,63}" class="mono" aria-describedby="name-hint"{{ m.described(errors, 'name', True) }}>
+  <p id="name-hint" class="small muted">Letters, digits, dot, underscore, hyphen. Example: sw-192-0-2-26</p>
+  {{ m.field_error(errors, 'name') }}
+  <label for="ipaddr">IP address or network</label>
+  <input id="ipaddr" name="ipaddr" value="{{ c.ipaddr or '' }}" required maxlength="64" class="mono" placeholder="192.0.2.26"{{ m.described(errors, 'ipaddr') }}>
+  {{ m.field_error(errors, 'ipaddr') }}
+  {% set tr = c.transport or 'udp' %}
+  <fieldset>
+    <legend>Transport</legend>
+    <label class="check"><input type="radio" name="transport" value="udp" data-reveals="udp-box" {{ 'checked' if tr == 'udp' else '' }}> RADIUS over UDP with a shared secret (switches and most devices)</label>
+    <label class="check"><input type="radio" name="transport" value="radsec" data-reveals="radsec-box" {{ 'checked' if tr == 'radsec' else '' }}> RadSec: RADIUS over TLS with a device certificate</label>
+    {{ m.field_error(errors, 'transport') }}
+  </fieldset>
+  <div id="radsec-box" class="reveal-box">
+    <label for="radsec_peer_name">Expected certificate name</label>
+    <input id="radsec_peer_name" name="radsec_peer_name" value="{{ c.radsec_peer_name or '' }}" maxlength="253" class="mono" placeholder="ap1.example.net" aria-describedby="radsec_peer_name-hint"{{ m.described(errors, 'radsec_peer_name', True) }}>
+    <p id="radsec_peer_name-hint" class="small muted">The device must connect from the address above and present a certificate issued by the site CA (the CA of the 802.1X certificates). Enter the certificate's common name or DNS name to accept only that certificate; leave it empty to accept any certificate from the CA. No shared secret is needed.</p>
+    {{ m.field_error(errors, 'radsec_peer_name') }}
+    {% if not radsec_enabled %}<p class="flash flash-info">The RadSec listener is off. {% if has_role('admin') %}Turn it on under <a href="{{ url_for('clients.radsec') }}">RadSec listener</a>{% else %}An admin must turn it on{% endif %} before RadSec clients can connect.</p>{% endif %}
+  </div>
+  <div id="udp-box" class="reveal-box">
+  <fieldset>
+    <legend>Shared secret</legend>
+    {% set sm = mode|default('generate' if is_new else 'keep') %}
+    {% if not is_new %}<label class="check"><input type="radio" name="secret_mode" value="keep" {{ 'checked' if sm == 'keep' else '' }}> Keep the current secret</label>{% endif %}
+    <label class="check"><input type="radio" name="secret_mode" value="generate" {{ 'checked' if sm == 'generate' else '' }}> Generate a new 32-character secret</label>
+    <label class="check"><input type="radio" name="secret_mode" value="set" data-reveals="secret-set" {{ 'checked' if sm == 'set' else '' }}> Enter a secret</label>
+    <div id="secret-set" class="reveal-box">
+      <label for="secret">Secret</label>
+      <input id="secret" name="secret" type="password" autocomplete="off" maxlength="128" class="mono" aria-describedby="secret-hint"{{ m.described(errors, 'secret', True) }}>
+      <p id="secret-hint" class="small muted">16–128 printable characters, no spaces, quotes or backslashes.</p>
+    </div>
+    {{ m.field_error(errors, 'secret') }}
+    {% if not g.session.stepup_ok %}
+    <p class="small muted">Setting or generating a secret requires your password and second factor.</p>
+    {% endif %}
+  </fieldset>
+  {% if not g.session.stepup_ok %}
+  <fieldset class="stepup-inline"><legend>Confirm it's you (only needed for a secret change)</legend>
+    {% if errors.stepup %}<p class="field-error" role="alert">{{ errors.stepup }}</p>{% endif %}
+    {% with pfx = 'stepup_', optional = True %}{% include "auth/_stepup_fields.html" %}{% endwith %}
+  </fieldset>
+  {% endif %}
+  <div class="grid-2">
+    <div><label for="nas_type">NAS type</label>
+      <select id="nas_type" name="nas_type">{% for t in nas_types %}<option {{ 'selected' if c.nas_type == t else '' }}>{{ t }}</option>{% endfor %}</select></div>
+    <div><label for="require_ma">Require Message-Authenticator</label>
+      <select id="require_ma" name="require_ma">{% for t in tristate %}<option {{ 'selected' if c.require_ma == t else '' }}>{{ t }}</option>{% endfor %}</select>{{ m.field_error(errors, 'require_ma') }}</div>
+    <div><label for="limit_proxy_state">Limit Proxy-State</label>
+      <select id="limit_proxy_state" name="limit_proxy_state">{% for t in tristate %}<option {{ 'selected' if c.limit_proxy_state == t else '' }}>{{ t }}</option>{% endfor %}</select></div>
+  </div>
+  <p class="small muted">“auto” learns from the first packet (BlastRADIUS mitigation). Use “yes” for clients known to send Message-Authenticator.</p>
+  <div class="grid-2">
+    <div><label for="key_scope">Key scope on the device</label>
+      <select id="key_scope" name="key_scope"><option value="" {{ 'selected' if not c.key_scope else '' }}>none (no key on the device)</option>
+      <option value="server" {{ 'selected' if c.key_scope == 'server' else '' }}>server (per-server key)</option>
+      <option value="global" {{ 'selected' if c.key_scope == 'global' else '' }}>global (radius-server key)</option></select>
+      {{ m.field_error(errors, 'key_scope') }}</div>
+  </div>
+  </div>{# udp-box #}
+  <label for="dot1x_ports">802.1X ports</label>
+  <textarea id="dot1x_ports" name="dot1x_ports" rows="2" maxlength="1000" class="mono" aria-describedby="dot1x_ports-hint"{{ m.described(errors, 'dot1x_ports', True) }}>{{ c.dot1x_ports or '' }}</textarea>
+  <p id="dot1x_ports-hint" class="small muted">Informational, as exported from the switch, for example <span class="mono">gi1/0/1-20,gi1/0/23</span>. Up to 1000 characters.</p>
+  {% if c.dot1x_ports %}<p class="small">Current: {{ m.ports(c.dot1x_ports, 'ports-edit', c.name or '') }}</p>{% endif %}
+  {{ m.field_error(errors, 'dot1x_ports') }}
+  <label for="description">Description</label>
+  <input id="description" name="description" value="{{ c.description or '' }}" maxlength="200">
+  <label class="check"><input type="checkbox" name="is_switch" value="1" {{ 'checked' if c.is_switch else '' }} aria-describedby="is_switch-hint"> This is a switch (include in SNMP monitoring)</label>
+  <p id="is_switch-hint" class="small muted">Only clients marked as switches are polled. Leave unticked for access points, firewalls and other RADIUS clients.</p>
+  <label class="check"><input type="checkbox" name="enabled" value="1" {{ 'checked' if c.enabled else '' }}> Enabled</label>
+  {{ m.field_error(errors, 'enabled') }}
+  <div class="actions"><button type="submit" class="btn btn-primary">{{ 'Add client' if is_new else 'Save client' }}</button>
+  <a class="btn btn-quiet" href="{{ url_for('clients.index') }}">Cancel</a></div>
+</form>
+</section>
+{% if not is_new %}
+<section class="panel">
+  <h2>Switch status (SNMP)</h2>
+  {% if not status %}<p class="muted">Not polled yet.{% if has_role('admin') %} Configure <a href="{{ url_for('snmp.index') }}">switch monitoring</a> or run a test.{% endif %}</p>
+  {% elif not status.reachable %}<p><span class="tag tag-warn">No answer</span> {{ status.error }} <span class="small muted">({{ status.polled_at|dt }})</span></p>
+  {% else %}
+  <dl class="kv">
+    <dt>Name</dt><dd class="mono">{{ status.sys_name or '–' }}</dd>
+    <dt>Model</dt><dd>{{ status.sys_descr or '–' }}</dd>
+    {% if status.uptime_seconds is not none %}{% set days = status.uptime_seconds // 86400 %}<dt>Uptime</dt><dd>{{ days }} day{{ "" if days == 1 else "s" }}</dd>{% endif %}
+    <dt>802.1X ports</dt><dd>{% if status.dot1x_supported %}<span class="mono">{{ status.dot1x_ports or 'none' }}</span>
+      {% if not same_ports(c.dot1x_ports or '', status.dot1x_ports) %} <span class="tag tag-warn">Differs from the recorded list</span>{% endif %}
+      {% else %}<span class="muted">not reported (IEEE 802.1X MIB not available)</span>{% endif %}</dd>
+    <dt>Polled</dt><dd>{{ status.polled_at|dt }}</dd>
+  </dl>
+  {% if status.radius_servers %}
+  <div class="table-wrap"><table>
+    <thead><tr><th scope="col">RADIUS server</th><th scope="col">Requests</th><th scope="col">Accepts</th><th scope="col">Rejects</th><th scope="col">Timeouts</th><th scope="col" title="Replies whose authenticator did not verify – usually a shared-secret mismatch">Bad authenticators</th></tr></thead>
+    <tbody>{% for r in status.radius_servers %}<tr><td class="mono">{{ r.address }}{% if r.port %}:{{ r.port }}{% endif %}</td><td>{{ r.requests }}</td><td>{{ r.accepts }}</td><td>{{ r.rejects }}</td>
+      <td>{{ r.timeouts }}</td><td>{% if r.bad_authenticators %}<span class="tag tag-warn">{{ r.bad_authenticators }}</span>{% else %}{{ r.bad_authenticators }}{% endif %}</td></tr>{% endfor %}</tbody>
+  </table></div>
+  <p class="small muted">Counters are cumulative since the switch last restarted.</p>
+  {% endif %}
+  {% if status.ports %}
+  {% set auth_n = status.ports|selectattr('authorized')|list|length %}
+  <h3>802.1X ports <span class="small muted">{{ auth_n }} of {{ status.ports|length }} authorized · as of {{ status.polled_at|ago }}</span></h3>
+  <div class="table-wrap"><table class="dense port-table">
+    <thead><tr><th scope="col">Port</th><th scope="col">Link</th><th scope="col">802.1X</th><th scope="col">Client</th><th scope="col" class="num">VLAN</th></tr></thead>
+    <tbody>{% for p in status.ports %}
+    <tr class="{{ '' if p.authorized or p.oper == 'up' else 'is-off' }}">
+      <td class="mono">{{ p.name }}</td>
+      <td>{% if p.oper == 'up' %}<span class="tag tag-ok">up</span>{% elif p.oper %}<span class="tag tag-muted">{{ p.oper }}</span>{% else %}—{% endif %}</td>
+      <td>{% if p.authorized %}<span class="tag tag-ok">authorized</span>{% elif p.oper and p.oper != 'up' %}<span class="muted">—</span>{% elif p.authorized is sameas false %}<span class="tag tag-warn">{{ p.state_text or 'unauthorized' }}</span>{% else %}<span class="muted">{{ p.state_text or 'not reported' }}</span>{% endif %}</td>
+      <td class="mono">{% if p.user %}{% if p.user|vendor or (p.user|mac) != p.user %}{{ p.user|mac }}{% if p.user|vendor %}<span class="cell-sub">{{ p.user|vendor }}</span>{% endif %}{% else %}{{ p.user }}{% endif %}{% endif %}</td>
+      <td class="num">{{ p.vlan or '' }}</td>
+    </tr>{% endfor %}</tbody>
+  </table></div>
+  <p class="small"><a href="{{ url_for('sessions.index', switch=c.id) }}">Sessions on this switch</a></p>
+  {% elif status.dot1x_port_count %}
+  <p class="small muted">Per-port 802.1X state appears after the next poll.</p>
+  {% endif %}
+  {% endif %}
+  {% if has_role('operator') %}<div class="actions">{{ m.post_button(url_for('snmp.test'), 'Test SNMP now', 'btn btn-quiet', fields={'client_id': c.id}) }}</div>{% endif %}
+</section>
+{% endif %}
+{% endblock %}

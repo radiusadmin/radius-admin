@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block title %}Audit log{% endblock %}
+{% block content %}
+<header class="page-head"><div><h1>Audit log</h1>
+<p class="lede">Every console sign-in and change. Each record carries a hash of the one before it, so edits or deletions break the chain.</p></div>
+{% if has_role('operator') %}<form method="post" action="{{ url_for('logs.audit_verify') }}" class="inline">{{ m.csrf() }}<button class="btn" type="submit">Verify chain</button></form>{% endif %}
+</header>
+{% if verify %}<p class="flash {{ 'flash-success' if verify.ok else 'flash-error' }}" role="{{ 'status' if verify.ok else 'alert' }}">{% if verify.ok %}Chain intact: {{ verify.message }}.{% else %}Chain broken. {{ verify.message }}. Treat this as a security incident.{% endif %}</p>{% endif %}
+<form class="filters wrap" method="get" role="search">
+  <div><label for="actor">Actor</label><input id="actor" name="actor" value="{{ f.actor }}"></div>
+  <div><label for="action">Action starts with</label><input id="action" name="action" value="{{ f.action }}" placeholder="auth." class="mono"></div>
+  <div><label for="result">Result</label><select id="result" name="result"><option value="">Any</option><option value="ok" {{ 'selected' if f.result == 'ok' else '' }}>Success</option><option value="fail" {{ 'selected' if f.result == 'fail' else '' }}>Failure</option></select></div>
+  <div class="filter-go"><button class="btn" type="submit">Filter</button> <a href="{{ url_for('logs.audit_log') }}" class="btn btn-quiet">Clear</a></div>
+</form>
+<section class="panel flush">
+{% if rows %}
+<div class="table-wrap"><table class="dense">
+  <thead><tr><th scope="col" class="num">#</th><th scope="col">Time</th><th scope="col">Actor</th><th scope="col">Address</th><th scope="col">Action</th><th scope="col">Object</th><th scope="col">Result</th><th scope="col">Detail</th></tr></thead>
+  <tbody>{% for r in rows %}
+  <tr><td class="num mono small">{{ r.id }}</td><td class="nowrap">{{ r.at|dtc }}</td><td>{{ r.actor or '—' }}</td><td class="mono">{{ r.actor_ip or '' }}</td>
+    <td class="mono">{{ r.action }}</td><td class="mono small">{{ r.object_type or '' }}{% if r.object_id %}:{{ r.object_id }}{% endif %}</td>
+    <td>{% if r.success %}<span class="tag tag-ok">OK</span>{% else %}<span class="tag tag-danger">Fail</span>{% endif %}</td>
+    <td class="mono small detail">{{ r.detail_json }}</td></tr>
+  {% endfor %}</tbody>
+</table></div>
+{% else %}<p class="empty">No audit records match these filters.</p>{% endif %}
+</section>
+{{ m.pager(page, more, 'logs.audit_log', {'actor': f.actor, 'action': f.action, 'result': f.result}) }}
+{% endblock %}

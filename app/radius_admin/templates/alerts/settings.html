@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block title %}Alert settings{% endblock %}
+{% block content %}
+<header class="page-head"><h1>Alert settings</h1></header>
+<form method="post" class="stack">
+{{ m.csrf() }}
+<section class="panel narrow">
+  <h2>Checks</h2>
+  <label class="check"><input type="checkbox" name="reject_enabled" value="1" {{ 'checked' if s.reject_enabled }}> Alert on a spike in rejects</label>
+  <div class="grid-2">
+    <div><label for="reject_threshold">Rejects</label>
+      <input id="reject_threshold" name="reject_threshold" value="{{ s.reject_threshold }}" inputmode="numeric"{{ m.described(errors, 'reject_threshold') }}>{{ m.field_error(errors, 'reject_threshold') }}</div>
+    <div><label for="reject_window_minutes">Within (minutes)</label>
+      <input id="reject_window_minutes" name="reject_window_minutes" value="{{ s.reject_window_minutes }}" inputmode="numeric"{{ m.described(errors, 'reject_window_minutes') }}>{{ m.field_error(errors, 'reject_window_minutes') }}</div>
+  </div>
+  <p class="small muted">The alert clears when rejects fall below half the threshold.</p>
+  <label class="check"><input type="checkbox" name="switch_enabled" value="1" {{ 'checked' if s.switch_enabled }}> Alert when a monitored switch stops answering SNMP</label>
+  <label for="switch_failed_polls">After this many failed polls in a row</label>
+  <input id="switch_failed_polls" name="switch_failed_polls" value="{{ s.switch_failed_polls }}" inputmode="numeric" class="select-auto"{{ m.described(errors, 'switch_failed_polls') }}>{{ m.field_error(errors, 'switch_failed_polls') }}
+  <p class="small muted">Needs switch monitoring to be enabled; only clients marked as switches are polled.</p>
+  <label class="check"><input type="checkbox" name="radius_enabled" value="1" {{ 'checked' if s.radius_enabled }}> Alert when FreeRADIUS is down (service stopped or not listening for two checks in a row)</label>
+</section>
+
+<section class="panel narrow">
+  <h2>Delivery</h2>
+  <label class="check"><input type="checkbox" name="syslog_enabled" value="1" {{ 'checked' if s.syslog_enabled }}> Syslog</label>
+  <p class="small muted">Written as <span class="mono">radius-admin: ALERT OPEN|RESOLVED &lt;kind&gt;: …</span> (warning; critical for FreeRADIUS down). Forward the radius-admin log to your SIEM with rsyslog.</p>
+  <label class="check"><input type="checkbox" name="email_enabled" value="1" {{ 'checked' if s.email_enabled }}{{ m.described(errors, 'email_enabled') }}> Email</label>
+  {{ m.field_error(errors, 'email_enabled') }}
+  <div class="grid-2">
+    <div><label for="smtp_host">SMTP relay</label><input id="smtp_host" name="smtp_host" value="{{ s.smtp_host }}" placeholder="smtp.example.net"{{ m.described(errors, 'smtp_host') }}>{{ m.field_error(errors, 'smtp_host') }}</div>
+    <div><label for="smtp_port">Port</label><input id="smtp_port" name="smtp_port" value="{{ s.smtp_port }}" inputmode="numeric"{{ m.described(errors, 'smtp_port') }}>{{ m.field_error(errors, 'smtp_port') }}</div>
+  </div>
+  <label for="smtp_security">Connection security</label>
+  <select id="smtp_security" name="smtp_security"{{ m.described(errors, 'smtp_security') }}>
+    <option value="starttls" {{ 'selected' if s.smtp_security == 'starttls' }}>STARTTLS (port 25 or 587)</option>
+    <option value="tls" {{ 'selected' if s.smtp_security == 'tls' }}>TLS from the start (port 465)</option>
+    <option value="none" {{ 'selected' if s.smtp_security == 'none' }}>None (internal relay without TLS)</option>
+  </select>{{ m.field_error(errors, 'smtp_security') }}
+  <p class="small muted">TLS certificates are checked against the server's trust store (add your internal CA to it). TLS 1.2 or later.</p>
+  <div class="grid-2">
+    <div><label for="smtp_user">Login (optional)</label><input id="smtp_user" name="smtp_user" value="{{ s.smtp_user }}" autocomplete="off"></div>
+    <div><label for="smtp_pass">Password {% if s.pass_set %}<span class="tag tag-ok">set</span>{% endif %}</label><input id="smtp_pass" name="smtp_pass" type="password" autocomplete="new-password"{{ m.described(errors, 'smtp_pass') }}>{{ m.field_error(errors, 'smtp_pass') }}</div>
+  </div>
+  {% if s.pass_set %}<label class="check"><input type="checkbox" name="smtp_pass_clear" value="1"> Remove the stored password</label>{% endif %}
+  <label for="mail_from">From</label><input id="mail_from" name="mail_from" value="{{ s.mail_from }}" placeholder="radius-admin@example.net"{{ m.described(errors, 'mail_from') }}>{{ m.field_error(errors, 'mail_from') }}
+  <label for="mail_to">To (comma separated)</label><input id="mail_to" name="mail_to" value="{{ s.mail_to }}" placeholder="netops@example.net"{{ m.described(errors, 'mail_to') }}>{{ m.field_error(errors, 'mail_to') }}
+  <p class="small muted">The monitoring service may only reach the management subnet. A relay outside it needs one firewall exception on the server (RUNBOOK §6.5).</p>
+  <div class="actions"><button type="submit" class="btn btn-primary">Save alert settings</button>
+  <a class="btn btn-quiet" href="{{ url_for('alerts.index') }}">Cancel</a></div>
+</section>
+</form>
+{% endblock %}

@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block title %}Unknown MAB devices{% endblock %}
+{% block content %}
+<header class="page-head">
+  <div><h1>MAB devices</h1>
+  <p class="lede">Devices that tried MAC authentication and are not registered. They stay rejected until approved. Approving registers the MAC in the VLAN shown; the switch admits it at its next attempt.</p></div>
+</header>
+{% include "mab/_tabs.html" %}
+<div class="filters-row">
+<form class="filters" method="get" role="search">
+  <label for="q" class="sr-only">Search unknown devices</label>
+  <input id="q" name="q" type="search" value="{{ q }}" placeholder="MAC, vendor, switch or port">
+  {% if show_ignored %}<input type="hidden" name="ignored" value="1">{% endif %}
+  <button class="btn btn-quiet" type="submit">Search</button>
+  {% if show_ignored %}<a class="btn btn-quiet" href="{{ url_for('mab.pending') }}">Show queue</a>
+  {% else %}<a class="btn btn-quiet" href="{{ url_for('mab.pending', ignored='1') }}">Show hidden</a>{% endif %}
+</form>
+{% if has_role('operator') %}
+<form class="filters" method="post" action="{{ url_for('mab.default_vlan') }}">
+  {{ m.csrf() }}
+  <label for="default_vlan" class="small">Default VLAN for approvals</label>
+  <input id="default_vlan" name="default_vlan" value="{{ default_vlan }}" inputmode="numeric" maxlength="4" size="5" class="input-vlan">
+  <button class="btn btn-quiet" type="submit">Save</button>
+</form>
+{% endif %}
+</div>
+<section class="panel flush">
+{% if rows %}
+<div class="table-wrap"><table class="pending-table">
+  <thead><tr><th scope="col">MAC address</th><th scope="col">Last seen on</th><th scope="col">First / last seen</th>{% if has_role('operator') %}<th scope="col">Approve into VLAN</th><th scope="col"><span class="sr-only">Other actions</span></th>{% endif %}</tr></thead>
+  <tbody>{% for r in rows %}
+  <tr>
+    <td class="name-cell">{{ m.mac(r.mac) }}</td>
+    <td>{% if r.switch_name %}<a class="ellip switch-link" title="{{ r.switch_name }}" href="{{ url_for('clients.edit', cid=r.client_id) }}">{{ r.switch_name }}</a>{% elif r.nas %}<span class="mono">{{ r.nas }}</span>{% else %}—{% endif %}
+      <span class="cell-sub">{% if r.nas_port_id %}<span class="mono">{{ r.nas_port_id }}</span> · {% endif %}{{ r.attempts }} attempt{{ '' if r.attempts == 1 else 's' }}</span></td>
+    <td class="small first-seen" title="First seen {{ r.first_seen|dt }}">{{ r.first_seen|dtc }}<span class="cell-sub">last seen {{ r.last_seen|ago }}</span></td>
+    {% if has_role('operator') %}
+    <td>{% if not show_ignored %}
+      <form method="post" action="{{ url_for('mab.approve', mac=r.mac) }}" class="approve-form">
+        {{ m.csrf() }}
+        <label class="sr-only" for="v-{{ loop.index }}">VLAN for {{ r.mac }}</label>
+        <input id="v-{{ loop.index }}" name="vlan" value="{{ default_vlan }}" inputmode="numeric" maxlength="4" size="5" class="input-vlan" required>
+        <label class="sr-only" for="e-{{ loop.index }}">Expiry for {{ r.mac }}</label>
+        <select id="e-{{ loop.index }}" name="expires_days" class="select-auto" title="Expiry">
+          {% for k, label in expiry_choices %}<option value="{{ k }}">{{ 'No expiry' if not k else 'Expires in ' ~ label }}</option>{% endfor %}
+        </select>
+        <label class="sr-only" for="d-{{ loop.index }}">Description for {{ r.mac }}</label>
+        <input id="d-{{ loop.index }}" name="description" maxlength="200" placeholder="Description (optional)" class="input-desc">
+        <button class="btn btn-primary btn-small" type="submit">Approve</button>
+      </form>{% else %}<span class="muted small">Hidden</span>{% endif %}</td>
+    <td class="row-actions">
+      {% if show_ignored %}
+      {{ m.post_button(url_for('mab.ignore', mac=r.mac), 'Show again', 'btn btn-quiet btn-small', fields={'on': '0', 'from_ignored': '1'}) }}
+      {% else %}
+      <details class="row-menu"><summary class="btn btn-quiet btn-small" aria-label="More actions for {{ r.mac }}">⋯</summary>
+        <div class="menu">
+          <a href="{{ url_for('mab.new', mac=r.mac) }}">Register with details…</a>
+          <a href="{{ url_for('logs.auth_log', mac=r.mac) }}">Authentication attempts</a>
+          {{ m.post_button(url_for('mab.ignore', mac=r.mac), 'Hide (keep rejecting)', 'linklike', fields={'on': '1'}) }}
+          {{ m.post_button(url_for('mab.dismiss', mac=r.mac), 'Remove from queue', 'linklike danger') }}
+        </div></details>
+      {% endif %}
+    </td>
+    {% endif %}
+  </tr>{% endfor %}</tbody>
+</table></div>
+{% else %}<p class="empty">{% if show_ignored %}No hidden devices.{% elif q %}No unknown devices match “{{ q }}”.{% else %}No unknown devices. MACs that try MAB without being registered appear here.{% endif %}</p>{% endif %}
+</section>
+<p class="small muted">The queue keeps up to 2000 MAC addresses; entries not seen for 30 days are removed automatically. Vendor names come from the IEEE registry installed on the server (package ieee-data).</p>
+{% endblock %}

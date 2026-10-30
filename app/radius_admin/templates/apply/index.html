@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block title %}Apply changes{% endblock %}
+{% block content %}
+<header class="page-head">
+  <div><h1>Apply changes</h1>
+  <p class="lede">RADIUS clients and the custom policy are rendered into two FreeRADIUS files. Access rules, settings, switch admins and MAB devices are read live and never need this page. Review the difference, validate, then apply. Applying restarts FreeRADIUS; on failure the previous files are restored automatically.</p></div>
+</header>
+
+{% if render_error %}
+<p class="flash flash-error" role="alert">The configuration cannot be rendered: {{ render_error }}. Fix the item named above before applying.</p>
+{% else %}
+<section class="apply-bar {{ 'has-changes' if pending.pending else 'in-sync' }}" aria-label="Apply">
+  <div>
+    <p class="apply-state">{% if pending.pending %}Changes pending{% else %}FreeRADIUS matches the database{% endif %}</p>
+    <p class="small muted mono">policy {{ policy_sha[:12] }} · clients {{ clients_sha[:12] }}</p>
+  </div>
+  {% if has_role('operator') %}
+  <div class="apply-actions">
+    <form method="post" action="{{ url_for('apply.validate') }}" class="inline">{{ m.csrf() }}<button class="btn" type="submit">Validate</button></form>
+    <form method="post" action="{{ url_for('apply.apply') }}" class="inline" data-confirm="Apply the configuration and restart FreeRADIUS now?">
+      {{ m.csrf() }}<input type="hidden" name="expected" value="{{ policy_sha }}:{{ clients_sha }}">
+      <input type="hidden" name="return_to" value="{{ url_for('apply.index') }}">
+      <button class="btn btn-primary" type="submit">Apply and restart</button></form>
+  </div>
+  {% endif %}
+</section>
+{% if format_upgrade %}<p class="flash flash-info" role="status"><strong>Policy format updated; apply once.</strong> This release changes the generated policy file: access rules and settings are evaluated live, rejects record their reason and the matching rule, and MAB checks expiry dates and queues unknown devices for approval. The running file still uses the previous format; apply it once (FreeRADIUS restarts briefly). After that, rule, setting and MAB edits never show up here.</p>{% endif %}
+{% if not have_applied %}<p class="flash flash-info">No copy of a previously applied configuration exists yet, so the full files are shown as additions.</p>{% endif %}
+
+{% for name, label, path in [('policy', 'Policy file (custom policy)', '/etc/freeradius/policy.d/radius-admin'), ('clients', 'RADIUS clients', '/etc/freeradius/radius-admin-clients.conf')] %}
+<section class="panel flush">
+  <div class="panel-head"><h2>{{ label }} <span class="small muted mono">{{ path }}</span></h2>
+  <span class="small">{% if diffs[name] %}{{ diffs[name]|selectattr(0, 'equalto', 'add')|list|length }} added, {{ diffs[name]|selectattr(0, 'equalto', 'del')|list|length }} removed{% else %}No changes{% endif %}</span></div>
+  {% if diffs[name] %}<pre class="diff">{% for kind, line in diffs[name] %}<span class="d-{{ kind }}">{{ line }}</span>
+{% endfor %}</pre>{% endif %}
+</section>
+{% endfor %}
+<p class="small muted">Shared secrets are masked in this view.</p>
+{% endif %}
+
+<section class="panel">
+  <div class="panel-head"><h2>History</h2></div>
+  {% if history %}
+  <div class="table-wrap"><table>
+    <thead><tr><th scope="col">Time</th><th scope="col">Action</th><th scope="col">By</th><th scope="col">Result</th><th scope="col">Backup</th><th scope="col">Message</th></tr></thead>
+    <tbody>{% for h in history %}
+      <tr><td class="nowrap">{{ h.at|dtc }}</td><td>{{ h.action }}</td><td>{{ h.actor }}</td>
+      <td>{% if h.success %}<span class="tag tag-ok">OK</span>{% else %}<span class="tag tag-danger">Failed</span>{% endif %}</td>
+      <td class="mono small">{{ h.backup_id or '' }}</td><td class="clip" title="{{ h.message }}">{{ h.message }}</td></tr>
+    {% endfor %}</tbody>
+  </table></div>
+  {% else %}<p class="empty">Nothing validated or applied yet.</p>{% endif %}
+</section>
+
+{% if has_role('admin') %}
+<section class="panel">
+  <div class="panel-head"><h2>Roll back</h2></div>
+  {% if backups %}
+  <p>Restore the files that were live before an earlier apply. FreeRADIUS restarts. Database contents are not changed, so the console will show those differences as pending.</p>
+  <form method="post" action="{{ url_for('apply.rollback') }}" class="inline-form" data-confirm="Restore this backup and restart FreeRADIUS?">
+    {{ m.csrf() }}<input type="hidden" name="return_to" value="{{ url_for('apply.index') }}">
+    <label for="backup_id">Backup</label>
+    <select id="backup_id" name="backup_id" class="mono">{% for b in backups %}<option>{{ b }}</option>{% endfor %}</select>
+    <button type="submit" class="btn btn-danger">Roll back</button>
+  </form>
+  {% else %}<p class="empty">No backups available{% if not status.ok %} (helper: {{ status.message }}){% endif %}.</p>{% endif %}
+</section>
+{% endif %}
+{% endblock %}
