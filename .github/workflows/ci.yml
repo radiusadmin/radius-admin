@@ -21,7 +21,7 @@ jobs:
     name: Shellcheck and site-data scan
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: shellcheck
         run: |
           sudo apt-get install -y -q shellcheck >/dev/null
@@ -51,7 +51,7 @@ jobs:
     name: Root helper and installer tests
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Prepare sandbox
         run: |
           sudo mkdir -p "$REPO" && sudo cp -a "$GITHUB_WORKSPACE/." "$REPO/"
@@ -70,7 +70,7 @@ jobs:
       github.ref_name == 'main' || github.ref_name == 'dev' || github.ref_name == 'testing' ||
       startsWith(github.ref_name, 'ci/')
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Prepare sandbox
         run: |
           sudo mkdir -p "$REPO" && sudo cp -a "$GITHUB_WORKSPACE/." "$REPO/"
