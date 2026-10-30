@@ -1,5 +1,6 @@
 # radius-admin
 
+[![CI](https://github.com/radiusadmin/radius-admin/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/radiusadmin/radius-admin/actions/workflows/ci.yml)
 ![status](https://img.shields.io/badge/status-early%20development-orange)
 ![tests](https://img.shields.io/badge/tests-620%20passing-brightgreen)
 ![FreeRADIUS bench](https://img.shields.io/badge/FreeRADIUS%20bench-124%2F124-brightgreen)
@@ -192,6 +193,12 @@ some of them stop PostgreSQL, truncate tables and add `/etc/hosts` entries.
 ### Test status
 
 Last full run: 2026-10-29, Ubuntu 24.04, FreeRADIUS 3.2.10. **620 checks passing.**
+
+GitHub Actions ([.github/workflows/ci.yml](.github/workflows/ci.yml)) runs shellcheck, the
+site-data scan and the helper and installer tests on every push. The app tests, the FreeRADIUS
+bench and the migration test run on `main`, `dev`, `testing`, `ci/*` branches and pull requests.
+To prepare a sandbox VM the same way: `sudo tools/ci/setup.sh` and
+`sudo tools/ci/build-freeradius.sh`.
 
 | Suite | Result | Command (as root) |
 |---|---|---|
