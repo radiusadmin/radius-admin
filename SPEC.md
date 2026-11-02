@@ -666,7 +666,8 @@ CSV columns (header row required, exact names, any order tolerated by name):
   `/opt/radius-admin-freeradius/share/raddb-dist` (no test certificates: built with `PACKAGE=…`;
   `user = freerad`, `group = freerad`). `postinst` creates the `freerad` user/group and
   `/var/log/freeradius`, and copies raddb-dist to `/etc/freeradius` **only when that does not
-  exist** (root:freerad, no group write, no world access). Upgrades, reinstalls and purge never
+  exist** (root:freerad, no group write, no world access; modes only, no ACLs, so a default ACL on
+  `/opt` cannot make later files world-writable, which radiusd refuses). Upgrades, reinstalls and purge never
   change or delete `/etc/freeradius`. `postinst` never starts, restarts or enables radiusd; `prerm`
   stops and disables it on removal only.
 - **Unit `freeradius.service`**: radiusd starts as root and drops to `freerad` itself (no `User=`),

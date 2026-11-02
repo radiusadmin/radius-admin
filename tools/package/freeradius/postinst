@@ -16,7 +16,11 @@ if [ "$1" = configure ]; then
     fi
     install -d -o freerad -g freerad -m 0750 /var/log/freeradius
     if [ ! -e "$RADDB" ]; then
-        cp -a "$P/share/raddb-dist" "$RADDB"
+        # Copy modes only, never ACLs: a default ACL on /opt (as on some hosting images)
+        # would otherwise make files created later in /etc/freeradius world-writable,
+        # and radiusd refuses to start with world-writable configuration files.
+        cp -dR --preserve=mode,timestamps "$P/share/raddb-dist" "$RADDB"
+        if command -v setfacl >/dev/null 2>&1; then setfacl -R -b "$RADDB"; fi
         chown -R root:freerad "$RADDB"
         chmod -R g-w,o-rwx "$RADDB"
         chmod 0750 "$RADDB"

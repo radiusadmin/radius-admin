@@ -99,6 +99,11 @@ else fail "fr-package install: $out"; fi
     || fail "ownership: $(stat -c '%U:%G %a' /etc/freeradius) $(stat -c '%U:%G' /var/log/freeradius)"
 w=$(find /etc/freeradius "$P" /var/log/freeradius ! -type l -perm /022 2>/dev/null)
 [[ -z $w ]] && pass "installed files are not group- or world-writable" || fail "writable by group/others: $(head -n 5 <<<"$w" | tr '\n' ' ')"
+if command -v getfacl >/dev/null 2>&1; then
+    a=$(getfacl -R -s -p /etc/freeradius 2>/dev/null | sed -n 's/^# file: //p')
+    [[ -z $a ]] && pass "no ACLs on /etc/freeradius (they would override the modes)" \
+        || fail "ACLs on: $(head -n 5 <<<"$a" | tr '\n' ' ')"
+fi
 ! systemctl is-active --quiet freeradius && ! systemctl is-enabled --quiet freeradius \
     && pass "radiusd neither started nor enabled by the package" || fail "service started/enabled on install"
 svc=$(detect_fr_service || true); rd=$(detect_radiusd "$svc" || true); lib=$(detect_fr_libdir "$rd" || true)
