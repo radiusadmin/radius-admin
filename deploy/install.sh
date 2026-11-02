@@ -203,7 +203,9 @@ phase_packages() {
     # python3-pysaml2 + xmlsec1: portal single sign-on (SAML signature checks)
     local pkgs=(postgresql nginx python3-flask python3-psycopg2 gunicorn python3-cryptography
                 python3-qrcode python3-pysaml2 xmlsec1 nftables libpq5 sqlite3 snmp ieee-data ldap-utils)
-    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${pkgs[@]}"
+    # NEEDRESTART_SUSPEND: Ubuntu's needrestart would otherwise restart FreeRADIUS (and other
+    # services) after apt; the installer restarts radiusd only with --restart-freeradius.
+    DEBIAN_FRONTEND=noninteractive NEEDRESTART_SUSPEND=1 apt-get install -y --no-install-recommends "${pkgs[@]}"
     ok "packages installed: ${pkgs[*]}"
     # Debian's nginx package enables a port-80 default site; we never want it on this host.
     if [[ -L /etc/nginx/sites-enabled/default ]]; then
@@ -252,7 +254,7 @@ phase_fr_package() {
             return 0
         fi
     fi
-    DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends "$deb"
+    DEBIAN_FRONTEND=noninteractive NEEDRESTART_SUSPEND=1 apt-get install -y -q --no-install-recommends "$deb"
     ok "installed radius-admin-freeradius $ver${have:+ (was $have)}"
     FR_SVC=""; RADIUSD=""
     detect_fr
