@@ -14,7 +14,7 @@ apt-get install -y -q --no-install-recommends \
     libnl-3-dev libnl-genl-3-dev libnl-route-3-dev \
     postgresql-16 sqlite3 slapd ldap-utils snmp snmpd radsecproxy \
     python3 python3-flask python3-psycopg2 python3-cryptography python3-qrcode python3-pytest \
-    python3-pysaml2 xmlsec1 ieee-data gunicorn shellcheck openssl gnupg curl ca-certificates iproute2 procps
+    python3-pysaml2 xmlsec1 ieee-data tzdata gunicorn shellcheck openssl gnupg curl ca-certificates iproute2 procps
 # the tests start their own slapd / snmpd / radsecproxy
 systemctl disable --now slapd snmpd radsecproxy >/dev/null 2>&1 || true
 # AppArmor (CI runners enforce it): the packaged profiles keep slapd and snmpd out of the

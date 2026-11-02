@@ -6,7 +6,8 @@ from flask import Blueprint, g, redirect, render_template, request, url_for
 from ..crypto import sha256_hex
 from ..flashing import flash
 from ..security import SESSION_LIMITS, role_required, stepup_required
-from ..services import get_settings, render_all, session_limits, set_setting, unlang
+from ..services import (get_settings, render_all, session_limits, set_setting, timezones, unlang,
+                        valid_timezone)
 from . import ev, form_bool
 from .auth import inline_stepup
 
@@ -33,6 +34,9 @@ def index():
         subnet = request.form.get("admin_subnet", "").strip()
         priv15 = form_bool("admin_priv15")
         banner = request.form.get("banner_text", "").strip().replace("\r\n", "\n")
+        zone = request.form.get("display_timezone", s["display_timezone"])
+        if valid_timezone(zone) is None:
+            errors["display_timezone"] = "Choose a time zone from the list."
         try:
             check = getattr(unlang(), "validate_admin_subnet", None)
             net = check(subnet) if check else ipaddress.ip_network(subnet, strict=True)
@@ -55,6 +59,9 @@ def index():
             if banner != s["banner_text"]:
                 set_setting("banner_text", banner)
                 changed["banner_text"] = {"sha256": sha256_hex(banner)}
+            if zone != s["display_timezone"]:
+                set_setting("display_timezone", zone)
+                changed["display_timezone"] = {"from": s["display_timezone"], "to": zone}
             for k, v in limits.items():
                 if v != s["limits"][k]:
                     set_setting(k, str(v))
@@ -62,9 +69,9 @@ def index():
             ev("settings.update", object_type="setting", detail=changed)
             flash("Settings saved." if changed else "No changes.", "success" if changed else "info")
             return redirect(url_for("settings.index"))
-        s = dict(s, admin_subnet=subnet, admin_priv15=priv15, banner_text=banner,
+        s = dict(s, admin_subnet=subnet, admin_priv15=priv15, banner_text=banner, display_timezone=zone,
                  limits=dict(s["limits"], **{k: request.form.get(k, "") for k in SESSION_LIMITS}))
-    return render_template("settings/index.html", s=s, errors=errors), (400 if errors else 200)
+    return render_template("settings/index.html", s=s, errors=errors, zones=timezones()), (400 if errors else 200)
 
 
 @bp.route("/custom-policy", methods=["GET", "POST"])

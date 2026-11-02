@@ -233,8 +233,10 @@ def _fmt_ago(value):
 
 
 def _fmt_dt(value):
+    """Date and time in the display time zone (Settings), labelled with the zone's abbreviation."""
     if not value:
         return "—"
     if isinstance(value, datetime.datetime):
-        return value.astimezone(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        from .services import display_zone
+        return value.astimezone(display_zone()).strftime("%Y-%m-%d %H:%M:%S %Z")
     return str(value)
