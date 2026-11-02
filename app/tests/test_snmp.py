@@ -80,6 +80,20 @@ def test_credential_validation_and_no_argv_secrets():
     assert not os.path.exists(d)   # wiped and removed
 
 
+def test_send_blocked_by_this_server(monkeypatch):
+    """systemd's IPAddressAllow drops packets to addresses outside the switch networks:
+    sendto() fails with EPERM and Net-SNMP blames the engine ID. Say what really happened."""
+    from radius_admin import snmp
+    out = subprocess.CompletedProcess([], 1, "", "snmpget: Unknown engine ID (Operation not permitted)\n")
+    monkeypatch.setattr(snmp.subprocess, "run", lambda *a, **k: out)
+    with snmp.Session("radmon", "SHA-256", "AuthPass-Test-1", "AES", "PrivPass-Test-2") as s:
+        with pytest.raises(snmp.SnmpError) as e:
+            s.run(snmp.SNMPGET, "198.51.100.7", [snmp.OID_SYS_NAME])
+    msg = str(e.value)
+    assert snmp.is_blocked(msg) and "198.51.100.7" in msg and "engine" not in msg
+    assert not snmp.is_blocked("no response (wrong address, credentials or access list?)")
+
+
 # ------------------------------------------------------------- live agent (local snmpd)
 AGENT_ARGS = ["-v3", "-l", "authPriv", "-u", "radmon", "-a", "SHA-256", "-A", "AuthPass-Test-1",
               "-x", "AES", "-X", "PrivPass-Test-2", "-t", "1", "-r", "0", "127.0.0.1", "1.3.6.1.2.1.1.5.0"]
@@ -245,6 +259,18 @@ def test_rbac(app, browser, superconn, logged_in, make_user):
     v = Browser(app, ip="192.0.2.51")
     login(v, superconn, make_user(username="viewer1", role="viewer"))
     assert v.post("/switch-monitoring/test", {"client_id": "1"}, csrf_page="/clients/").status_code == 403
+
+
+def test_test_page_blocked_hint(app, browser, superconn, logged_in):
+    from radius_admin import snmp
+    q(superconn, "INSERT INTO ui.radius_client (name, ipaddr, secret) VALUES ('sw1','198.51.100.7','Plaintext-Key-0001-abcdef')")
+    q(superconn, "INSERT INTO ui.snmp_test (client_id, requested_by, done_at, ok, message) VALUES"
+                 " (1, 't', now(), false, %s), (1, 't', now(), false, 'no response')", (snmp.blocked_message("198.51.100.7"),))
+    logged_in("operator")
+    t = browser.text(browser.get("/switch-monitoring/test/1"))
+    assert "switch_nets" in t and "SNMPv3 user with SHA-2" not in t
+    t = browser.text(browser.get("/switch-monitoring/test/2"))
+    assert "switch_nets" not in t and "SNMPv3 user with SHA-2" in t
 
 
 def test_client_list_shows_status_and_mismatch(app, browser, superconn, logged_in):

@@ -41,12 +41,21 @@ CREATE TABLE IF NOT EXISTS mab_pending (
 );
 CREATE INDEX IF NOT EXISTS mab_pending_seen_idx ON mab_pending (last_seen);
 
+-- MACs that authenticated with a certificate, for the MAB decision and the queue views.
+-- radpostauth keeps Calling-Station-Id as the switch sent it; the key is its hex digits,
+-- upper case. Indexing an expression that cannot fail keeps the post-auth insert safe.
+CREATE INDEX IF NOT EXISTS radpostauth_cert_mac_idx
+	ON radpostauth ((upper(regexp_replace(callingstationid, '[^0-9A-Fa-f]', '', 'g'))))
+	WHERE reply = 'Access-Accept' AND authmethod = 'eap-tls';
+
 -- MAB decision for FreeRADIUS. p_mac is the normalized AA-BB-CC-DD-EE-FF built by the
 -- policy from regex captures (hex digits and dashes only); NAS address and port are
 -- passed hex-encoded (see 40-live-policy.sql for why). Returns:
 --   '<vlan>'    registered, enabled, not expired -> accept into that VLAN
 --   'disabled'  registered but disabled          -> reject
 --   'expired'   registration expired              -> reject
+--   'certificate' not registered, but has authenticated with a certificate (an
+--               EAP-TLS Access-Accept from this MAC) -> reject, never queued
 --   'unknown'   not registered (recorded in mab_pending) -> reject
 --   NULL        malformed input                   -> reject
 CREATE OR REPLACE FUNCTION public.radius_admin_mab_hex(p_mac text, p_nas_hex text, p_port_hex text)
@@ -72,6 +81,18 @@ BEGIN
 			RETURN 'expired';
 		END IF;
 		RETURN d.vlan::text;
+	END IF;
+	-- A device that authenticates with a certificate is not a MAB candidate (the switch
+	-- tried MAB first or fell back to it): never queue it, and drop an earlier queue row.
+	IF EXISTS (SELECT 1 FROM radpostauth
+		   WHERE reply = 'Access-Accept' AND authmethod = 'eap-tls'
+		     AND upper(regexp_replace(callingstationid, '[^0-9A-Fa-f]', '', 'g')) = replace(p_mac, '-', '')) THEN
+		BEGIN
+			DELETE FROM mab_pending WHERE mac = p_mac;
+		EXCEPTION WHEN others THEN
+			NULL;
+		END;
+		RETURN 'certificate';
 	END IF;
 	-- Unknown: remember it for the approval queue (best effort; never blocks the reply).
 	BEGIN
@@ -162,6 +183,16 @@ GRANT EXECUTE ON FUNCTION public.radius_admin_mab_hex(text, text, text) TO radiu
 GRANT EXECUTE ON FUNCTION public.radius_admin_vlan_rule_hex(boolean, text, text) TO radius_fr;
 
 GRANT SELECT, UPDATE, DELETE ON mab_pending TO radius_admin;
+
+-- The unknown-device queue as the console shows it: without MACs that authenticated with a
+-- certificate after they were queued (radius_admin_mab_hex removes those on their next MAB try).
+CREATE OR REPLACE VIEW public.mab_pending_open AS
+	SELECT p.* FROM mab_pending p
+	WHERE NOT EXISTS (SELECT 1 FROM radpostauth a
+			  WHERE a.reply = 'Access-Accept' AND a.authmethod = 'eap-tls'
+			    AND upper(regexp_replace(a.callingstationid, '[^0-9A-Fa-f]', '', 'g')) = replace(p.mac, '-', ''));
+REVOKE ALL ON public.mab_pending_open FROM PUBLIC;
+GRANT SELECT ON public.mab_pending_open TO radius_admin;
 
 -- ---------------------------------------------------------------- per-port 802.1X status
 ALTER TABLE ui.switch_status ADD COLUMN IF NOT EXISTS fail_count integer NOT NULL DEFAULT 0;

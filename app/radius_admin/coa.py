@@ -19,6 +19,8 @@ import subprocess
 import tempfile
 import time
 
+from .snmp import blocked_message
+
 # the bundled radius-admin-freeradius package first, so it wins over a distribution radclient
 SEARCH_DIRS = ("/opt/radius-admin-freeradius/bin", "/usr/local/bin", "/usr/bin", "/usr/local/sbin", "/usr/sbin", "/opt/freeradius/bin",
                "/opt/freeradius/sbin")
@@ -98,10 +100,12 @@ def build_request(action, nas_ip, acct_session_id="", calling_station_id="", nas
     return "\n".join(lines) + "\n"
 
 
-def parse_reply(out):
+def parse_reply(out, host=""):
     """(ok, message) from radclient -x output."""
     m = re.search(r"Received (CoA-ACK|CoA-NAK|Disconnect-ACK|Disconnect-NAK)\b", out)
     if not m:
+        if "sendto failed: Operation not permitted" in out:
+            return False, blocked_message(host)
         if "No reply from server" in out or "no response" in out.lower():
             return False, "No reply from the switch (dynamic authorization not configured, wrong key, or UDP blocked)."
         last = [ln for ln in out.strip().splitlines() if ln.strip()]
@@ -143,7 +147,7 @@ def send(action, host, port, secret, request_text, radclient, dict_dir, timeout=
             return False, "radclient did not finish in time"
         except OSError as e:
             return False, "cannot run radclient: %s" % e
-        return parse_reply((p.stdout or "") + "\n" + (p.stderr or ""))
+        return parse_reply((p.stdout or "") + "\n" + (p.stderr or ""), ip)
     finally:
         try:
             with open(os.path.join(d, "secret"), "r+b") as fh:

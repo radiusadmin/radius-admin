@@ -98,6 +98,58 @@ detect_vlan_ip() {
     done | head -n1
 }
 
+# Networks radius-admin-snmp may reach (SNMP, CoA), from the installed unit: an update runs
+# install.sh without answers and must keep them. Prints them space separated, or fails.
+RA_SNMP_UNIT=${RA_SNMP_UNIT:-/etc/systemd/system/radius-admin-snmp.service}
+live_switch_nets() {
+    [[ -r $RA_SNMP_UNIT ]] || return 1
+    local n
+    n=$(awk '/^[[:space:]]*IPAddressAllow=/ { sub(/^[^=]*=/, ""); l = ($0 == "") ? "" : l " " $0 }
+             END { $0 = l; $1 = $1; print }' "$RA_SNMP_UNIT")
+    [[ -n $n ]] && printf '%s\n' "$n"
+}
+
+# render_snmp_unit TEMPLATE DST "NET [NET...]": the monitor unit, allowed only those networks
+render_snmp_unit() {
+    local tmpl=$1 dst=$2 nets=$3 list
+    read -r -a list <<<"$nets"
+    [[ ${#list[@]} -gt 0 ]] || { warn "no switch networks given"; return 1; }
+    if ! python3 -I -c 'import ipaddress, sys
+for n in sys.argv[1:]:
+    assert ipaddress.ip_network(n, strict=True).prefixlen > 0' "${list[@]}" 2>/dev/null; then
+        warn "switch networks '$nets' are not all networks in CIDR form (no host bits, not /0)"; return 1
+    fi
+    sed -e "s#@SWITCH_NETS@#${list[*]}#g" "$tmpl" > "$dst"
+}
+
+# Portal settings as installed on this host. An update runs install.sh with phases and -y but
+# no answers and must keep them, not fall back to the example defaults above. live_nginx KEY /
+# live_nft KEY print server_name, admin_net, listen_ip, resolver or ocsp_url, or fail.
+RA_SITE_YAML=${RA_SITE_YAML:-/etc/radius-admin/site.yaml}
+RA_NGINX_SITE=${RA_NGINX_SITE:-/etc/nginx/sites-available/radius-admin}
+RA_FIREWALL_NFT=${RA_FIREWALL_NFT:-/etc/radius-admin/firewall.nft}
+live_nginx() {
+    [[ -r $RA_NGINX_SITE ]] || return 1
+    local v
+    v=$(awk -v k="$1" '{ sub(/#.*/, ""); sub(/;[[:space:]]*$/, "") }
+        k == "server_name" && $1 == "server_name" { print $2; exit }
+        k == "admin_net" && $1 == "allow" { print $2; exit }
+        k == "listen_ip" && $1 == "listen" && $2 ~ /:443$/ { sub(/:443$/, "", $2); print $2; exit }
+        k == "ocsp_url" && $1 == "ssl_ocsp_responder" { print $2; exit }
+        k == "resolver" && $1 == "resolver" {
+            l = ""; for (i = 2; i <= NF && $i !~ /=/; i++) l = l (l == "" ? "" : " ") $i; print l; exit }' \
+        "$RA_NGINX_SITE")
+    [[ -n $v ]] && printf '%s\n' "$v"
+}
+live_nft() {
+    [[ -r $RA_FIREWALL_NFT ]] || return 1
+    local v
+    v=$(awk -v k="$1" '/tcp dport 443/ && / accept/ { for (i = 1; i < NF; i++) {
+            if (k == "admin_net" && $i == "saddr") { print $(i + 1); exit }
+            if (k == "listen_ip" && $i == "daddr") { print $(i + 1); exit } } }' "$RA_FIREWALL_NFT")
+    [[ -n $v ]] && printf '%s\n' "$v"
+}
+
 # DNS servers usable by nginx `resolver` (IPv4, real upstreams preferred over the stub).
 detect_resolvers() {
     local r=""

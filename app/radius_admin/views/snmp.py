@@ -11,7 +11,7 @@ from flask import Blueprint, abort, current_app, g, redirect, render_template, r
 from .. import db
 from ..flashing import flash
 from ..security import login_required, role_required, stepup_required
-from ..snmp import validate_passphrase, validate_username
+from ..snmp import is_blocked, validate_passphrase, validate_username
 from ..snmp_poller import encrypt_pass
 from . import ev, form_bool, form_str
 
@@ -172,4 +172,4 @@ def test_result(tid):
     if t is None:
         abort(404)
     p = profile()
-    return render_template("snmp/test.html", t=t, p=p)
+    return render_template("snmp/test.html", t=t, p=p, blocked=is_blocked(t["message"]))

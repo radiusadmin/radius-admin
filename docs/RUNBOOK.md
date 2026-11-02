@@ -494,7 +494,26 @@ On every switch, create one SNMPv3 user, security level **authPriv**, authentica
 three per-port rows the port table still shows the 802.1X state but no link or VLAN.)
 
 Restrict SNMP access on the switch to this server's address, and allow UDP 161 from
-this server to the switches in any firewall between them. (The Catalyst 1300 web UI has
+this server to the switches in any firewall between them.
+
+**Switch networks.** systemd lets `radius-admin-snmp` reach only the networks in
+`switch_nets` (installer answers; default: the management subnet). A switch outside them
+fails at once with "not sent: … outside the switch networks": the packet never leaves this
+server, so a firewall on the way logs nothing (Net-SNMP itself would say "Unknown engine ID
+(Operation not permitted)", radclient "sendto failed: Operation not permitted"). Check and
+change the list:
+
+```
+systemctl show radius-admin-snmp -p IPAddressAllow
+sudoedit /etc/radius-admin/site.yaml        # switch_nets: "192.0.2.0/24 198.51.100.0/24"
+sudo ./deploy/install.sh --answers /etc/radius-admin/site.yaml --phase app
+```
+
+(Without an answers file: `sudo ./deploy/install.sh --switch-nets "192.0.2.0/24 198.51.100.0/24"
+--phase app`.) Updates and `--phase app` runs without answers keep the networks of the
+installed unit. Releases before this one replaced them with `192.0.2.0/24` on every
+`--phase app` run without `--admin-net`; if the command above shows that example network,
+set `switch_nets` once. (The Catalyst 1300 web UI has
 this under SNMP → Views / Groups / Users; check the CLI syntax for your firmware.)
 
 Then in the UI: enter the username and both passphrases, tick **Enable switch
@@ -586,7 +605,7 @@ SIEM, add an rsyslog rule, e.g. `/etc/rsyslog.d/40-forward-radius-admin.conf`:
 **Email** (off; Alert settings, admin + step-up): relay, port, STARTTLS/TLS (certificate
 checked against the server's trust store — add the internal CA with
 `update-ca-certificates`), optional login (stored encrypted), From and To. The monitoring
-service may only reach the management subnet; for a relay outside it add one exception:
+service may only reach the switch networks (§6.3); for a relay outside them add one exception:
 
 ```
 sudo systemctl edit radius-admin-snmp
@@ -611,7 +630,11 @@ Use **Send test alert** to check delivery.
   an optional expiry. The switch admits it at its next MAB attempt (Catalyst 1300 quiet
   period, about a minute) — or use Sessions → Re-authenticate. *Hide* keeps rejecting a
   device without listing it; *Remove* drops it until it tries again. The queue keeps at
-  most 2000 MACs; entries not seen for 30 days are removed.
+  most 2000 MACs; entries not seen for 30 days are removed. A MAC that has authenticated
+  with a certificate (EAP-TLS accept) is never listed, even if the switch tried MAB first
+  or falls back to it later; such MAB attempts are rejected with the reason *MAB not used:
+  this device authenticates with a certificate*. Register the MAC under MAB devices if it
+  really needs MAB.
 
 ### 6.7 Why was it rejected?
 
@@ -683,6 +706,12 @@ After a restore, Apply once from the UI so the generated files match the databas
 Forward `radius-admin`/`radius-admin-helper` to the SIEM: uncomment the `omfwd` block in
 `/etc/rsyslog.d/30-radius-admin.conf`.
 
+**Time zone.** The database stores every time in UTC. The console shows times (authentication
+and audit logs, sessions, every other page) in the zone chosen under Settings → Time zone
+(default UTC), labelled with the zone's abbreviation, e.g. `14:00:00 CEST`; the auth log's
+From/To dates are whole days in that zone. Reports, report CSVs, alert messages, syslog and the
+audit hash chain stay in UTC.
+
 ---
 
 ## 9. Upgrading radius-admin
@@ -742,7 +771,8 @@ How `update.sh` chooses what to run: it unpacks the release to
 `/opt/radius-admin-src/releases/<UTC time>-<hash>` (root-owned), compares it with
 `/opt/radius-admin-src/current`, and runs `install.sh` with `packages` only if the package
 list changed, `postgres` if `sql/` or `deploy/postgres/` changed, always `app`, and `nginx`
-or `firewall` if their templates changed. FreeRADIUS files are only installed with
+or `firewall` if their templates changed (the plan then shows the portal settings they keep from
+this server, see section 13.1; extra `install.sh` options go after `--`). FreeRADIUS files are only installed with
 `-WithFreeradius`; FreeRADIUS is never restarted by an update. The first push (no previous
 release recorded) runs all of these phases once; they are idempotent. On success the
 uploaded file is deleted and the last 5 releases are kept; on failure the new release is
@@ -1013,10 +1043,19 @@ the rollback option is no longer needed.
 ### 13.1 Interactive install and answers file
 
 `sudo ./deploy/install.sh` with no options asks for the server name, management subnet,
-portal address, DNS resolvers, portal certificate and first administrator, shows a summary and
+portal address, switch networks (where the monitor may send SNMP and CoA, §6.3), DNS resolvers, portal certificate and first administrator, shows a summary and
 asks for confirmation. Unattended: `--answers FILE` (format in `deploy/answers.sh`);
 `--print-answers` only checks and prints. The answers are kept in `/etc/radius-admin/site.yaml`
 (root 0640); re-run later with `--answers /etc/radius-admin/site.yaml`.
+
+Runs without answers (updates, or `--phase nginx` by hand) keep the portal settings this server
+already uses: server name, management subnet, portal address and resolvers come from `site.yaml`,
+else from the installed nginx site, else from the firewall table, and the OCSP responder from the
+nginx site. To see what a run would use: `sudo ./deploy/install.sh --print-settings`. To change
+one, give the option (`--admin-net`, `--listen-ip`, `--server-name`, `--resolver`); it wins over
+`site.yaml` and answers files, and the `nginx`/`firewall` phases record the new value in
+`site.yaml` so later updates keep it. With nothing installed and no option or answers, these two
+phases stop rather than open the portal to the 192.0.2.0/24 example subnet.
 
 Portal certificate choices:
 - `self-signed`: ECDSA P-384 for the server name (browsers warn; replace it later by installing

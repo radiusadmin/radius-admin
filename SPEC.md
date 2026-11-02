@@ -535,7 +535,10 @@ CSV columns (header row required, exact names, any order tolerated by name):
   IEEE8021-PAE-MIB port control (2 = auto → 802.1X port), IF-MIB ifName (standalone C1300 `gi4`
   → `gi1/0/4`), RADIUS-AUTH-CLIENT-MIB ext table (RFC 4668) or old table.
 - `radius_admin/snmp_poller.py` + `deploy/systemd/radius-admin-snmp.service`: OS user
-  radius-admin, the only component with network access (IPAddressAllow = admin subnet).
+  radius-admin, the only component with network access (IPAddressAllow = the switch networks:
+  answers key `switch_nets` / `install.sh --switch-nets`, default the admin subnet; runs without
+  answers keep the installed unit's list). A send that systemd drops (EPERM) is reported as
+  "not sent: <address> is outside the switch networks…" (`snmp.blocked_message`), for SNMP and CoA.
   Polls only clients with `ui.radius_client.is_switch` (default false) that are a single address; optional auto-sync of `dot1x_ports` (audited,
   actor `system:snmp-poller`), compared as port sets.
 - UI: Switch monitoring page (admin + step-up; passphrases write-only), Refresh now and Test
@@ -557,8 +560,14 @@ CSV columns (header row required, exact names, any order tolerated by name):
     and `rule_id`; indexes for station and reject queries; `radacct` indexes for open sessions.
   - `mab_device.expires_at`; `mab_pending` (unknown MACs: first/last seen, attempts, NAS, port, ignored),
     written only by `radius_admin_mab_hex(mac, nas_hex, port_hex)` (SECURITY DEFINER, VOLATILE, granted to
-    radius_fr only). It returns `<vlan>` / `disabled` / `expired` / `unknown` / NULL and queues unknown MACs
-    (best effort, at most 2000 rows; never blocks the reply).
+    radius_fr only). It returns `<vlan>` / `disabled` / `expired` / `certificate` / `unknown` / NULL and queues
+    unknown MACs (best effort, at most 2000 rows; never blocks the reply). *(2026-11-02)* `certificate`: the
+    MAC is not registered but has an EAP-TLS Access-Accept in `radpostauth` (Calling-Station-Id compared by
+    its hex digits; partial expression index `radpostauth_cert_mac_idx`). Such a MAC is never queued, an
+    earlier queue row is deleted, and the policy rejects with "MAB not used: this device authenticates
+    with a certificate". A registered MAC keeps its VLAN. The console reads the queue (list, counts, nav
+    badge, auth detail) through the view `mab_pending_open`, which leaves out those MACs, so a device
+    queued before its first certificate login disappears at once.
   - `radius_admin_vlan_rule_hex()` = `radius_admin_vlan_hex()` returning `<vlan>:<rule id>`
     (`radius_admin_vlan_rule_core()` mirrors `radius_admin_vlan_core()`).
   - `ui.switch_status` gains `fail_count`, `last_ok_at`, `ports` (jsonb per-port state).
@@ -647,11 +656,23 @@ CSV columns (header row required, exact names, any order tolerated by name):
   and not pending) and optional ones (second admin, switch admins, SSO, RadSec, monitoring, alert
   e-mail; skippable). Dashboard strip until finished. Audited `setup.skip|restore|finish|reopen`.
 - **Installer answers** (`deploy/answers.sh`): `install.sh` with no options on a terminal, or
-  `--interactive`, asks server name, management subnet, listen address, resolvers, portal
+  `--interactive`, asks server name, management subnet, listen address, switch networks, resolvers, portal
   certificate (self-signed ECDSA P-384 / CSR / existing) and the first admin; `--answers FILE`
   takes the same unattended; `--print-answers` validates and prints only. New phase `site` writes
   `/etc/radius-admin/site.yaml` (root 0640) and the certificate; `bootstrap` creates the first
   admin. With a CSR the run stops until the issued certificate is installed.
+- **Portal settings without answers** (`update.sh`, which runs `install.sh --phase … -y`, or a
+  phase run by hand): `server_name`, `admin_net`, `listen_ip` and `resolver` come from
+  `/etc/radius-admin/site.yaml` (read with `ans_load`), else from the installed nginx site
+  (`server_name`, `allow`, `listen …:443`, `resolver`), else from `/etc/radius-admin/firewall.nft`
+  (`ip saddr`/`ip daddr`); `ocsp_url` from the nginx site (`ssl_ocsp_responder`) unless
+  `RA_OCSP_URL` is set. Values found this way are validated like answers and a bad one stops the
+  run. `--admin-net`, `--listen-ip`, `--server-name` and `--resolver` win over all of these and
+  over an answers file. The `nginx` and `firewall` phases stop when no management subnet is
+  known instead of using the 192.0.2.0/24 example, and after they install write the values in use
+  back into an existing `site.yaml` (other keys kept), so a later update does not revert an
+  option. `install.sh --print-settings` prints each value and its source; `update.sh` shows it in
+  the plan when it runs `nginx` or `firewall`, and stops (release discarded) if it fails.
 - **Navigation and wording.** Side navigation grouped by topic: Network access (RADIUS clients,
   access rules, MAB devices, switch admins, custom policy, Apply changes), Monitoring, Records,
   Administration (settings, single sign-on, UI admins, setup checklist; admins only). The
@@ -774,3 +795,15 @@ CSV columns (header row required, exact names, any order tolerated by name):
   explicit confirmation), install progress (refreshes every 10 s) and the last result,
   "Check now" (not in off mode), and the settings. A nav badge shows an available update.
   Audited `update.settings`, `update.check`, `update.install_requested`.
+
+## 17. Change (2026-11-02): display time zone
+
+- **Setting** `display_timezone` in `ui.setting` (absent = `UTC`; no migration): an IANA zone name
+  from the system zone list (`services.timezones()`, tzdata; installer package `tzdata`). Settings page (admin +
+  step-up), "Time zone" select; other names are refused. Audited in `settings.update`
+  (`display_timezone: {from, to}`).
+- **Display only.** Database sessions stay UTC (section 14) and storage is unchanged. The `dt`/`dtc`
+  filters convert to the zone (read once per request, `services.display_zone()`; a stored name
+  that is not a known zone falls back to UTC) and label times with its abbreviation (`%Z`). The
+  auth log's From/To filters are whole days in the zone. Reports and their CSVs (whole UTC days),
+  alert messages, syslog and the audit hash stay in UTC.

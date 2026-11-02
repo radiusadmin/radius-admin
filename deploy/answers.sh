@@ -6,6 +6,8 @@
 #   server_name: radius.example.net       FQDN of the portal (TLS certificate name)
 #   admin_net: 192.0.2.0/24               management subnet allowed to reach the portal
 #   listen_ip: 192.0.2.10                 portal address (default: this host's address in admin_net)
+#   switch_nets: "192.0.2.0/24 198.51.100.0/24"   networks the monitor may reach for SNMP and
+#                                         CoA (default: what the installed monitor allows, else admin_net)
 #   resolver: "192.0.2.53 192.0.2.54"     DNS resolvers for nginx OCSP lookups (default: detected)
 #   tls: self-signed                      self-signed | csr | existing
 #   tls_cert: /path/server.crt            tls: existing only (leaf first, then intermediates)
@@ -13,11 +15,13 @@
 #   admin_username: admin                 first portal administrator (created with a one-time password)
 # shellcheck shell=bash
 
-ANS_KEYS=(server_name admin_net listen_ip resolver tls tls_cert tls_key admin_username)
+ANS_KEYS=(server_name admin_net listen_ip switch_nets resolver tls tls_cert tls_key admin_username)
 declare -A ANS=()
 
-ans_load() { # ans_load FILE
+ans_load() { # ans_load FILE [ARRAY]: into ANS, or the associative ARRAY (site.yaml as installed:
+    # unknown keys are skipped there, since a newer release may have written it before a rollback)
     local file=$1 line key val n=0
+    local -n _ans_to=${2:-ANS}
     [[ -r $file ]] || die "answers file $file is not readable"
     while IFS= read -r line || [[ -n $line ]]; do
         n=$((n + 1))
@@ -27,9 +31,12 @@ ans_load() { # ans_load FILE
         fi
         key=${BASH_REMATCH[1]}; val=${BASH_REMATCH[2]:-}
         if [[ $val =~ ^\"(.*)\"$ ]]; then val=${BASH_REMATCH[1]}; fi
-        [[ " ${ANS_KEYS[*]} " == *" $key "* ]] || die "$file line $n: unknown key '$key' (known: ${ANS_KEYS[*]})"
-        [[ -z ${ANS[$key]+x} ]] || die "$file line $n: '$key' given twice"
-        ANS[$key]=$val
+        if [[ " ${ANS_KEYS[*]} " != *" $key "* ]]; then
+            [[ -n ${2:-} ]] && continue
+            die "$file line $n: unknown key '$key' (known: ${ANS_KEYS[*]})"
+        fi
+        [[ -z ${_ans_to[$key]+x} ]] || die "$file line $n: '$key' given twice"
+        _ans_to[$key]=$val
     done < "$file"
 }
 
@@ -49,6 +56,8 @@ try:
         print(ipaddress.ip_interface(v).network)
     elif what == "fqdn":
         assert re.fullmatch(r"(?=.{4,253}$)([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}", v)
+    elif what == "url":                            # nginx ssl_ocsp_responder
+        assert re.fullmatch(r"https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~/-]*)?", v)
     elif what == "user":
         assert re.fullmatch(r"[a-z0-9._-]{2,64}", v)
 except (ValueError, AssertionError):
@@ -67,6 +76,7 @@ ans_defaults() {
         ANS[admin_net]=${net:-$RA_ADMIN_NET}
     fi
     : "${ANS[listen_ip]:=$(detect_vlan_ip "${ANS[admin_net]}" 2>/dev/null || true)}"
+    : "${ANS[switch_nets]:=$(live_switch_nets || true)}"
     : "${ANS[resolver]:=$(detect_resolvers 2>/dev/null || true)}"
     : "${ANS[tls]:=self-signed}"
     : "${ANS[admin_username]:=admin}"
@@ -85,6 +95,8 @@ ans_interactive() {
     _ask admin_net "Management subnet allowed to reach the portal (CIDR)"
     [[ -z ${ANS[listen_ip]:-} ]] && ANS[listen_ip]=$(detect_vlan_ip "${ANS[admin_net]}" 2>/dev/null || true)
     _ask listen_ip "Portal listen address"
+    : "${ANS[switch_nets]:=${ANS[admin_net]}}"
+    _ask switch_nets "Switch networks the monitor may reach for SNMP and CoA (CIDR, space separated)"
     _ask resolver "DNS resolvers (space separated)"
     say "  Portal certificate: self-signed (replace later), csr (for your CA), existing (files you have)"
     _ask tls "Portal certificate"
@@ -104,6 +116,10 @@ ans_validate() {
     ip -o addr show 2>/dev/null | grep -qw -- "${ANS[listen_ip]}" \
         || warn "listen_ip ${ANS[listen_ip]} is not configured on this host"
     local r
+    : "${ANS[switch_nets]:=${ANS[admin_net]}}"
+    for r in ${ANS[switch_nets]}; do
+        _ans_py net "$r" || die "switch_nets: '$r' is not a network in CIDR form (no host bits, not /0)"
+    done
     [[ -n ${ANS[resolver]:-} ]] || die "resolver: no DNS resolver given or detected"
     for r in ${ANS[resolver]}; do _ans_py ip "$r" || die "resolver '$r' is not an IP address"; done
     case ${ANS[tls]:-} in
@@ -123,4 +139,25 @@ ans_print() {
         [[ -n ${ANS[$k]:-} ]] || continue
         if [[ ${ANS[$k]} == *" "* ]]; then printf '%s: "%s"\n' "$k" "${ANS[$k]}"; else printf '%s: %s\n' "$k" "${ANS[$k]}"; fi
     done
+}
+
+# ans_record FILE KEY VALUE [KEY VALUE...]: set those keys in an existing answers file
+# (site.yaml) and keep the others, so that the next run without answers (an update) uses
+# what nginx and the firewall now run. Empty values are left as they are.
+ans_record() {
+    local file=$1 tmp; shift
+    [[ -f $file ]] || return 0
+    tmp=$(mktemp)
+    if ! (
+        ANS=()
+        ans_load "$file"
+        while (( $# >= 2 )); do [[ -n $2 ]] && ANS[$1]=$2; shift 2; done
+        ans_print
+    ) > "$tmp"; then
+        rm -f "$tmp"; warn "could not update $file"; return 0
+    fi
+    if cmp -s "$tmp" "$file"; then rm -f "$tmp"; return 0; fi
+    install -o root -g root -m 0640 "$tmp" "$file"
+    rm -f "$tmp"
+    info "updated $file"
 }
