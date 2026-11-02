@@ -122,6 +122,34 @@ for n in sys.argv[1:]:
     sed -e "s#@SWITCH_NETS@#${list[*]}#g" "$tmpl" > "$dst"
 }
 
+# Portal settings as installed on this host. An update runs install.sh with phases and -y but
+# no answers and must keep them, not fall back to the example defaults above. live_nginx KEY /
+# live_nft KEY print server_name, admin_net, listen_ip, resolver or ocsp_url, or fail.
+RA_SITE_YAML=${RA_SITE_YAML:-/etc/radius-admin/site.yaml}
+RA_NGINX_SITE=${RA_NGINX_SITE:-/etc/nginx/sites-available/radius-admin}
+RA_FIREWALL_NFT=${RA_FIREWALL_NFT:-/etc/radius-admin/firewall.nft}
+live_nginx() {
+    [[ -r $RA_NGINX_SITE ]] || return 1
+    local v
+    v=$(awk -v k="$1" '{ sub(/#.*/, ""); sub(/;[[:space:]]*$/, "") }
+        k == "server_name" && $1 == "server_name" { print $2; exit }
+        k == "admin_net" && $1 == "allow" { print $2; exit }
+        k == "listen_ip" && $1 == "listen" && $2 ~ /:443$/ { sub(/:443$/, "", $2); print $2; exit }
+        k == "ocsp_url" && $1 == "ssl_ocsp_responder" { print $2; exit }
+        k == "resolver" && $1 == "resolver" {
+            l = ""; for (i = 2; i <= NF && $i !~ /=/; i++) l = l (l == "" ? "" : " ") $i; print l; exit }' \
+        "$RA_NGINX_SITE")
+    [[ -n $v ]] && printf '%s\n' "$v"
+}
+live_nft() {
+    [[ -r $RA_FIREWALL_NFT ]] || return 1
+    local v
+    v=$(awk -v k="$1" '/tcp dport 443/ && / accept/ { for (i = 1; i < NF; i++) {
+            if (k == "admin_net" && $i == "saddr") { print $(i + 1); exit }
+            if (k == "listen_ip" && $i == "daddr") { print $(i + 1); exit } } }' "$RA_FIREWALL_NFT")
+    [[ -n $v ]] && printf '%s\n' "$v"
+}
+
 # DNS servers usable by nginx `resolver` (IPv4, real upstreams preferred over the stub).
 detect_resolvers() {
     local r=""

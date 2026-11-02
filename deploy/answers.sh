@@ -18,8 +18,10 @@
 ANS_KEYS=(server_name admin_net listen_ip switch_nets resolver tls tls_cert tls_key admin_username)
 declare -A ANS=()
 
-ans_load() { # ans_load FILE
+ans_load() { # ans_load FILE [ARRAY]: into ANS, or the associative ARRAY (site.yaml as installed:
+    # unknown keys are skipped there, since a newer release may have written it before a rollback)
     local file=$1 line key val n=0
+    local -n _ans_to=${2:-ANS}
     [[ -r $file ]] || die "answers file $file is not readable"
     while IFS= read -r line || [[ -n $line ]]; do
         n=$((n + 1))
@@ -29,9 +31,12 @@ ans_load() { # ans_load FILE
         fi
         key=${BASH_REMATCH[1]}; val=${BASH_REMATCH[2]:-}
         if [[ $val =~ ^\"(.*)\"$ ]]; then val=${BASH_REMATCH[1]}; fi
-        [[ " ${ANS_KEYS[*]} " == *" $key "* ]] || die "$file line $n: unknown key '$key' (known: ${ANS_KEYS[*]})"
-        [[ -z ${ANS[$key]+x} ]] || die "$file line $n: '$key' given twice"
-        ANS[$key]=$val
+        if [[ " ${ANS_KEYS[*]} " != *" $key "* ]]; then
+            [[ -n ${2:-} ]] && continue
+            die "$file line $n: unknown key '$key' (known: ${ANS_KEYS[*]})"
+        fi
+        [[ -z ${_ans_to[$key]+x} ]] || die "$file line $n: '$key' given twice"
+        _ans_to[$key]=$val
     done < "$file"
 }
 
@@ -51,6 +56,8 @@ try:
         print(ipaddress.ip_interface(v).network)
     elif what == "fqdn":
         assert re.fullmatch(r"(?=.{4,253}$)([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}", v)
+    elif what == "url":                            # nginx ssl_ocsp_responder
+        assert re.fullmatch(r"https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~/-]*)?", v)
     elif what == "user":
         assert re.fullmatch(r"[a-z0-9._-]{2,64}", v)
 except (ValueError, AssertionError):
@@ -132,4 +139,25 @@ ans_print() {
         [[ -n ${ANS[$k]:-} ]] || continue
         if [[ ${ANS[$k]} == *" "* ]]; then printf '%s: "%s"\n' "$k" "${ANS[$k]}"; else printf '%s: %s\n' "$k" "${ANS[$k]}"; fi
     done
+}
+
+# ans_record FILE KEY VALUE [KEY VALUE...]: set those keys in an existing answers file
+# (site.yaml) and keep the others, so that the next run without answers (an update) uses
+# what nginx and the firewall now run. Empty values are left as they are.
+ans_record() {
+    local file=$1 tmp; shift
+    [[ -f $file ]] || return 0
+    tmp=$(mktemp)
+    if ! (
+        ANS=()
+        ans_load "$file"
+        while (( $# >= 2 )); do [[ -n $2 ]] && ANS[$1]=$2; shift 2; done
+        ans_print
+    ) > "$tmp"; then
+        rm -f "$tmp"; warn "could not update $file"; return 0
+    fi
+    if cmp -s "$tmp" "$file"; then rm -f "$tmp"; return 0; fi
+    install -o root -g root -m 0640 "$tmp" "$file"
+    rm -f "$tmp"
+    info "updated $file"
 }

@@ -72,6 +72,8 @@ jobs:
           cd "$REPO" && sudo -E python3 -m pytest -q -p no:cacheprovider tests/helper | tee "$LOGS/helper.log"
       - name: Installer answers tests
         run: cd "$REPO" && sudo bash tests/installer/test_answers.sh | tee "$LOGS/installer.log"
+      - name: Installer live settings
+        run: cd "$REPO" && sudo bash tests/installer/test_live_settings.sh | tee "$LOGS/live-settings.log"
       - name: Update install checks
         run: cd "$REPO" && sudo bash tests/installer/test_update_install.sh | tee "$LOGS/update-install.log"
       - name: Release tooling tests
@@ -80,8 +82,8 @@ jobs:
         id: counts
         if: always()
         run: |
-          tools/ci/test-counts.py "$LOGS/helper.log" "$LOGS/installer.log" "$LOGS/update-install.log" \
-              "$LOGS/release.log" | tee -a "$GITHUB_OUTPUT"
+          tools/ci/test-counts.py "$LOGS/helper.log" "$LOGS/installer.log" "$LOGS/live-settings.log" \
+              "$LOGS/update-install.log" "$LOGS/release.log" | tee -a "$GITHUB_OUTPUT"
 
   package:
     name: FreeRADIUS package

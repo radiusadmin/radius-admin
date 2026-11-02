@@ -20,6 +20,13 @@ release, so previews sort after it.
 - A switch outside the allowed networks is reported as such, instead of Net-SNMP's
   "Unknown engine ID (Operation not permitted)" with advice about the switch.
 
+### Fixed
+- Updates that change the nginx site or firewall template keep the server's management
+  subnet, portal address, server name, resolvers and OCSP responder (from `site.yaml`, else
+  the installed nginx site or firewall table) instead of the example defaults, which could
+  stop the update or restrict the portal to the example subnet. Command-line options win over
+  answers files; `install.sh --print-settings` shows what a run would use.
+
 ## 0.1.0 — 2026-11-02
 
 First release of the universal edition.

@@ -31,17 +31,21 @@
 #   -i, --interactive       ask the set-up questions (server name, subnet, certificate, first admin)
 #   --answers FILE          take the answers from FILE (format: deploy/answers.sh; site.yaml works)
 #   --print-answers         with --answers/--interactive: check and print the answers, install nothing
+#   --print-settings        print the portal settings this run would use and where each comes from
 #   --phase NAME            run only this phase (repeatable, or comma-separated)
 #   --from NAME             run this phase and all following ones
 #   --confirm-migrate       allow the migrate phase to run
 #   --restart-freeradius    restart FreeRADIUS at the end of the fr-package and freeradius phases
 #   --freeradius-deb FILE   FreeRADIUS package for fr-package (default: the bundled one in packages/)
 #   --listen-ip IP          nginx bind address (default: detected address in admin net)
-#   --admin-net CIDR        default 192.0.2.0/24
-#   --switch-nets "CIDR …"  networks the monitor may reach for SNMP and CoA (default: kept
-#                           from the installed monitor unit, else the admin net)
-#   --server-name NAME      default radius.example.net
+#   --admin-net CIDR        management subnet allowed to reach the portal
+#   --server-name NAME      FQDN of the portal
 #   --resolver "IP [IP]"    DNS for nginx OCSP lookups (default: resolvectl/resolv.conf)
+#                           These four override the answers. Without answers they default to
+#                           this host's settings: /etc/radius-admin/site.yaml, else the installed
+#                           nginx site, else the firewall table (an update keeps them that way).
+#   --switch-nets "CIDR …"  networks the monitor may reach for SNMP and CoA (default: kept
+#                           from the installed monitor unit, else site.yaml, else the admin net)
 #   --sqlite PATH           default /var/lib/freeradius/sqlite/freeradius.db
 #   --skip-preflight        do not abort on preflight failures (not recommended)
 #   -y, --yes               do not ask for confirmation
@@ -51,6 +55,7 @@ export LC_ALL=C
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 SRC=$(cd "$HERE/.." && pwd)
+OPT_OCSP_URL=${RA_OCSP_URL:-}   # set in the environment: wins over the installed nginx site
 # shellcheck source=lib.sh
 . "$HERE/lib.sh"
 # shellcheck source=answers.sh
@@ -65,11 +70,13 @@ FR_DEB=""
 LISTEN_IP=""
 RESOLVER=""
 SWITCH_NETS=""
+OPT_LISTEN_IP="" OPT_ADMIN_NET="" OPT_SERVER_NAME="" OPT_RESOLVER=""
 SKIP_PREFLIGHT=0
 ASSUME_YES=0
 INTERACTIVE=0
 ANSWERS=""
 PRINT_ANSWERS=0
+PRINT_SETTINGS=0
 USE_ANSWERS=0
 CSR_PENDING=0
 [[ $# -eq 0 && -t 0 ]] && INTERACTIVE=1
@@ -93,30 +100,51 @@ while [[ $# -gt 0 ]]; do
         --confirm-migrate) CONFIRM_MIGRATE=1; shift ;;
         --restart-freeradius) RESTART_FR=1; shift ;;
         --freeradius-deb) FR_DEB=$2; shift 2 ;;
-        --listen-ip) LISTEN_IP=$2; shift 2 ;;
-        --admin-net) RA_ADMIN_NET=$2; shift 2 ;;
+        --listen-ip) OPT_LISTEN_IP=$2; shift 2 ;;
+        --admin-net) OPT_ADMIN_NET=$2; shift 2 ;;
         --switch-nets) SWITCH_NETS=$2; shift 2 ;;
-        --server-name) RA_SERVER_NAME=$2; shift 2 ;;
-        --resolver) RESOLVER=$2; shift 2 ;;
+        --server-name) OPT_SERVER_NAME=$2; shift 2 ;;
+        --resolver) OPT_RESOLVER=$2; shift 2 ;;
         --sqlite) RA_SQLITE_DB=$2; shift 2 ;;
         --skip-preflight) SKIP_PREFLIGHT=1; shift ;;
         -y|--yes) ASSUME_YES=1; shift ;;
         -i|--interactive) INTERACTIVE=1; shift ;;
         --answers) ANSWERS=$2; shift 2 ;;
         --print-answers) PRINT_ANSWERS=1; shift ;;
+        --print-settings) PRINT_SETTINGS=1; shift ;;
         -h|--help) usage 0 ;;
         *) printf 'unknown option: %s\n\n' "$1" >&2; usage 2 ;;
     esac
 done
 require_root
 
+# Where each portal setting comes from: option, answers, site.yaml, nginx site, firewall
+# table or (nothing known) default. nginx and firewall refuse a default management subnet.
+declare -A SETTING_SRC=()
+declare -A SITE=()
+live_pick() { # live_pick VAR KEY OPTION: OPTION, else this host's value (rule 10), else VAR as is
+    local var=$1 key=$2 opt=$3 v
+    if [[ -n $opt ]]; then printf -v "$var" '%s' "$opt"; SETTING_SRC[$key]=option; return 0; fi
+    if [[ -n ${SITE[$key]:-} ]]; then v=${SITE[$key]}; SETTING_SRC[$key]=$RA_SITE_YAML
+    elif v=$(live_nginx "$key"); then SETTING_SRC[$key]=$RA_NGINX_SITE
+    elif v=$(live_nft "$key"); then SETTING_SRC[$key]=$RA_FIREWALL_NFT
+    else SETTING_SRC[$key]=default; return 0; fi
+    printf -v "$var" '%s' "$v"
+}
+
 if (( INTERACTIVE )) || [[ -n $ANSWERS ]]; then
     USE_ANSWERS=1
     if [[ -n $ANSWERS ]]; then ans_load "$ANSWERS"; fi
+    for k in server_name admin_net listen_ip resolver; do [[ -n ${ANS[$k]:-} ]] && SETTING_SRC[$k]=answers; done
+    [[ -n $OPT_SERVER_NAME ]] && ANS[server_name]=$OPT_SERVER_NAME && SETTING_SRC[server_name]=option
+    [[ -n $OPT_ADMIN_NET ]] && ANS[admin_net]=$OPT_ADMIN_NET && SETTING_SRC[admin_net]=option
+    [[ -n $OPT_LISTEN_IP ]] && ANS[listen_ip]=$OPT_LISTEN_IP && SETTING_SRC[listen_ip]=option
+    [[ -n $OPT_RESOLVER ]] && ANS[resolver]=$OPT_RESOLVER && SETTING_SRC[resolver]=option
     if [[ -n $SWITCH_NETS ]]; then ANS[switch_nets]=$SWITCH_NETS; fi
     ans_defaults
     if (( INTERACTIVE )); then ans_interactive; fi
     ans_validate
+    for k in server_name admin_net listen_ip resolver; do : "${SETTING_SRC[$k]:=answers}"; done
     RA_SERVER_NAME=${ANS[server_name]}; RA_ADMIN_NET=${ANS[admin_net]}
     LISTEN_IP=${ANS[listen_ip]}; RESOLVER=${ANS[resolver]}; SWITCH_NETS=${ANS[switch_nets]}
     if (( PRINT_ANSWERS )); then ans_print; exit 0; fi
@@ -126,6 +154,38 @@ if (( INTERACTIVE )) || [[ -n $ANSWERS ]]; then
     fi
 elif (( PRINT_ANSWERS )); then
     die "--print-answers needs --answers FILE or --interactive"
+else
+    # No answers (an update, or a phase run by hand): keep what this host runs rather than
+    # the example defaults, which could lock the administrators out of the portal.
+    if [[ -r $RA_SITE_YAML ]]; then ans_load "$RA_SITE_YAML" SITE; fi
+    live_pick RA_SERVER_NAME server_name "$OPT_SERVER_NAME"
+    live_pick RA_ADMIN_NET admin_net "$OPT_ADMIN_NET"
+    live_pick LISTEN_IP listen_ip "$OPT_LISTEN_IP"
+    live_pick RESOLVER resolver "$OPT_RESOLVER"
+    _ans_py fqdn "$RA_SERVER_NAME" \
+        || die "server name '$RA_SERVER_NAME' (${SETTING_SRC[server_name]}) is not a fully qualified host name"
+    _ans_py net "$RA_ADMIN_NET" \
+        || die "management subnet '$RA_ADMIN_NET' (${SETTING_SRC[admin_net]}) is not a network in CIDR form (no host bits, not /0)"
+    [[ -z $LISTEN_IP ]] || _ans_py ip "$LISTEN_IP" \
+        || die "listen address '$LISTEN_IP' (${SETTING_SRC[listen_ip]}) is not an IP address"
+    for r in $RESOLVER; do _ans_py ip "$r" || die "resolver '$r' (${SETTING_SRC[resolver]}) is not an IP address"; done
+fi
+live_pick RA_OCSP_URL ocsp_url "$OPT_OCSP_URL"
+_ans_py url "$RA_OCSP_URL" || die "OCSP responder '$RA_OCSP_URL' (${SETTING_SRC[ocsp_url]}) is not an http(s) URL"
+if [[ ${SETTING_SRC[ocsp_url]} != default ]]; then RA_OCSP_HOST=$(sed -E 's#^[a-z]+://([^/:]+).*#\1#' <<<"$RA_OCSP_URL"); fi
+
+if (( PRINT_SETTINGS )); then
+    for k in server_name admin_net listen_ip resolver ocsp_url; do
+        case $k in
+            server_name) v=$RA_SERVER_NAME ;; admin_net) v=$RA_ADMIN_NET ;; ocsp_url) v=$RA_OCSP_URL ;;
+            listen_ip) v=${LISTEN_IP:-$(detect_vlan_ip "$RA_ADMIN_NET" || true)} ;;
+            resolver) v=${RESOLVER:-$(detect_resolvers || true)} ;;
+        esac
+        s=${SETTING_SRC[$k]:-default}
+        if [[ $s == default && $k =~ ^(listen_ip|resolver)$ ]]; then s=detected; fi
+        printf '%s: %s (%s)\n' "$k" "${v:-none}" "$s"
+    done
+    exit 0
 fi
 
 valid_phase() { local p; for p in "${ALL_PHASES[@]}"; do [[ $p == "$1" ]] && return 0; done; return 1; }
@@ -757,6 +817,7 @@ phase_app() {
     # keep what the installed unit allows; the admin net is only the first-install default.
     local snmpu nets; snmpu=$(mktemp)
     nets=${SWITCH_NETS:-$(live_switch_nets || true)}
+    nets=${nets:-${SITE[switch_nets]:-}}
     nets=${nets:-$RA_ADMIN_NET}
     render_snmp_unit "$HERE/systemd/radius-admin-snmp.service" "$snmpu" "$nets" \
         || { rm -f "$snmpu"; die "cannot render radius-admin-snmp.service"; }
@@ -833,8 +894,15 @@ s.sendall(sys.stdin.buffer.read()); print(s.recv(65536).decode().strip())' 2>&1 
     if [[ $st == *'"ok":true'* ]]; then ok "helper reachable by radius-admin: $st"; else warn "helper status failed: $st"; fi
 }
 
+need_admin_net() {
+    [[ ${SETTING_SRC[admin_net]} != default ]] \
+        || die "management subnet unknown (no answers, no $RA_SITE_YAML, no installed nginx site): give --answers FILE or --admin-net CIDR"
+    info "management subnet $RA_ADMIN_NET (${SETTING_SRC[admin_net]})"
+}
+
 phase_nginx() {
     hdr "Phase nginx"
+    need_admin_net
     local ip=${LISTEN_IP:-$(detect_vlan_ip "$RA_ADMIN_NET" || true)}
     [[ -n $ip ]] || die "no address in $RA_ADMIN_NET found; pass --listen-ip"
     local res=${RESOLVER:-$(detect_resolvers || true)}
@@ -873,6 +941,7 @@ phase_nginx() {
         systemctl enable nginx >/dev/null 2>&1 || true
         systemctl reload-or-restart nginx
         ok "nginx serving https://$RA_SERVER_NAME on $ip:443 (resolver $res)"
+        ans_record "$RA_SITE_YAML" server_name "$RA_SERVER_NAME" admin_net "$RA_ADMIN_NET" listen_ip "$ip" resolver "$res"
         if [[ -n $old ]]; then rm -f "$old"; fi
     else
         if [[ -n $old ]]; then cp -p "$old" "$site"; rm -f "$old"; else rm -f /etc/nginx/sites-enabled/radius-admin; fi
@@ -885,6 +954,7 @@ phase_nginx() {
 
 phase_firewall() {
     hdr "Phase firewall"
+    need_admin_net
     local ip=${LISTEN_IP:-$(detect_vlan_ip "$RA_ADMIN_NET" || true)}
     [[ -n $ip ]] || die "no address in $RA_ADMIN_NET found; pass --listen-ip"
     local fw; fw=$(detect_firewall)
@@ -900,6 +970,7 @@ phase_firewall() {
     systemctl enable radius-admin-firewall.service >/dev/null
     systemctl restart radius-admin-firewall.service
     ok "nftables table inet radius_admin: TCP 443 on $ip only from $RA_ADMIN_NET"
+    ans_record "$RA_SITE_YAML" admin_net "$RA_ADMIN_NET" listen_ip "$ip"
     case $fw in
         ufw)
             if ! ufw status | grep -qE "^$ip 443/tcp +ALLOW +$RA_ADMIN_NET"; then

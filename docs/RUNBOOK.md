@@ -771,7 +771,8 @@ How `update.sh` chooses what to run: it unpacks the release to
 `/opt/radius-admin-src/releases/<UTC time>-<hash>` (root-owned), compares it with
 `/opt/radius-admin-src/current`, and runs `install.sh` with `packages` only if the package
 list changed, `postgres` if `sql/` or `deploy/postgres/` changed, always `app`, and `nginx`
-or `firewall` if their templates changed. FreeRADIUS files are only installed with
+or `firewall` if their templates changed (the plan then shows the portal settings they keep from
+this server, see section 13.1; extra `install.sh` options go after `--`). FreeRADIUS files are only installed with
 `-WithFreeradius`; FreeRADIUS is never restarted by an update. The first push (no previous
 release recorded) runs all of these phases once; they are idempotent. On success the
 uploaded file is deleted and the last 5 releases are kept; on failure the new release is
@@ -1046,6 +1047,15 @@ portal address, switch networks (where the monitor may send SNMP and CoA, §6.3)
 asks for confirmation. Unattended: `--answers FILE` (format in `deploy/answers.sh`);
 `--print-answers` only checks and prints. The answers are kept in `/etc/radius-admin/site.yaml`
 (root 0640); re-run later with `--answers /etc/radius-admin/site.yaml`.
+
+Runs without answers (updates, or `--phase nginx` by hand) keep the portal settings this server
+already uses: server name, management subnet, portal address and resolvers come from `site.yaml`,
+else from the installed nginx site, else from the firewall table, and the OCSP responder from the
+nginx site. To see what a run would use: `sudo ./deploy/install.sh --print-settings`. To change
+one, give the option (`--admin-net`, `--listen-ip`, `--server-name`, `--resolver`); it wins over
+`site.yaml` and answers files, and the `nginx`/`firewall` phases record the new value in
+`site.yaml` so later updates keep it. With nothing installed and no option or answers, these two
+phases stop rather than open the portal to the 192.0.2.0/24 example subnet.
 
 Portal certificate choices:
 - `self-signed`: ECDSA P-384 for the server name (browsers warn; replace it later by installing
