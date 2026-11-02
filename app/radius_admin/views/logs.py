@@ -90,7 +90,7 @@ def auth_detail(aid):
     if mac:
         mac_dash = "-".join(mac[i:i + 2] for i in range(0, 12, 2))
         mab = db.query_one("SELECT id, vlan, enabled, expires_at FROM mab_device WHERE mac = %s", (mac_dash,))
-        pending = db.query_one("SELECT mac, ignored FROM mab_pending WHERE mac = %s", (mac_dash,))
+        pending = db.query_one("SELECT mac, ignored FROM mab_pending_open WHERE mac = %s", (mac_dash,))
     history = db.query("SELECT id, authdate, reply, vlan, reason FROM radpostauth"
                        " WHERE id <> %s AND ((callingstationid IS NOT NULL AND callingstationid = %s)"
                        "  OR (callingstationid IS NULL AND username = %s))"

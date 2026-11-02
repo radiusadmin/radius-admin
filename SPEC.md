@@ -557,8 +557,14 @@ CSV columns (header row required, exact names, any order tolerated by name):
     and `rule_id`; indexes for station and reject queries; `radacct` indexes for open sessions.
   - `mab_device.expires_at`; `mab_pending` (unknown MACs: first/last seen, attempts, NAS, port, ignored),
     written only by `radius_admin_mab_hex(mac, nas_hex, port_hex)` (SECURITY DEFINER, VOLATILE, granted to
-    radius_fr only). It returns `<vlan>` / `disabled` / `expired` / `unknown` / NULL and queues unknown MACs
-    (best effort, at most 2000 rows; never blocks the reply).
+    radius_fr only). It returns `<vlan>` / `disabled` / `expired` / `certificate` / `unknown` / NULL and queues
+    unknown MACs (best effort, at most 2000 rows; never blocks the reply). *(2026-11-02)* `certificate`: the
+    MAC is not registered but has an EAP-TLS Access-Accept in `radpostauth` (Calling-Station-Id compared by
+    its hex digits; partial expression index `radpostauth_cert_mac_idx`). Such a MAC is never queued, an
+    earlier queue row is deleted, and the policy rejects with "MAB not used: this device authenticates
+    with a certificate". A registered MAC keeps its VLAN. The console reads the queue (list, counts, nav
+    badge, auth detail) through the view `mab_pending_open`, which leaves out those MACs, so a device
+    queued before its first certificate login disappears at once.
   - `radius_admin_vlan_rule_hex()` = `radius_admin_vlan_hex()` returning `<vlan>:<rule id>`
     (`radius_admin_vlan_rule_core()` mirrors `radius_admin_vlan_core()`).
   - `ui.switch_status` gains `fail_count`, `last_ok_at`, `ports` (jsonb per-port state).

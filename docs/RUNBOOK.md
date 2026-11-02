@@ -611,7 +611,11 @@ Use **Send test alert** to check delivery.
   an optional expiry. The switch admits it at its next MAB attempt (Catalyst 1300 quiet
   period, about a minute) — or use Sessions → Re-authenticate. *Hide* keeps rejecting a
   device without listing it; *Remove* drops it until it tries again. The queue keeps at
-  most 2000 MACs; entries not seen for 30 days are removed.
+  most 2000 MACs; entries not seen for 30 days are removed. A MAC that has authenticated
+  with a certificate (EAP-TLS accept) is never listed, even if the switch tried MAB first
+  or falls back to it later; such MAB attempts are rejected with the reason *MAB not used:
+  this device authenticates with a certificate*. Register the MAC under MAB devices if it
+  really needs MAB.
 
 ### 6.7 Why was it rejected?
 

@@ -34,7 +34,7 @@ def index():
         r["reason_text"] = clean_reason(r["reason"])
     ops = db.query_one_optional(
         "SELECT (SELECT count(*) FROM radacct WHERE acctstoptime IS NULL) AS sessions,"
-        " (SELECT count(*) FROM mab_pending WHERE NOT ignored) AS unknown_mab,"
+        " (SELECT count(*) FROM mab_pending_open WHERE NOT ignored) AS unknown_mab,"
         " (SELECT heartbeat_at > now() - interval '3 minutes' FROM ui.monitor_state WHERE id = 1) AS monitor_alive,"
         " (SELECT heartbeat_at FROM ui.monitor_state WHERE id = 1) AS heartbeat_at")
     open_alerts = []

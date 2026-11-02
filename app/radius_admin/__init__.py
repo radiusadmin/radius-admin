@@ -115,7 +115,7 @@ def create_app(config_path=None, overrides=None):
             try:   # tables are missing until the postgres phase has run
                 nav = db.query_one_optional(
                     "SELECT (SELECT count(*) FROM ui.alert WHERE state = 'open') AS alerts,"
-                    " (SELECT count(*) FROM mab_pending WHERE NOT ignored) AS unknown_mab")
+                    " (SELECT count(*) FROM mab_pending_open WHERE NOT ignored) AS unknown_mab")
             except Exception:
                 nav = None
             if nav is not None and user["role"] == "admin":   # ui.update_check: sql/90-updates.sql
