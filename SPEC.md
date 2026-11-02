@@ -682,7 +682,9 @@ CSV columns (header row required, exact names, any order tolerated by name):
   refuses it without a matching `.sha384`, and installs it with `apt-get` when no FreeRADIUS is
   installed, or upgrades it when the bundled version is newer. A FreeRADIUS installed any other
   way (the distribution's `freeradius`, or a source build with its own unit) is kept with a
-  warning. On upgrade the running radiusd is restarted only with `--restart-freeradius`. Without a
+  warning. On upgrade the running radiusd is restarted only with `--restart-freeradius`; the
+  installer's `apt-get` calls set `NEEDRESTART_SUSPEND=1` so Ubuntu's needrestart cannot restart
+  it behind the installer's back. Without a
   bundled package and without FreeRADIUS the phase stops. The `freeradius` phase now enables the
   unit after `radiusd -XC` passes. Preflight reports a host without FreeRADIUS as ready when a
   bundled package is present. `update.sh` adds `fr-package` when `packages/` changed.
