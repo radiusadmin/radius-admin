@@ -2,8 +2,8 @@
 
 [![CI](https://github.com/radiusadmin/radius-admin/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/radiusadmin/radius-admin/actions/workflows/ci.yml)
 ![status](https://img.shields.io/badge/status-early%20development-orange)
-![tests](https://img.shields.io/badge/tests-620%20passing-brightgreen)
-![FreeRADIUS bench](https://img.shields.io/badge/FreeRADIUS%20bench-124%2F124-brightgreen)
+[![tests](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fradiusadmin%2Fradius-admin%2Fbadges%2Ftests.json)](https://github.com/radiusadmin/radius-admin/actions/workflows/ci.yml?query=branch%3Amain)
+[![FreeRADIUS bench](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fradiusadmin%2Fradius-admin%2Fbadges%2Fbench.json)](https://github.com/radiusadmin/radius-admin/actions/workflows/ci.yml?query=branch%3Amain)
 ![FreeRADIUS](https://img.shields.io/badge/FreeRADIUS-3.2.10-blue)
 ![Ubuntu](https://img.shields.io/badge/Ubuntu-24.04%20LTS-E95420?logo=ubuntu&logoColor=white)
 ![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)
