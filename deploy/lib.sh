@@ -98,6 +98,30 @@ detect_vlan_ip() {
     done | head -n1
 }
 
+# Networks radius-admin-snmp may reach (SNMP, CoA), from the installed unit: an update runs
+# install.sh without answers and must keep them. Prints them space separated, or fails.
+RA_SNMP_UNIT=${RA_SNMP_UNIT:-/etc/systemd/system/radius-admin-snmp.service}
+live_switch_nets() {
+    [[ -r $RA_SNMP_UNIT ]] || return 1
+    local n
+    n=$(awk '/^[[:space:]]*IPAddressAllow=/ { sub(/^[^=]*=/, ""); l = ($0 == "") ? "" : l " " $0 }
+             END { $0 = l; $1 = $1; print }' "$RA_SNMP_UNIT")
+    [[ -n $n ]] && printf '%s\n' "$n"
+}
+
+# render_snmp_unit TEMPLATE DST "NET [NET...]": the monitor unit, allowed only those networks
+render_snmp_unit() {
+    local tmpl=$1 dst=$2 nets=$3 list
+    read -r -a list <<<"$nets"
+    [[ ${#list[@]} -gt 0 ]] || { warn "no switch networks given"; return 1; }
+    if ! python3 -I -c 'import ipaddress, sys
+for n in sys.argv[1:]:
+    assert ipaddress.ip_network(n, strict=True).prefixlen > 0' "${list[@]}" 2>/dev/null; then
+        warn "switch networks '$nets' are not all networks in CIDR form (no host bits, not /0)"; return 1
+    fi
+    sed -e "s#@SWITCH_NETS@#${list[*]}#g" "$tmpl" > "$dst"
+}
+
 # DNS servers usable by nginx `resolver` (IPv4, real upstreams preferred over the stub).
 detect_resolvers() {
     local r=""

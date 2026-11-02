@@ -381,6 +381,18 @@ def test_monitor_coa_failures_are_reported(app, superconn):
     assert ok is False and "radclient" in msg
 
 
+def test_coa_blocked_by_this_server(app, browser, superconn, logged_in):
+    from radius_admin import coa, snmp
+    ok, msg = coa.parse_reply("(0) Failed to send packet for ID 87: sendto failed: Operation not permitted\n", "192.0.2.10")
+    assert ok is False and snmp.is_blocked(msg) and "192.0.2.10" in msg
+    cid = _client(superconn)
+    q(superconn, "INSERT INTO ui.coa_request (client_id, action, nas_ip, requested_by, done_at, ok, message)"
+                 " VALUES (%s, 'reauth', '192.0.2.10', 'op', now(), false, %s)", (cid, msg))
+    logged_in("operator")
+    t = browser.text(browser.get("/sessions/coa/1"))
+    assert "switch_nets" in t and "dynamic authorization configured" not in t
+
+
 # ======================================================================= alerts
 @pytest.fixture
 def mon_conn(app):

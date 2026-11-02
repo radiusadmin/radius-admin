@@ -16,7 +16,11 @@
   {% if r.action != 'reauth' %}<p class="small muted">The session list updates when the switch sends Accounting-Stop.</p>{% endif %}
 {% else %}
   <p><span class="tag tag-danger">Failed</span> {{ r.message }}</p>
+  {% if blocked %}
+  <p class="small">This server did not send the request: the monitoring service may only reach the switch networks. Add the switch's network to <span class="mono">switch_nets</span> in <span class="mono">/etc/radius-admin/site.yaml</span> and run <span class="mono">sudo deploy/install.sh --answers /etc/radius-admin/site.yaml --phase app</span> (RUNBOOK §6.3).</p>
+  {% else %}
   <p class="small">Check that the switch has dynamic authorization configured for this server with the same shared key (RUNBOOK §6.4), runs firmware 4.1.3.36 or later, and that UDP {{ coa_port }} on the switch is reachable from this server.</p>
+  {% endif %}
 {% endif %}
 <dl class="kv small">
   <dt>Requested</dt><dd>{{ r.requested_at|dt }} by {{ r.requested_by }}</dd>

@@ -6,6 +6,8 @@
 #   server_name: radius.example.net       FQDN of the portal (TLS certificate name)
 #   admin_net: 192.0.2.0/24               management subnet allowed to reach the portal
 #   listen_ip: 192.0.2.10                 portal address (default: this host's address in admin_net)
+#   switch_nets: "192.0.2.0/24 198.51.100.0/24"   networks the monitor may reach for SNMP and
+#                                         CoA (default: what the installed monitor allows, else admin_net)
 #   resolver: "192.0.2.53 192.0.2.54"     DNS resolvers for nginx OCSP lookups (default: detected)
 #   tls: self-signed                      self-signed | csr | existing
 #   tls_cert: /path/server.crt            tls: existing only (leaf first, then intermediates)
@@ -13,7 +15,7 @@
 #   admin_username: admin                 first portal administrator (created with a one-time password)
 # shellcheck shell=bash
 
-ANS_KEYS=(server_name admin_net listen_ip resolver tls tls_cert tls_key admin_username)
+ANS_KEYS=(server_name admin_net listen_ip switch_nets resolver tls tls_cert tls_key admin_username)
 declare -A ANS=()
 
 ans_load() { # ans_load FILE
@@ -67,6 +69,7 @@ ans_defaults() {
         ANS[admin_net]=${net:-$RA_ADMIN_NET}
     fi
     : "${ANS[listen_ip]:=$(detect_vlan_ip "${ANS[admin_net]}" 2>/dev/null || true)}"
+    : "${ANS[switch_nets]:=$(live_switch_nets || true)}"
     : "${ANS[resolver]:=$(detect_resolvers 2>/dev/null || true)}"
     : "${ANS[tls]:=self-signed}"
     : "${ANS[admin_username]:=admin}"
@@ -85,6 +88,8 @@ ans_interactive() {
     _ask admin_net "Management subnet allowed to reach the portal (CIDR)"
     [[ -z ${ANS[listen_ip]:-} ]] && ANS[listen_ip]=$(detect_vlan_ip "${ANS[admin_net]}" 2>/dev/null || true)
     _ask listen_ip "Portal listen address"
+    : "${ANS[switch_nets]:=${ANS[admin_net]}}"
+    _ask switch_nets "Switch networks the monitor may reach for SNMP and CoA (CIDR, space separated)"
     _ask resolver "DNS resolvers (space separated)"
     say "  Portal certificate: self-signed (replace later), csr (for your CA), existing (files you have)"
     _ask tls "Portal certificate"
@@ -104,6 +109,10 @@ ans_validate() {
     ip -o addr show 2>/dev/null | grep -qw -- "${ANS[listen_ip]}" \
         || warn "listen_ip ${ANS[listen_ip]} is not configured on this host"
     local r
+    : "${ANS[switch_nets]:=${ANS[admin_net]}}"
+    for r in ${ANS[switch_nets]}; do
+        _ans_py net "$r" || die "switch_nets: '$r' is not a network in CIDR form (no host bits, not /0)"
+    done
     [[ -n ${ANS[resolver]:-} ]] || die "resolver: no DNS resolver given or detected"
     for r in ${ANS[resolver]}; do _ans_py ip "$r" || die "resolver '$r' is not an IP address"; done
     case ${ANS[tls]:-} in

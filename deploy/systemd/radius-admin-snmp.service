@@ -1,11 +1,12 @@
 # radius-admin monitor: read-only SNMPv3 switch polling (SPEC section 12), alerts and
 # session disconnect / re-authenticate (CoA, SPEC section 13).
-# TEMPLATE: install.sh replaces @ADMIN_NET@ with the management subnet.
+# TEMPLATE: install.sh replaces @SWITCH_NETS@ with the switch networks (answers key
+# switch_nets / --switch-nets; kept from the installed unit on updates).
 # This is the ONLY radius-admin component allowed onto the network, and only to
-# the management subnet (switches: SNMP UDP 161, CoA UDP 1700). It uses Net-SNMP
+# the switch networks (SNMP UDP 161, CoA UDP 1700). It uses Net-SNMP
 # (system OpenSSL) for SNMPv3 SHA-2/AES-128 and radclient from the FreeRADIUS build
 # for CoA; credentials come from the database, decrypted with the app data key.
-# Email alerts to a relay outside the management subnet need a drop-in:
+# Email alerts to a relay outside the switch networks need a drop-in:
 #   systemctl edit radius-admin-snmp  ->  [Service] IPAddressAllow=<relay address>
 [Unit]
 Description=radius-admin monitor (switch SNMP, alerts, session actions)
@@ -41,7 +42,7 @@ ProtectHostname=yes
 ProtectProc=invisible
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 IPAddressDeny=any
-IPAddressAllow=@ADMIN_NET@
+IPAddressAllow=@SWITCH_NETS@
 RestrictNamespaces=yes
 RestrictRealtime=yes
 RestrictSUIDSGID=yes

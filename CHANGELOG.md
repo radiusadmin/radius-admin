@@ -11,6 +11,14 @@ release, so previews sort after it.
 - Updates page: current and latest version, changelog, update channel (main, testing,
   dev) and automatic updates. Builds are signed in CI and verified by the root helper
   before anything is installed.
+- Switch networks (`switch_nets` in the installer answers, `--switch-nets`): the monitor may
+  reach switches in several networks for SNMP and CoA, not only the management subnet.
+
+### Fixed
+- `install.sh --phase app` without answers (and updates) no longer resets the monitor's
+  allowed network to the `192.0.2.0/24` example; it keeps the installed list.
+- A switch outside the allowed networks is reported as such, instead of Net-SNMP's
+  "Unknown engine ID (Operation not permitted)" with advice about the switch.
 
 ## 0.1.0 — 2026-11-02
 

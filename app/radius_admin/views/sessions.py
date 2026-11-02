@@ -17,6 +17,7 @@ from .. import db, oui
 from ..flashing import flash
 from ..insight import ClientIndex, port_status
 from ..security import login_required, role_required
+from ..snmp import is_blocked
 from . import ev
 
 bp = Blueprint("sessions", __name__, url_prefix="/sessions")
@@ -182,4 +183,4 @@ def coa_result(rid):
     mon = db.query_one("SELECT radclient, heartbeat_at FROM ui.monitor_state WHERE id = 1")
     port = db.query_one("SELECT coa_port FROM ui.snmp_profile WHERE id = 1")
     return render_template("sessions/coa.html", r=r, mon=mon, actions=COA_ACTIONS,
-                           coa_port=port["coa_port"] if port else 1700)
+                           coa_port=port["coa_port"] if port else 1700, blocked=is_blocked(r["message"]))

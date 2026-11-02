@@ -494,7 +494,26 @@ On every switch, create one SNMPv3 user, security level **authPriv**, authentica
 three per-port rows the port table still shows the 802.1X state but no link or VLAN.)
 
 Restrict SNMP access on the switch to this server's address, and allow UDP 161 from
-this server to the switches in any firewall between them. (The Catalyst 1300 web UI has
+this server to the switches in any firewall between them.
+
+**Switch networks.** systemd lets `radius-admin-snmp` reach only the networks in
+`switch_nets` (installer answers; default: the management subnet). A switch outside them
+fails at once with "not sent: … outside the switch networks": the packet never leaves this
+server, so a firewall on the way logs nothing (Net-SNMP itself would say "Unknown engine ID
+(Operation not permitted)", radclient "sendto failed: Operation not permitted"). Check and
+change the list:
+
+```
+systemctl show radius-admin-snmp -p IPAddressAllow
+sudoedit /etc/radius-admin/site.yaml        # switch_nets: "192.0.2.0/24 198.51.100.0/24"
+sudo ./deploy/install.sh --answers /etc/radius-admin/site.yaml --phase app
+```
+
+(Without an answers file: `sudo ./deploy/install.sh --switch-nets "192.0.2.0/24 198.51.100.0/24"
+--phase app`.) Updates and `--phase app` runs without answers keep the networks of the
+installed unit. Releases before this one replaced them with `192.0.2.0/24` on every
+`--phase app` run without `--admin-net`; if the command above shows that example network,
+set `switch_nets` once. (The Catalyst 1300 web UI has
 this under SNMP → Views / Groups / Users; check the CLI syntax for your firmware.)
 
 Then in the UI: enter the username and both passphrases, tick **Enable switch
@@ -586,7 +605,7 @@ SIEM, add an rsyslog rule, e.g. `/etc/rsyslog.d/40-forward-radius-admin.conf`:
 **Email** (off; Alert settings, admin + step-up): relay, port, STARTTLS/TLS (certificate
 checked against the server's trust store — add the internal CA with
 `update-ca-certificates`), optional login (stored encrypted), From and To. The monitoring
-service may only reach the management subnet; for a relay outside it add one exception:
+service may only reach the switch networks (§6.3); for a relay outside them add one exception:
 
 ```
 sudo systemctl edit radius-admin-snmp
@@ -1023,7 +1042,7 @@ the rollback option is no longer needed.
 ### 13.1 Interactive install and answers file
 
 `sudo ./deploy/install.sh` with no options asks for the server name, management subnet,
-portal address, DNS resolvers, portal certificate and first administrator, shows a summary and
+portal address, switch networks (where the monitor may send SNMP and CoA, §6.3), DNS resolvers, portal certificate and first administrator, shows a summary and
 asks for confirmation. Unattended: `--answers FILE` (format in `deploy/answers.sh`);
 `--print-answers` only checks and prints. The answers are kept in `/etc/radius-admin/site.yaml`
 (root 0640); re-run later with `--answers /etc/radius-admin/site.yaml`.

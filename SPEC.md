@@ -535,7 +535,10 @@ CSV columns (header row required, exact names, any order tolerated by name):
   IEEE8021-PAE-MIB port control (2 = auto → 802.1X port), IF-MIB ifName (standalone C1300 `gi4`
   → `gi1/0/4`), RADIUS-AUTH-CLIENT-MIB ext table (RFC 4668) or old table.
 - `radius_admin/snmp_poller.py` + `deploy/systemd/radius-admin-snmp.service`: OS user
-  radius-admin, the only component with network access (IPAddressAllow = admin subnet).
+  radius-admin, the only component with network access (IPAddressAllow = the switch networks:
+  answers key `switch_nets` / `install.sh --switch-nets`, default the admin subnet; runs without
+  answers keep the installed unit's list). A send that systemd drops (EPERM) is reported as
+  "not sent: <address> is outside the switch networks…" (`snmp.blocked_message`), for SNMP and CoA.
   Polls only clients with `ui.radius_client.is_switch` (default false) that are a single address; optional auto-sync of `dot1x_ports` (audited,
   actor `system:snmp-poller`), compared as port sets.
 - UI: Switch monitoring page (admin + step-up; passphrases write-only), Refresh now and Test
@@ -653,7 +656,7 @@ CSV columns (header row required, exact names, any order tolerated by name):
   and not pending) and optional ones (second admin, switch admins, SSO, RadSec, monitoring, alert
   e-mail; skippable). Dashboard strip until finished. Audited `setup.skip|restore|finish|reopen`.
 - **Installer answers** (`deploy/answers.sh`): `install.sh` with no options on a terminal, or
-  `--interactive`, asks server name, management subnet, listen address, resolvers, portal
+  `--interactive`, asks server name, management subnet, listen address, switch networks, resolvers, portal
   certificate (self-signed ECDSA P-384 / CSR / existing) and the first admin; `--answers FILE`
   takes the same unattended; `--print-answers` validates and prints only. New phase `site` writes
   `/etc/radius-admin/site.yaml` (root 0640) and the certificate; `bootstrap` creates the first

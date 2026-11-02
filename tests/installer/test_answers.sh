@@ -15,6 +15,8 @@ pass() { echo "PASS: $1"; }
 fail() { echo "FAIL: $1"; fails=$((fails + 1)); }
 LOCAL_IP=$(ip -o -4 addr show scope global | awk '{split($4, a, "/"); print a[1]; exit}')
 LOCAL_IP=${LOCAL_IP:-127.0.0.1}
+# no installed monitor unit to take switch networks from (tests below point it at a file)
+export RA_SNMP_UNIT=$W/no-such-unit
 
 good() {
     cat > "$W/a.yaml" <<EOF
@@ -56,14 +58,50 @@ bad "unknown certificate choice" "s/^tls: .*/tls: acme/"
 bad "existing certificate without files" "s/^tls: .*/tls: existing/"
 bad "username with capitals" "s/^admin_username: .*/admin_username: NetAdmin/"
 bad "line that is not key: value" "just text"
+bad "switch network with host bits" "switch_nets: 198.51.100.7/24"
+bad "/0 switch network" "switch_nets: \"192.0.2.0/24 0.0.0.0/0\""
+bad "switch networks with shell characters" "switch_nets: \"192.0.2.0/24;reboot\""
+
+# switch networks (where the monitor may send SNMP and CoA): default admin_net, a list
+# in the answers, else what the installed unit allows, and --switch-nets on the command line
+good
+grep -qx 'switch_nets: 192.0.2.0/24' <<<"$out" \
+    && pass "switch networks default to the management subnet" || fail "switch_nets default: $out"
+echo 'switch_nets: "198.51.100.0/24 2001:db8:5::/48"' >> "$W/a.yaml"
+grep -qx 'switch_nets: "198.51.100.0/24 2001:db8:5::/48"' <("$INSTALL" --answers "$W/a.yaml" --print-answers 2>&1) \
+    && pass "a list of switch networks (IPv4 and IPv6) is accepted" || fail "switch_nets list not accepted"
+good
+printf '[Service]\nIPAddressDeny=any\nIPAddressAllow=198.51.100.0/24\nIPAddressAllow=203.0.113.0/24\n' > "$W/unit"
+grep -qx 'switch_nets: "198.51.100.0/24 203.0.113.0/24"' \
+    <(RA_SNMP_UNIT=$W/unit "$INSTALL" --answers "$W/a.yaml" --print-answers 2>&1) \
+    && pass "switch networks are kept from the installed monitor unit" || fail "live switch networks not kept"
+grep -qx 'switch_nets: 203.0.113.0/24' \
+    <(RA_SNMP_UNIT=$W/unit "$INSTALL" --answers "$W/a.yaml" --switch-nets 203.0.113.0/24 --print-answers 2>&1) \
+    && pass "--switch-nets overrides the answers" || fail "--switch-nets ignored"
+
+# the monitor unit is rendered with exactly those networks, and bad input never reaches it
+(
+    # shellcheck source=../../deploy/lib.sh
+    . "$ROOT/deploy/lib.sh"
+    tmpl=$ROOT/deploy/systemd/radius-admin-snmp.service
+    render_snmp_unit "$tmpl" "$W/r.service" "192.0.2.0/24 2001:db8:5::/48" || exit 1
+    grep -qx 'IPAddressAllow=192.0.2.0/24 2001:db8:5::/48' "$W/r.service" || exit 1
+    ! grep -v '^[[:space:]]*#' "$W/r.service" | grep -qE '@[A-Z_]+@' || exit 1
+    RA_SNMP_UNIT=$W/r.service; [[ $(live_switch_nets) == "192.0.2.0/24 2001:db8:5::/48" ]] || exit 1
+    for b in "" "192.0.2.0/24 x#y" "0.0.0.0/0" "192.0.2.5/24"; do
+        if render_snmp_unit "$tmpl" "$W/b.service" "$b" >/dev/null 2>&1; then exit 1; fi
+    done
+) && pass "monitor unit rendered with the switch networks; bad networks refused" \
+  || fail "render_snmp_unit / live_switch_nets"
 
 "$INSTALL" --print-answers >/dev/null 2>&1 && fail "--print-answers without answers accepted" \
     || pass "--print-answers needs --answers or --interactive"
 
 # interactive: answers piped to the questions; Enter keeps the defaults
-out=$(printf 'portal.example.net\n198.51.100.0/24\n198.51.100.7\n198.51.100.53\n\nops-admin\n' \
+out=$(printf 'portal.example.net\n198.51.100.0/24\n198.51.100.7\n\n198.51.100.53\n\nops-admin\n' \
       | "$INSTALL" --interactive --print-answers 2>&1)
 if grep -qx 'server_name: portal.example.net' <<<"$out" && grep -qx 'admin_net: 198.51.100.0/24' <<<"$out" \
+    && grep -qx 'switch_nets: 198.51.100.0/24' <<<"$out" \
     && grep -qx 'tls: self-signed' <<<"$out" && grep -qx 'admin_username: ops-admin' <<<"$out"; then
     pass "interactive questions take typed answers and defaults"
 else fail "interactive: $out"; fi

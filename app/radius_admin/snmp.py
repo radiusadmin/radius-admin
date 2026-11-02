@@ -26,6 +26,19 @@ import tempfile
 SNMPGET = "/usr/bin/snmpget"
 SNMPWALK = "/usr/bin/snmpbulkwalk"
 
+# radius-admin-snmp.service may only reach the switch networks (systemd IPAddressAllow).
+# A packet to any other address is dropped inside this server: sendto() fails with EPERM,
+# which Net-SNMP reports as "Unknown engine ID (Operation not permitted)".
+_BLOCKED = "outside the switch networks"
+
+
+def blocked_message(host):
+    return "not sent: %s is %s this server lets the monitor reach (switch_nets, RUNBOOK §6.3)" % (host, _BLOCKED)
+
+
+def is_blocked(message):
+    return _BLOCKED in (message or "")
+
 OID_SYS_DESCR = "1.3.6.1.2.1.1.1.0"
 OID_SYS_UPTIME = "1.3.6.1.2.1.1.3.0"
 OID_SYS_NAME = "1.3.6.1.2.1.1.5.0"
@@ -323,7 +336,9 @@ class Session:
         err = (p.stderr or "").strip().splitlines()
         if p.returncode != 0 and not p.stdout.strip():
             msg = err[-1] if err else "exit %d" % p.returncode
-            if "Timeout" in msg:
+            if "Operation not permitted" in p.stderr:
+                msg = blocked_message(host)
+            elif "Timeout" in msg:
                 msg = "no response (wrong address, credentials or access list?)"
             raise SnmpError(msg[:300])
         return parse_output(p.stdout)

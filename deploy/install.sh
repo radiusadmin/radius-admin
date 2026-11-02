@@ -38,6 +38,8 @@
 #   --freeradius-deb FILE   FreeRADIUS package for fr-package (default: the bundled one in packages/)
 #   --listen-ip IP          nginx bind address (default: detected address in admin net)
 #   --admin-net CIDR        default 192.0.2.0/24
+#   --switch-nets "CIDR …"  networks the monitor may reach for SNMP and CoA (default: kept
+#                           from the installed monitor unit, else the admin net)
 #   --server-name NAME      default radius.example.net
 #   --resolver "IP [IP]"    DNS for nginx OCSP lookups (default: resolvectl/resolv.conf)
 #   --sqlite PATH           default /var/lib/freeradius/sqlite/freeradius.db
@@ -62,6 +64,7 @@ RESTART_FR=0
 FR_DEB=""
 LISTEN_IP=""
 RESOLVER=""
+SWITCH_NETS=""
 SKIP_PREFLIGHT=0
 ASSUME_YES=0
 INTERACTIVE=0
@@ -92,6 +95,7 @@ while [[ $# -gt 0 ]]; do
         --freeradius-deb) FR_DEB=$2; shift 2 ;;
         --listen-ip) LISTEN_IP=$2; shift 2 ;;
         --admin-net) RA_ADMIN_NET=$2; shift 2 ;;
+        --switch-nets) SWITCH_NETS=$2; shift 2 ;;
         --server-name) RA_SERVER_NAME=$2; shift 2 ;;
         --resolver) RESOLVER=$2; shift 2 ;;
         --sqlite) RA_SQLITE_DB=$2; shift 2 ;;
@@ -109,11 +113,12 @@ require_root
 if (( INTERACTIVE )) || [[ -n $ANSWERS ]]; then
     USE_ANSWERS=1
     if [[ -n $ANSWERS ]]; then ans_load "$ANSWERS"; fi
+    if [[ -n $SWITCH_NETS ]]; then ANS[switch_nets]=$SWITCH_NETS; fi
     ans_defaults
     if (( INTERACTIVE )); then ans_interactive; fi
     ans_validate
     RA_SERVER_NAME=${ANS[server_name]}; RA_ADMIN_NET=${ANS[admin_net]}
-    LISTEN_IP=${ANS[listen_ip]}; RESOLVER=${ANS[resolver]}
+    LISTEN_IP=${ANS[listen_ip]}; RESOLVER=${ANS[resolver]}; SWITCH_NETS=${ANS[switch_nets]}
     if (( PRINT_ANSWERS )); then ans_print; exit 0; fi
     if (( INTERACTIVE )); then
         say ""; ans_print | sed '1d; s/^/    /'
@@ -748,9 +753,14 @@ phase_app() {
         if put "$HERE/systemd/$u" "/etc/systemd/system/$u" root:root 0644; then reload=1; fi
     done
     if put "$HERE/firewall/radius-admin-firewall.service" /etc/systemd/system/radius-admin-firewall.service root:root 0644; then reload=1; fi
-    # SNMP monitor: network access only to the management subnet
-    local snmpu; snmpu=$(mktemp)
-    sed -e "s#@ADMIN_NET@#$RA_ADMIN_NET#g" "$HERE/systemd/radius-admin-snmp.service" > "$snmpu"
+    # SNMP monitor: network access only to the switch networks. Without answers (updates)
+    # keep what the installed unit allows; the admin net is only the first-install default.
+    local snmpu nets; snmpu=$(mktemp)
+    nets=${SWITCH_NETS:-$(live_switch_nets || true)}
+    nets=${nets:-$RA_ADMIN_NET}
+    render_snmp_unit "$HERE/systemd/radius-admin-snmp.service" "$snmpu" "$nets" \
+        || { rm -f "$snmpu"; die "cannot render radius-admin-snmp.service"; }
+    info "monitor (SNMP, CoA) may reach: $nets"
     if grep -v '^[[:space:]]*#' "$snmpu" | grep -qE '@[A-Z_]+@'; then rm -f "$snmpu"; die "unrendered placeholder in radius-admin-snmp.service"; fi
     if put "$snmpu" /etc/systemd/system/radius-admin-snmp.service root:root 0644; then reload=1; fi
     rm -f "$snmpu"
