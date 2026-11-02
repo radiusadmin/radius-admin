@@ -11,6 +11,10 @@ from . import db
 REASON_HINTS = (
     (r"MAB device not registered", "This MAC is not registered. Approve it under MAB devices → Unknown devices, "
                                    "or add it with Add device."),
+    (r"MAB not used: this device authenticates with a certificate",
+     "This MAC has authenticated with a certificate (802.1X), so it is not offered for MAB approval. The switch "
+     "tried MAB, usually because 802.1X timed out or the port tries MAB first; check the computer's 802.1X "
+     "client and the port's authentication order."),
     (r"MAB registration expired", "The device's MAB registration has expired. Edit the device and set a new "
                                   "expiry date (or clear it)."),
     (r"MAB device is disabled", "The device is registered but disabled. Enable it on its MAB entry."),
