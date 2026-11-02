@@ -35,7 +35,6 @@ jobs:
       CHANNEL: ${{ github.event.workflow_run.head_branch }}
       SHA: ${{ github.event.workflow_run.head_sha }}
       GH_TOKEN: ${{ github.token }}
-      OUT: ${{ runner.temp }}/release
     steps:
       - uses: actions/checkout@v4
         with:
@@ -81,11 +80,12 @@ jobs:
         if: steps.key.outputs.ok == 'true'
         env:
           UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
-        run: tools/release/make-release.sh "$CHANNEL" "$OUT" "${{ steps.v.outputs.prev }}"
+        run: tools/release/make-release.sh "$CHANNEL" "$RUNNER_TEMP/release" "${{ steps.v.outputs.prev }}"
       - name: Publish
         if: steps.key.outputs.ok == 'true'
         run: |
           v=${{ steps.v.outputs.version }}
+          OUT=$RUNNER_TEMP/release
           flags=(--latest)
           if [ "$CHANNEL" != main ]; then flags=(--prerelease --latest=false); fi
           gh release create "v$v" --repo "$GITHUB_REPOSITORY" --target "$SHA" \
