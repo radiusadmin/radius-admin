@@ -204,8 +204,10 @@ phase_preflight() {
 phase_packages() {
     hdr "Phase packages"
     # python3-pysaml2 + xmlsec1: portal single sign-on (SAML signature checks)
+    # tzdata: the zones offered for the console's display time zone
     local pkgs=(postgresql nginx python3-flask python3-psycopg2 gunicorn python3-cryptography
-                python3-qrcode python3-pysaml2 xmlsec1 nftables libpq5 sqlite3 snmp ieee-data ldap-utils)
+                python3-qrcode python3-pysaml2 xmlsec1 nftables libpq5 sqlite3 snmp ieee-data ldap-utils
+                tzdata)
     # NEEDRESTART_SUSPEND: Ubuntu's needrestart would otherwise restart FreeRADIUS (and other
     # services) after apt; the installer restarts radiusd only with --restart-freeradius.
     DEBIAN_FRONTEND=noninteractive NEEDRESTART_SUSPEND=1 apt-get install -y --no-install-recommends "${pkgs[@]}"

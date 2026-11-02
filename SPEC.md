@@ -774,3 +774,15 @@ CSV columns (header row required, exact names, any order tolerated by name):
   explicit confirmation), install progress (refreshes every 10 s) and the last result,
   "Check now" (not in off mode), and the settings. A nav badge shows an available update.
   Audited `update.settings`, `update.check`, `update.install_requested`.
+
+## 17. Change (2026-11-02): display time zone
+
+- **Setting** `display_timezone` in `ui.setting` (absent = `UTC`; no migration): an IANA zone name
+  from the system zone list (`services.timezones()`, tzdata; installer package `tzdata`). Settings page (admin +
+  step-up), "Time zone" select; other names are refused. Audited in `settings.update`
+  (`display_timezone: {from, to}`).
+- **Display only.** Database sessions stay UTC (section 14) and storage is unchanged. The `dt`/`dtc`
+  filters convert to the zone (read once per request, `services.display_zone()`; a stored name
+  that is not a known zone falls back to UTC) and label times with its abbreviation (`%Z`). The
+  auth log's From/To filters are whole days in the zone. Reports and their CSVs (whole UTC days),
+  alert messages, syslog and the audit hash stay in UTC.

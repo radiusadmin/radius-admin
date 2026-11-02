@@ -32,6 +32,13 @@
       {{ m.field_error(errors, 'session_absolute_hours') }}</div>
   </div>
   <p id="stepup_minutes-hint" class="small muted">Allowed: confirm 1–60 minutes, inactivity 5–480 minutes, session 1–24 hours. Changes apply to signed-in sessions at once.</p>
+  <h2>Time zone</h2>
+  <label for="display_timezone">Show times in</label>
+  <select id="display_timezone" name="display_timezone"{{ m.described(errors, 'display_timezone', True) }}>
+    {% for z in zones %}<option value="{{ z }}"{{ ' selected' if z == s.display_timezone else '' }}>{{ z }}</option>{% endfor %}
+  </select>
+  <p id="display_timezone-hint" class="small muted">Times in the authentication and audit logs and on every other console page, and the days of the log date filters. Logs are stored in UTC; reports and alert messages stay in UTC.</p>
+  {{ m.field_error(errors, 'display_timezone') }}
   <div class="actions"><button type="submit" class="btn btn-primary">Save settings</button></div>
 </form>
 </section>

@@ -683,6 +683,12 @@ After a restore, Apply once from the UI so the generated files match the databas
 Forward `radius-admin`/`radius-admin-helper` to the SIEM: uncomment the `omfwd` block in
 `/etc/rsyslog.d/30-radius-admin.conf`.
 
+**Time zone.** The database stores every time in UTC. The console shows times (authentication
+and audit logs, sessions, every other page) in the zone chosen under Settings → Time zone
+(default UTC), labelled with the zone's abbreviation, e.g. `14:00:00 CEST`; the auth log's
+From/To dates are whole days in that zone. Reports, report CSVs, alert messages, syslog and the
+audit hash chain stay in UTC.
+
 ---
 
 ## 9. Upgrading radius-admin

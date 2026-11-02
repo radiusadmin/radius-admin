@@ -52,7 +52,7 @@
   {% endif %}
 
   <div class="actions update-check">
-    {% if check %}<p class="small muted">Last checked {{ check.checked_at.strftime('%Y-%m-%d %H:%M') }} UTC{% if not check.ok %}: <span class="update-error">{{ check.error }}</span>{% endif %}.</p>{% endif %}
+    {% if check %}<p class="small muted">Last checked {{ check.checked_at|dt }}{% if not check.ok %}: <span class="update-error">{{ check.error }}</span>{% endif %}.</p>{% endif %}
     {% if s.mode != 'off' %}{{ m.post_button(url_for('updates.check_now'), 'Check now') }}{% endif %}
   </div>
 </section>
