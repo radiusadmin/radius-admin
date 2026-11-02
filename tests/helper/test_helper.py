@@ -290,7 +290,7 @@ def test_validate_reports_radiusd_errors_and_redacts(env):
     b'update { Tmp-String-0 := "%{ Exec : /bin/id}" }\n',
     b"update control { Exec-Program := /bin/id }\n", b"x = `/bin/id`\n",
     b'x = "%{echo:foo}"\n', b"a\0b\n", b"\xff\xfe\n", b"bell\x07\n",
-    # H-1 regression: numeric aliases of Exec-Program / Exec-Program-Wait / any attribute
+    # numeric aliases of Exec-Program / Exec-Program-Wait / any attribute
     b'update reply { &Attr-502 := "/bin/id" }\n',
     b'update reply {\n\tAttr-503 := "/bin/id"\n}\n',
     b'update control { &attr-502 := "/bin/id" }\n',
