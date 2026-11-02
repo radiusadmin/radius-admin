@@ -26,7 +26,8 @@ jobs:
         run: |
           sudo apt-get install -y -q shellcheck >/dev/null
           shellcheck -S warning deploy/*.sh tests/freeradius/*.sh tests/migration/*.sh \
-              tests/installer/*.sh tools/*.sh tools/ci/*.sh
+              tests/installer/*.sh tests/package/*.sh tools/*.sh tools/ci/*.sh tools/lib/*.sh \
+              tools/package/*.sh
       - name: Site-data scan
         env:
           SITE_TERMS_CONTENT: ${{ secrets.SITE_TERMS }}
@@ -60,6 +61,30 @@ jobs:
         run: cd "$REPO" && sudo -E python3 -m pytest -q -p no:cacheprovider tests/helper
       - name: Installer answers tests
         run: cd "$REPO" && sudo bash tests/installer/test_answers.sh
+
+  package:
+    name: FreeRADIUS package
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    if: >-
+      github.event_name != 'push' ||
+      github.ref_name == 'main' || github.ref_name == 'dev' || github.ref_name == 'testing' ||
+      startsWith(github.ref_name, 'ci/')
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build radius-admin-freeradius
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends build-essential pkg-config dpkg-dev \
+              binutils libtalloc-dev libssl-dev libpq-dev libldap-dev curl gnupg ca-certificates file
+          sudo tools/package/build-freeradius-deb.sh "$GITHUB_WORKSPACE/packages" /var/tmp/ra-frpkg
+      - name: Package tests (install, start, upgrade, purge)
+        run: sudo bash tests/package/test_freeradius_deb.sh --install
+      - uses: actions/upload-artifact@v4
+        with:
+          name: radius-admin-freeradius
+          path: packages/
+          retention-days: 14
 
   bench:
     name: App tests, FreeRADIUS bench and migration

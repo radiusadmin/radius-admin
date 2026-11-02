@@ -15,6 +15,8 @@
 #      with no "..", then unpacks it as root into /opt/radius-admin-src/releases/<time>-<hash>.
 #   2. Compares the new release with the current one and picks the install.sh phases:
 #        packages  if the package list in install.sh changed
+#        fr-package if the bundled FreeRADIUS package (packages/) changed; it upgrades
+#                  radius-admin-freeradius but restarts radiusd only with --restart-freeradius
 #        postgres  if sql/ or deploy/postgres/ changed (all SQL files are idempotent)
 #        app       always (installs only what changed; restarts the web UI and the poller)
 #        nginx     if deploy/nginx/ changed
@@ -175,6 +177,7 @@ if [[ -n $PHASES_OVERRIDE ]]; then
     IFS=, read -r -a phases <<<"$PHASES_OVERRIDE"
 else
     if [[ -z $cur ]] || [[ "$(pkg_list "$cur")" != "$(pkg_list "$new")" ]]; then phases+=(packages); fi
+    if [[ -d $new/packages ]] && changed packages; then phases+=(fr-package); fi
     if changed sql deploy/postgres; then phases+=(postgres); fi
     if changed freeradius; then fr_changed=1; fi
     if ((WITH_FR)); then phases+=(freeradius); fi

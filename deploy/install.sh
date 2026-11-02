@@ -7,6 +7,10 @@
 # Phases (in order):
 #   preflight  read-only checks (deploy/preflight.sh); aborts on blocking failures
 #   packages   apt install from the configured mirror
+#   fr-package install the bundled FreeRADIUS package (packages/radius-admin-freeradius_*.deb)
+#              when no FreeRADIUS is installed, or upgrade it when the bundled one is newer.
+#              A FreeRADIUS installed some other way is kept. Restarts radiusd only with
+#              --restart-freeradius.
 #   users      OS users/groups, directories, AES key (openssl rand 32)
 #   postgres   pg_hba/pg_ident/listen_addresses, roles, schema (sql/*.sql)
 #   migrate    SQLite -> PostgreSQL (deploy/migrate_sqlite_to_pg.py); needs --confirm-migrate
@@ -29,7 +33,8 @@
 #   --phase NAME            run only this phase (repeatable, or comma-separated)
 #   --from NAME             run this phase and all following ones
 #   --confirm-migrate       allow the migrate phase to run
-#   --restart-freeradius    restart FreeRADIUS at the end of the freeradius phase
+#   --restart-freeradius    restart FreeRADIUS at the end of the fr-package and freeradius phases
+#   --freeradius-deb FILE   FreeRADIUS package for fr-package (default: the bundled one in packages/)
 #   --listen-ip IP          nginx bind address (default: detected address in admin net)
 #   --admin-net CIDR        default 192.0.2.0/24
 #   --server-name NAME      default radius.example.net
@@ -48,11 +53,12 @@ SRC=$(cd "$HERE/.." && pwd)
 # shellcheck source=answers.sh
 . "$HERE/answers.sh"
 
-ALL_PHASES=(preflight packages users postgres migrate freeradius app site nginx firewall bootstrap)
+ALL_PHASES=(preflight packages fr-package users postgres migrate freeradius app site nginx firewall bootstrap)
 PHASES=()
 FROM=""
 CONFIRM_MIGRATE=0
 RESTART_FR=0
+FR_DEB=""
 LISTEN_IP=""
 RESOLVER=""
 SKIP_PREFLIGHT=0
@@ -80,6 +86,7 @@ while [[ $# -gt 0 ]]; do
         --from) FROM=$2; shift 2 ;;
         --confirm-migrate) CONFIRM_MIGRATE=1; shift ;;
         --restart-freeradius) RESTART_FR=1; shift ;;
+        --freeradius-deb) FR_DEB=$2; shift 2 ;;
         --listen-ip) LISTEN_IP=$2; shift 2 ;;
         --admin-net) RA_ADMIN_NET=$2; shift 2 ;;
         --server-name) RA_SERVER_NAME=$2; shift 2 ;;
@@ -163,6 +170,15 @@ fr_check() { # fr_check RADDB -> runs radiusd -XC as root (radiusd parses config
     return 1
 }
 
+fr_restart() { # fr_restart -> restart FreeRADIUS and wait until it listens on UDP 1812
+    systemctl restart "$FR_SVC.service" || true
+    for _ in $(seq 1 15); do
+        systemctl is-active --quiet "$FR_SVC.service" && ss -H -lun | awk '{print $4}' | grep -q ':1812$' && return 0
+        sleep 1
+    done
+    return 1
+}
+
 app_env() { # run a command as radius-admin with the app environment
     runuser -u radius-admin -- env -i PATH=/usr/bin:/bin LANG=C.UTF-8 \
         "RADIUS_ADMIN_CONFIG=$ETC/radius-admin.conf" "PYTHONPATH=$OPT/app" \
@@ -194,6 +210,59 @@ phase_packages() {
         rm -f /etc/nginx/sites-enabled/default
         info "disabled nginx default site (port 80)"
         systemctl reload nginx 2>/dev/null || true
+    fi
+}
+
+phase_fr_package() {
+    hdr "Phase fr-package"
+    local deb=$FR_DEB
+    [[ -n $deb ]] || deb=$(detect_bundled_fr "$SRC/packages" || true)
+    if [[ -z $deb ]]; then
+        if detect_fr_service >/dev/null; then
+            info "no bundled FreeRADIUS package for this system; using the installed FreeRADIUS"
+            return 0
+        fi
+        die "FreeRADIUS is not installed and this release has no radius-admin-freeradius package for this system (build one with tools/package/build-freeradius-deb.sh, or pass --freeradius-deb FILE)"
+    fi
+    deb=$(realpath "$deb")
+    [[ -f $deb ]] || die "FreeRADIUS package not found: $deb"
+    [[ -f $deb.sha384 ]] || die "checksum file missing: $deb.sha384"
+    (cd "$(dirname "$deb")" && sha384sum --quiet --strict -c "$(basename "$deb").sha384") \
+        || die "$deb does not match $deb.sha384 (damaged or replaced package)"
+    local name ver have svc
+    name=$(dpkg-deb -f "$deb" Package); ver=$(dpkg-deb -f "$deb" Version)
+    [[ $name == radius-admin-freeradius ]] || die "$deb is not the radius-admin-freeradius package ($name)"
+    ok "bundled package $name $ver (SHA-384 verified)"
+    have=$(dpkg-query -W -f '${Status} ${Version}\n' radius-admin-freeradius 2>/dev/null \
+           | awk '$1 == "install" && $3 == "installed" {print $4}' || true)
+    if [[ -n $have ]] && dpkg --compare-versions "$have" ge "$ver"; then
+        ok "radius-admin-freeradius $have is installed"
+        return 0
+    fi
+    if [[ -z $have ]]; then
+        # Never replace a FreeRADIUS installed some other way: its configuration and
+        # binaries are live. Moving such a server onto the package is a separate step.
+        if dpkg-query -W -f '${Status}' freeradius 2>/dev/null | grep -q 'install ok installed'; then
+            warn "the distribution's freeradius package is installed; keeping it (the bundled package is not installed)"
+            return 0
+        fi
+        svc=$(detect_fr_service || true)
+        if [[ -n $svc ]]; then
+            warn "FreeRADIUS is already installed ($svc.service, $(detect_radiusd "$svc" || echo 'radiusd not found')); keeping it (the bundled package is not installed)"
+            return 0
+        fi
+    fi
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends "$deb"
+    ok "installed radius-admin-freeradius $ver${have:+ (was $have)}"
+    FR_SVC=""; RADIUSD=""
+    detect_fr
+    if [[ -n $have ]] && systemctl is-active --quiet "$FR_SVC.service"; then
+        if (( RESTART_FR )); then
+            fr_restart || die "$FR_SVC did not come up after the upgrade to $ver: see /var/log/freeradius/radius.log and journalctl -u $FR_SVC"
+            ok "$FR_SVC restarted on $ver and listening on UDP 1812"
+        else
+            warn "FreeRADIUS still runs $have. Restart it in the maintenance window: systemctl restart $FR_SVC  (or re-run with --restart-freeradius)"
+        fi
     fi
 }
 
@@ -587,13 +656,11 @@ phase_freeradius() {
         restore_raddb "$tarball"
         die "freeradius phase failed; previous configuration restored (service was not restarted)"
     fi
+    if ! systemctl is-enabled --quiet "$FR_SVC.service"; then
+        systemctl enable --quiet "$FR_SVC.service"; info "enabled $FR_SVC.service"
+    fi
     if (( RESTART_FR )); then
-        systemctl restart "$FR_SVC.service"
-        for _ in $(seq 1 15); do
-            systemctl is-active --quiet "$FR_SVC.service" && ss -H -lun | awk '{print $4}' | grep -q ':1812$' && break
-            sleep 1
-        done
-        if systemctl is-active --quiet "$FR_SVC.service" && ss -H -lun | awk '{print $4}' | grep -q ':1812$'; then
+        if fr_restart; then
             ok "$FR_SVC restarted and listening on UDP 1812"
         else
             bad "$FR_SVC did not come up; restoring $tarball"
@@ -674,13 +741,13 @@ phase_app() {
     fi
     # Disconnect / re-authenticate use radclient from the FreeRADIUS build (SPEC section 13)
     local rc_found="" d
-    for d in /usr/local/bin /usr/bin /usr/local/sbin /usr/sbin /opt/freeradius/bin "$(dirname "$RADIUSD")" \
+    for d in /opt/radius-admin-freeradius/bin /usr/local/bin /usr/bin /usr/local/sbin /usr/sbin /opt/freeradius/bin "$(dirname "$RADIUSD")" \
              "$(dirname "$(dirname "$RADIUSD")")/bin"; do
         if [[ -x $d/radclient ]]; then rc_found=$d/radclient; break; fi
     done
     if [[ -n $rc_found ]]; then
         ok "radclient found: $rc_found (disconnect / re-authenticate available)"
-        if [[ $rc_found != /usr/local/bin/radclient && $rc_found != /usr/bin/radclient && \
+        if [[ $rc_found != /opt/radius-admin-freeradius/bin/radclient && $rc_found != /usr/local/bin/radclient && $rc_found != /usr/bin/radclient && \
               $rc_found != /usr/local/sbin/radclient && $rc_found != /usr/sbin/radclient && \
               $rc_found != /opt/freeradius/bin/radclient ]] && ! grep -q '^radclient *=' "$ETC/radius-admin.conf"; then
             warn "radclient is not in a standard path: add 'radclient = $rc_found' to $ETC/radius-admin.conf [app]"
@@ -899,6 +966,7 @@ for p in "${ALL_PHASES[@]}"; do
     case $p in
         preflight) phase_preflight ;;
         packages) phase_packages ;;
+        fr-package) phase_fr_package ;;
         users) phase_users ;;
         postgres) phase_postgres ;;
         migrate) phase_migrate ;;

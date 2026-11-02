@@ -1,0 +1,12 @@
+#!/bin/sh
+# radius-admin-freeradius postrm. /etc/freeradius holds the site's secrets and keys and is
+# never deleted by the package, not even on purge; remove it by hand if you mean to.
+set -e
+if [ -d /run/systemd/system ]; then systemctl daemon-reload || true; fi
+if [ "$1" = purge ]; then
+    rm -rf /var/log/freeradius /run/radiusd
+    if [ -d /etc/freeradius ]; then
+        echo "radius-admin-freeradius: /etc/freeradius was kept (it holds keys and secrets)"
+    fi
+fi
+exit 0

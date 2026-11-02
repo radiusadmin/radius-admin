@@ -4,23 +4,14 @@
 #   tools/ci/build-freeradius.sh [PREFIX] [SRCDIR]   (defaults /opt/fr-3.2.10 /opt/ci-src)
 # Afterwards: PREFIX/sbin/radiusd, SRCDIR/eapol_test, SRCDIR/freeradius-server-3.2.10 (sources).
 set -euo pipefail
-V=3.2.10
+# shellcheck source=../lib/fr-release.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/lib/fr-release.sh"
+V=$FR_VERSION
 PREFIX=${1:-/opt/fr-$V}
 SRC=${2:-/opt/ci-src}
-# packages@freeradius.org release signing key
-FPR=BF2384EC6938B9744B03E2A620E37C25995B4F85
-mkdir -p "$SRC" && cd "$SRC"
-
-T=freeradius-server-$V.tar.gz
-U=https://github.com/FreeRADIUS/freeradius-server/releases/download/release_${V//./_}
-[[ -f $T ]] || curl -fsSL -o "$T" "$U/$T"
-[[ -f $T.sig ]] || curl -fsSL -o "$T.sig" "$U/$T.sig"
-export GNUPGHOME=$SRC/gnupg
-mkdir -p "$GNUPGHOME" && chmod 700 "$GNUPGHOME"
-curl -fsSL https://freeradius.org/pgp/packages@freeradius.org | gpg -q --import 2>/dev/null
-gpg --status-fd 1 --verify "$T.sig" "$T" 2>/dev/null | grep -q "^\[GNUPG:\] VALIDSIG $FPR " \
-    || { echo "FreeRADIUS $V: signature does not verify with key $FPR" >&2; exit 1; }
-echo "FreeRADIUS $V: signature OK ($FPR)"
+fr_fetch_verified "$SRC"
+cd "$SRC"
+T=$FR_TARBALL
 
 if [[ ! -x $PREFIX/sbin/radiusd ]]; then
     rm -rf "freeradius-server-$V"

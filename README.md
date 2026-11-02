@@ -112,9 +112,12 @@ FreeRADIUS when you click **Apply**. More detail: [SPEC.md](SPEC.md) and
 
 - Ubuntu 24.04 LTS (Debian 12 is planned) with 2 vCPU, 4 GB RAM and 20 GB disk for a few
   hundred switches.
-- FreeRADIUS **3.2.10**, built from the signed upstream release with `--enable-fips-workaround`
-  (one build works in standard and FIPS mode). See [tests/freeradius/README.md](tests/freeradius/README.md)
-  for the build steps.
+- FreeRADIUS **3.2.10** comes with radius-admin: the release bundle carries the
+  `radius-admin-freeradius` package, built from the signed upstream release with
+  `--enable-fips-workaround` (one build works in standard and FIPS mode), and the installer
+  installs it on a server without FreeRADIUS. It never overwrites an existing FreeRADIUS or
+  `/etc/freeradius`. To build the package yourself: `sudo tools/package/build-freeradius-deb.sh`
+  ([RUNBOOK §1.2](docs/RUNBOOK.md#12-the-bundled-freeradius-package)).
 - Distribution packages only, with no pip or npm: PostgreSQL 16, nginx, Python 3.12 with
   `python3-flask`, `python3-psycopg2`, `python3-cryptography`, `python3-pysaml2` and friends
   ([app/requirements-apt.txt](app/requirements-apt.txt)).
@@ -176,9 +179,9 @@ allow TCP 2083 from those clients.
 
 Being a young project, some parts are still to come:
 
-- The installer expects FreeRADIUS 3.2.10 to be installed already, with its certificates under
-  `/etc/freeradius/certs/site/`. Packaging FreeRADIUS and generating its whole configuration
-  are the next phases.
+- The installer expects the FreeRADIUS certificates under `/etc/freeradius/certs/site/`.
+  Generating the whole FreeRADIUS configuration is the next phase.
+- The bundled FreeRADIUS package is built for Ubuntu 24.04 (amd64); Debian 12 follows.
 - The nginx phase expects the site CA bundle and an OCSP responder for client-certificate MFA.
 - Vendor profiles: Cisco Catalyst 1200/1300 is the tested switch family today.
 - Signed updates from GitHub Releases are planned. Today, updates use `deploy/update.sh` or the
