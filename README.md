@@ -148,6 +148,7 @@ FreeRADIUS when you click **Apply**. More detail: [SPEC.md](SPEC.md) and
    ```yaml
    server_name: radius.example.net
    admin_net: 192.0.2.0/24
+   switch_nets: "192.0.2.0/24 198.51.100.0/24"
    listen_ip: 192.0.2.10
    resolver: "192.0.2.53"
    tls: self-signed

@@ -535,7 +535,10 @@ CSV columns (header row required, exact names, any order tolerated by name):
   IEEE8021-PAE-MIB port control (2 = auto → 802.1X port), IF-MIB ifName (standalone C1300 `gi4`
   → `gi1/0/4`), RADIUS-AUTH-CLIENT-MIB ext table (RFC 4668) or old table.
 - `radius_admin/snmp_poller.py` + `deploy/systemd/radius-admin-snmp.service`: OS user
-  radius-admin, the only component with network access (IPAddressAllow = admin subnet).
+  radius-admin, the only component with network access (IPAddressAllow = the switch networks:
+  answers key `switch_nets` / `install.sh --switch-nets`, default the admin subnet; runs without
+  answers keep the installed unit's list). A send that systemd drops (EPERM) is reported as
+  "not sent: <address> is outside the switch networks…" (`snmp.blocked_message`), for SNMP and CoA.
   Polls only clients with `ui.radius_client.is_switch` (default false) that are a single address; optional auto-sync of `dot1x_ports` (audited,
   actor `system:snmp-poller`), compared as port sets.
 - UI: Switch monitoring page (admin + step-up; passphrases write-only), Refresh now and Test
@@ -653,11 +656,23 @@ CSV columns (header row required, exact names, any order tolerated by name):
   and not pending) and optional ones (second admin, switch admins, SSO, RadSec, monitoring, alert
   e-mail; skippable). Dashboard strip until finished. Audited `setup.skip|restore|finish|reopen`.
 - **Installer answers** (`deploy/answers.sh`): `install.sh` with no options on a terminal, or
-  `--interactive`, asks server name, management subnet, listen address, resolvers, portal
+  `--interactive`, asks server name, management subnet, listen address, switch networks, resolvers, portal
   certificate (self-signed ECDSA P-384 / CSR / existing) and the first admin; `--answers FILE`
   takes the same unattended; `--print-answers` validates and prints only. New phase `site` writes
   `/etc/radius-admin/site.yaml` (root 0640) and the certificate; `bootstrap` creates the first
   admin. With a CSR the run stops until the issued certificate is installed.
+- **Portal settings without answers** (`update.sh`, which runs `install.sh --phase … -y`, or a
+  phase run by hand): `server_name`, `admin_net`, `listen_ip` and `resolver` come from
+  `/etc/radius-admin/site.yaml` (read with `ans_load`), else from the installed nginx site
+  (`server_name`, `allow`, `listen …:443`, `resolver`), else from `/etc/radius-admin/firewall.nft`
+  (`ip saddr`/`ip daddr`); `ocsp_url` from the nginx site (`ssl_ocsp_responder`) unless
+  `RA_OCSP_URL` is set. Values found this way are validated like answers and a bad one stops the
+  run. `--admin-net`, `--listen-ip`, `--server-name` and `--resolver` win over all of these and
+  over an answers file. The `nginx` and `firewall` phases stop when no management subnet is
+  known instead of using the 192.0.2.0/24 example, and after they install write the values in use
+  back into an existing `site.yaml` (other keys kept), so a later update does not revert an
+  option. `install.sh --print-settings` prints each value and its source; `update.sh` shows it in
+  the plan when it runs `nginx` or `firewall`, and stops (release discarded) if it fails.
 - **Navigation and wording.** Side navigation grouped by topic: Network access (RADIUS clients,
   access rules, MAB devices, switch admins, custom policy, Apply changes), Monitoring, Records,
   Administration (settings, single sign-on, UI admins, setup checklist; admins only). The

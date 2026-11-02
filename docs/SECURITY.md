@@ -196,7 +196,8 @@ without a FreeRADIUS restart. Security properties:
 ### 2.y Read-only SNMPv3 switch monitoring
 
 * **Separate, network-restricted service.** Only `radius-admin-snmp.service` may send
-  network traffic, and systemd limits it to the management subnet (`IPAddressAllow`);
+  network traffic, and systemd limits it to the switch networks (`IPAddressAllow`, installer
+  answer `switch_nets`, default the management subnet);
   the web app and the root helper still have no network access.
 * **Read-only by design.** The switch-side user should have a read-only view limited to
   the four subtrees in RUNBOOK §6.3. Nothing is ever written to a switch; no running
@@ -215,7 +216,7 @@ without a FreeRADIUS restart. Security properties:
 ### 2.z Monitoring, session actions, MAB queue and reports (2026-10-29)
 
 * **Network.** CoA to switches (UDP 1700) and SNMP are sent only by `radius-admin-snmp`,
-  still limited by `IPAddressAllow` to the management subnet. Email alerts to a relay outside
+  still limited by `IPAddressAllow` to the switch networks. Email alerts to a relay outside
   it need an explicit drop-in (RUNBOOK §6.5). The web app gained no network access.
 * **Session actions** are operator/admin only, queued in the database, executed by the
   monitor, and audited twice (request with the user who asked, result with the switch's
