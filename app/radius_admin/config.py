@@ -38,6 +38,11 @@ DEFAULTS = {
     # look in the usual places (and next to it, <prefix>/share/freeradius for dictionaries).
     "radclient": "",
     "radius_dict_dir": "",
+    # Updates (SPEC section 16): signed builds published as releases of this repository
+    "update_repo": "radiusadmin/radius-admin",
+    "update_api": "https://api.github.com",
+    "update_dir": "/var/lib/radius-admin/updates",
+    "build_file": "/opt/radius-admin/BUILD.json",
 }
 
 _BOOL = {k for k, v in DEFAULTS.items() if isinstance(v, bool)}

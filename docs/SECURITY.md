@@ -43,6 +43,7 @@ record them in the SSP.
 | EAP-TLS (TLS 1.2, FIPS cipher list) | FreeRADIUS rlm_eap_tls | libssl | OpenSSL FIPS provider |
 | LDAPS to AD | FreeRADIUS rlm_ldap → libldap | **GnuTLS** — Ubuntu's libldap is built against GnuTLS, so this connection does **not** use the OpenSSL FIPS provider | **Outside the OpenSSL boundary — see exception 5.** Verify whether the GnuTLS in use is a FIPS-validated module in your Ubuntu Pro FIPS stream |
 | Package signatures | apt | gpgv | not a FIPS function (integrity of software supply, outside the boundary) |
+| Update signatures (ECDSA P-384, SHA-384) | root helper (`update_install`), release job | `openssl dgst -sha384 -verify` / `-sign` | OpenSSL FIPS provider (approved); verified the same way in both modes |
 | Bundled FreeRADIUS package integrity | installer (`fr-package`) | `sha384sum`; the upstream source signature is checked with `gpg` at build time | not a FIPS function (supply-chain integrity). The `.sha384` travels in the same bundle, so it detects damage, not tampering: that comes from the bundle's SHA-256 checked by `update.sh --sha256` (the push script passes it) until releases carry a signed manifest |
 
 The app refuses to start (and the CLI refuses to run) when `require_fips = true` unless
@@ -235,6 +236,37 @@ without a FreeRADIUS restart. Security properties:
 * **Reports** never include shared secrets or password hashes; CSV cells that a spreadsheet
   would evaluate are prefixed with `'` (formula injection); each view or download is in the
   audit log; the privileged-access report is admin-only.
+
+### 2.u Updates from signed GitHub builds (SPEC section 16)
+
+An update is code that runs as root, so the trust decision is made by root, from root-owned
+material, and never by the component that talks to the network.
+
+- **Who can publish.** Builds are signed in the `release` job with an ECDSA P-384 key held
+  only as the `UPDATE_SIGNING_KEY` secret (offline copy with the maintainer). The job refuses a
+  key that does not match the public key committed in `deploy/keys/update-signing.pem`.
+  Requiring a reviewer on the `release` environment adds a second person to every release.
+- **What a server trusts.** Only the public key installed with the release it runs
+  (`/usr/local/share/radius-admin/update-signing.pem`, root 0644). Nothing downloaded can
+  change it; a new key arrives only inside a release signed with the current one, and takes
+  effect after that release is installed.
+- **Separation.** The check service (radius-admin, the only component with outbound HTTPS,
+  only while it runs) downloads into `/var/lib/radius-admin/updates` and trusts nothing it
+  fetched. The web app has no network access and only asks the helper. The helper copies the
+  files into its root-only directory before checking them, so a compromised radius-admin
+  account cannot swap them after the check; it then verifies the signature and the bundle's
+  SHA-384 and starts the install unit, which reads only that copy.
+- **Downgrades.** The helper refuses a build that is not newer than the installed one unless
+  the request says `allow_downgrade: true`; the portal sends that only for a build offered as
+  a downgrade (another channel) and after an explicit confirmation with step-up. Note that an
+  attacker who can make the portal send it can still install an *older signed* build; every
+  install is audited with the admin's name.
+- **Failure handling.** Database dump before every install, health checks after, automatic
+  rollback of the web UI, and no automatic retry of a failed build.
+- **Not covered.** A compromised signing key or a malicious commit that passes review and CI
+  is installed like any other build (mitigations: the reviewer on `release`, protected
+  branches, notify mode as the default). The bundle's FreeRADIUS package is checked by the
+  signed manifest (it is inside the bundle) in addition to its own `.sha384`.
 
 ## 3. NIST SP 800-171 Rev. 2 — how the UI supports the requirements
 
