@@ -1,4 +1,4 @@
-"""FIPS is invisible when FIPS mode is off: no page mentions it (docs/PLAN-universal.md)."""
+"""FIPS is invisible when FIPS mode is off: no page mentions it."""
 
 
 def _get_pages(app):

@@ -45,19 +45,19 @@ Verified in FreeRADIUS 3.2.10 source:
 ```
 radius-admin/
   SPEC.md                      this file
-  README.md                    overview / quick start            (DEPLOY agent)
-  docs/RUNBOOK.md              install, migrate, verify, rollback (DEPLOY agent)
-  docs/SECURITY.md             FIPS boundary, exceptions, 800-171 mapping, findings (DEPLOY agent)
-  app/                         Python application                 (APP agent, except unlang.py)
+  README.md                    overview / quick start
+  docs/RUNBOOK.md              install, migrate, verify, rollback
+  docs/SECURITY.md             FIPS boundary, exceptions, 800-171 mapping, findings
+  app/                         Python application
     radius_admin/
       __init__.py              create_app()
-      unlang.py                policy + clients file rendering & validators (FR agent owns)
+      unlang.py                policy + clients file rendering & validators
       ...
     tests/
-  helper/radius-admin-helper   root helper, python3 stdlib only   (DEPLOY agent)
-  sql/                         Postgres DDL                       (FR agent)
+  helper/radius-admin-helper   root helper, python3 stdlib only
+  sql/                         Postgres DDL
     00-roles.sql 10-freeradius-schema.sql 20-radius-admin-schema.sql 30-grants.sql
-  freeradius/                  FreeRADIUS config deliverables     (FR agent)
+  freeradius/                  FreeRADIUS config deliverables
     mods-available/sql
     mods-available/eap
     mods-available/ldap
@@ -67,10 +67,10 @@ radius-admin/
     mods-config/files/authorize
     modules-to-disable.txt
     diffs/*.diff               unified diffs vs stock FreeRADIUS 3.2.10 raddb
-  deploy/                      (DEPLOY agent unless stated)
+  deploy/
     install.sh                 idempotent installer
     preflight.sh               read-only checks before anything changes
-    migrate_sqlite_to_pg.py    (FR agent)
+    migrate_sqlite_to_pg.py
     rollback.sh
     make-csr.sh
     nginx/radius-admin.conf
@@ -238,12 +238,13 @@ genesis prev_hash = 64 zeros. Insert must be serialized with
 `SELECT pg_advisory_xact_lock(7212001)` inside the transaction (LOCK TABLE is not
 possible: radius_admin has no UPDATE/DELETE on that table).
 
-The SQL files in `sql/` are ALREADY WRITTEN and validated (by the lead). Agents must not
-change them without reporting why. A sandbox PostgreSQL 16 cluster is running
-(`pg_ctlcluster 16 main`, socket /var/run/postgresql) with roles and database `radius`
-loaded from these files.
+The SQL files in `sql/` are applied in numeric order. Change them only with a reason
+recorded in the commit; a migration only adds objects, and old ones go at least one
+release later, so a rollback never needs a database restore. A sandbox
+PostgreSQL 16 cluster (`pg_ctlcluster 16 main`, socket /var/run/postgresql) has the
+roles and database `radius` loaded from these files.
 
-## 4. FreeRADIUS changes (FR agent)
+## 4. FreeRADIUS changes
 
 1. `mods-available/sql`: dialect postgresql, driver rlm_sql_postgresql,
    `radius_db = "dbname=radius host=/var/run/postgresql user=radius_fr"`, `read_clients`
@@ -255,7 +256,7 @@ loaded from these files.
 3. `sites-available/default`:
    - authorize: remove `chap`, `mschap`, `digest`; after `preprocess` insert
      `radius_admin_mab` then `if (&control:Auth-Type == Accept) { return }`... (exact
-     form is FR agent's choice but MAB must not hit LDAP/PAP).
+     form is free but MAB must not hit LDAP/PAP).
    - authenticate: remove CHAP, MS-CHAP, `mschap`, `digest`.
    - post-auth: replace the hand-written "Site policy" block (orig lines 847–934) with
      the single line `radius_admin_postauth`. Everything else unchanged.
@@ -276,7 +277,7 @@ loaded from these files.
 10. Must be validated against a real FreeRADIUS 3.2.10 built from source with
    `--enable-fips-workaround` (sandbox), including functional radtest checks.
 
-## 5. Generated unlang (FR agent implements in `app/radius_admin/unlang.py`)
+## 5. Generated unlang
 
 `render_policy(settings: dict, rules: list[dict], custom: str) -> str` produces the full
 content of `/etc/freeradius/policy.d/radius-admin`. It defines exactly these policies:
@@ -320,7 +321,7 @@ limit_proxy_state = .. }` per enabled client, sorted by name, deterministic. Use
 `ipv4addr`/`ipv6addr` per family; CIDR allowed.
 The helper performs its own independent safety checks (§6).
 
-## 6. Root helper protocol (DEPLOY agent implements; APP agent's client)
+## 6. Root helper protocol
 
 Socket `/run/radius-admin-helper.sock`, one JSON object per line (UTF-8, ≤ 64 KiB) in,
 one JSON line out, then the connection closes. Request: `{"action": <str>, ...}`.
@@ -345,7 +346,7 @@ nas_type, require_message_authenticator, limit_proxy_state) and comments; policy
 must not contain `$INCLUDE`, `$-INCLUDE`, `$ENV`, `$TEMPLATE`, `%{exec:`, `Exec-Program`,
 backticks. Helper logs every action to syslog (ident `radius-admin-helper`).
 
-## 7. Crypto / FIPS rules (ALL agents)
+## 7. Crypto / FIPS rules (all components)
 
 - All crypto through system OpenSSL 3 (FIPS provider). Python: `hashlib`, `hmac`
   (OpenSSL-backed), `ssl.RAND_bytes` for ALL randomness (tokens, salts, secrets, TOTP
@@ -380,7 +381,7 @@ require_ma: wifi-aps 'yes', switches 'auto').
 radcheck: existing `Crypt-Password` rows migrated unchanged (flagged legacy in UI);
 radpostauth/radacct history migrated WITHOUT `pass`.
 
-## 9. Web app requirements (APP agent)
+## 9. Web app requirements
 
 Flask (apt python3-flask 3.0.x), Jinja2 autoescape, psycopg2 (apt), gunicorn (apt),
 python3-cryptography, optional python3-qrcode (SVG; fall back to showing the secret).
@@ -432,7 +433,7 @@ No Flask sessions/itsdangerous; own server-side sessions (§3.2).
 User decision: access rules and settings take effect immediately (no restart); RADIUS
 clients and custom policy keep the validate → apply → restart flow.
 
-- `sql/40-live-policy.sql` (written + validated by the lead, loaded in sandbox DBs
+- `sql/40-live-policy.sql` (loaded in sandbox DBs
   `radius` and `radius_apptest`) adds SECURITY DEFINER functions, EXECUTE granted to
   radius_fr and radius_admin (radius_fr still has NO rights on schema ui):
   - `radius_admin_vlan(port_type text, called_station_id text, groups text) -> text|NULL`
@@ -463,7 +464,7 @@ CSV columns (header row required, exact names, any order tolerated by name):
   `encrypted` | `none` (case-insensitive). `key_scope`: `server` | `global` | `none` (or empty; `host` accepted as alias of server)
   (`global` = the switch has no per-server key and uses its global `radius-server key`).
   `dot1x_ports`: free text (e.g. `gi1/0/1-24`), informational, ≤ 1000 chars, stored as is.
-- `sql/50-client-import.sql` (written + validated by the lead, loaded in sandbox DBs) adds
+- `sql/50-client-import.sql` (loaded in sandbox DBs) adds
   to ui.radius_client: `key_status` ('ok'|'encrypted'|'missing', default 'ok'),
   `key_scope` (NULL = none|'server'|'global'), `dot1x_ports` (text, default ''), and CHECK
   `key_status = 'ok' OR NOT enabled` — a client without a usable plaintext key can never

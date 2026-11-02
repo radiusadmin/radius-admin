@@ -1,4 +1,5 @@
-"""Regression tests for security review findings L-3, L-5, L-6, I-1, L-4."""
+"""Hardening regression tests: last-admin race, oversized CSV fields, step-up for secrets,
+open redirects, apply-log integrity."""
 import re
 import threading
 
@@ -14,7 +15,7 @@ def q(superconn, sql, params=()):
         return cur.fetchall() if cur.description else None
 
 
-# ------------------------------------------------------------------ L-3
+# ------------------------------------------------------ last-admin race
 def test_last_admin_race_serialized(app, superconn, make_user):
     """Two admins disabling each other concurrently must leave one enabled admin."""
     a = make_user(username="adm-a", role="admin")
@@ -70,7 +71,7 @@ def test_last_admin_lock_blocks_concurrent_transaction(app, superconn, make_user
     assert q(superconn, "SELECT role FROM ui.admin_user WHERE id=%s", (b.id,)) == [("admin",)]
 
 
-# ------------------------------------------------------------------ L-5
+# -------------------------------------------------- oversized CSV field
 def test_csv_huge_field_is_form_error(browser, superconn, logged_in):
     logged_in("operator")
     big = "00-11-22-33-44-55,40," + '"' + "x" * (140 * 1024) + '"\n'
@@ -96,7 +97,7 @@ def test_csv_unterminated_quote(browser, superconn, logged_in):
     assert r.status_code in (302, 400)  # csv module may accept EOF-in-quote; must never be 500
 
 
-# ------------------------------------------------------------------ L-6
+# ------------------------------------------- step-up for secret changes
 CLIENT = {"name": "sw1", "ipaddr": "192.0.2.1", "nas_type": "cisco", "require_ma": "auto",
           "limit_proxy_state": "auto", "enabled": "1"}
 
@@ -151,7 +152,7 @@ def test_secret_change_ok_within_stepup_window(browser, superconn, logged_in):
     assert "stepup_password" not in browser.text(browser.get("/clients/new"))
 
 
-# ------------------------------------------------------------------ I-1
+# ------------------------------------------------------- open redirects
 @pytest.mark.parametrize("target", [
     "/%2f/evil.com", "/%2F%2Fevil.com", "//evil.com", "/\\evil.com", "/%5cevil.com", "/%5C/evil",
     "/%252f/evil.com", "https://evil.com", "http:/evil.com", "javascript:alert(1)", "evil.com", "",
@@ -174,7 +175,7 @@ def test_stepup_next_open_redirect(browser, superconn, logged_in):
     assert r.status_code == 302 and r.headers["Location"].endswith("/dashboard")
 
 
-# ------------------------------------------------------------------ L-4
+# --------------------------------------------- apply log is helper-only
 def test_app_cannot_modify_apply_log_and_never_tries(app):
     import pathlib
     root = pathlib.Path(app.root_path)
