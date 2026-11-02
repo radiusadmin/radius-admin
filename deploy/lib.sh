@@ -65,6 +65,16 @@ detect_radiusd() {
     return 1
 }
 
+# The bundled radius-admin-freeradius package in DIR for this distribution release and
+# architecture (newest version if several), built by tools/package/build-freeradius-deb.sh.
+detect_bundled_fr() {
+    local dir=$1 dist arch
+    # shellcheck disable=SC1091
+    dist=$(. /etc/os-release && printf '%s%s' "$ID" "$VERSION_ID")
+    arch=$(dpkg --print-architecture 2>/dev/null) || return 1
+    compgen -G "$dir/radius-admin-freeradius_*~${dist}_$arch.deb" | sort -V | tail -n1 | grep .
+}
+
 # Directory holding rlm_*.so of the build that $1 (radiusd) belongs to.
 detect_fr_libdir() {
     local radiusd=$1 d rp prefix

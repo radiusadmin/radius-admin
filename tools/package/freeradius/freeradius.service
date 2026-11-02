@@ -1,0 +1,37 @@
+[Unit]
+Description=FreeRADIUS server (radius-admin-freeradius)
+Documentation=man:radiusd(8) man:radiusd.conf(5)
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+# radiusd starts as root, reads its configuration (some files are root-only, e.g. the
+# clients file) and drops to "user = freerad" itself, as the root helper's
+# radiusd -XC check expects.
+Type=simple
+Environment=FREERADIUS_OPTIONS=
+EnvironmentFile=-/etc/default/freeradius
+Environment=HOSTNAME=%H
+RuntimeDirectory=radiusd
+RuntimeDirectoryMode=0775
+RuntimeDirectoryPreserve=yes
+ExecStartPre=/opt/radius-admin-freeradius/sbin/radiusd $FREERADIUS_OPTIONS -Cx -lstdout
+ExecStart=/opt/radius-admin-freeradius/sbin/radiusd -f $FREERADIUS_OPTIONS
+ExecReload=/opt/radius-admin-freeradius/sbin/radiusd $FREERADIUS_OPTIONS -Cxm -lstdout
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=5
+MemoryMax=2G
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ProtectControlGroups=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+SystemCallArchitectures=native
+ReadWritePaths=/var/log/freeradius
+
+[Install]
+WantedBy=multi-user.target

@@ -7,3 +7,5 @@ __pycache__/
 *.p12
 *.pem.bak
 /site-terms.txt
+/packages/
+/dist/

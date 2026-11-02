@@ -19,9 +19,10 @@ import subprocess
 import tempfile
 import time
 
-SEARCH_DIRS = ("/usr/local/bin", "/usr/bin", "/usr/local/sbin", "/usr/sbin", "/opt/freeradius/bin",
+# the bundled radius-admin-freeradius package first, so it wins over a distribution radclient
+SEARCH_DIRS = ("/opt/radius-admin-freeradius/bin", "/usr/local/bin", "/usr/bin", "/usr/local/sbin", "/usr/sbin", "/opt/freeradius/bin",
                "/opt/freeradius/sbin")
-DICT_DIRS = ("/usr/share/freeradius", "/usr/local/share/freeradius", "/opt/freeradius/share/freeradius")
+DICT_DIRS = ("/opt/radius-admin-freeradius/share/freeradius", "/usr/share/freeradius", "/usr/local/share/freeradius", "/opt/freeradius/share/freeradius")
 
 _SESSION_RE = re.compile(r"^[\x21\x23-\x5b\x5d-\x7e]{1,128}$")        # printable, no space, '"' or '\'
 _STATION_RE = re.compile(r"^[0-9A-Fa-f]{2}([:.\-]?[0-9A-Fa-f]{2}){5}$|^[0-9A-Fa-f]{4}\.[0-9A-Fa-f]{4}\.[0-9A-Fa-f]{4}$")
