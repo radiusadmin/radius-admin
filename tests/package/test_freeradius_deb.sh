@@ -6,6 +6,8 @@
 # starts radiusd with throwaway certificates and purges it again: sandbox only, as root;
 # refuses when FreeRADIUS or /etc/freeradius exists that this test did not create.
 set -uo pipefail
+# radiusd refuses world-writable configuration files: do not inherit a permissive umask
+umask 022
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 # shellcheck source=../../deploy/lib.sh
 . "$ROOT/deploy/lib.sh"
@@ -51,6 +53,8 @@ done
 grep -qx './usr/lib/systemd/system/freeradius.service' "$W/files" || missing+=" freeradius.service"
 [[ -z $missing ]] && pass "radiusd, radclient, modules, dictionaries, unit and source note present" \
     || fail "missing:$missing"
+w=$(dpkg-deb -c "$DEB" | awk 'substr($1,1,1) != "l" && (substr($1,6,1) == "w" || substr($1,9,1) == "w") {print $6}')
+[[ -z $w ]] && pass "no group- or world-writable files in the package" || fail "writable by group/others: $(head -n 5 <<<"$w" | tr '\n' ' ')"
 grep -E 'raddb-dist/certs/[^/]+\.(key|pem|p12)$' "$W/files" >/dev/null \
     && fail "test certificates or keys in the package" || pass "no certificates or keys in the package"
 dpkg-deb -x "$DEB" "$W/x"
@@ -93,6 +97,8 @@ else fail "fr-package install: $out"; fi
 [[ $(stat -c '%U:%G %a' /etc/freeradius) == "root:freerad 750" && $(stat -c '%U:%G' /var/log/freeradius) == freerad:freerad ]] \
     && pass "/etc/freeradius root:freerad 0750, log directory owned by freerad" \
     || fail "ownership: $(stat -c '%U:%G %a' /etc/freeradius) $(stat -c '%U:%G' /var/log/freeradius)"
+w=$(find /etc/freeradius "$P" /var/log/freeradius ! -type l -perm /022 2>/dev/null)
+[[ -z $w ]] && pass "installed files are not group- or world-writable" || fail "writable by group/others: $(head -n 5 <<<"$w" | tr '\n' ' ')"
 ! systemctl is-active --quiet freeradius && ! systemctl is-enabled --quiet freeradius \
     && pass "radiusd neither started nor enabled by the package" || fail "service started/enabled on install"
 svc=$(detect_fr_service || true); rd=$(detect_radiusd "$svc" || true); lib=$(detect_fr_libdir "$rd" || true)
@@ -136,8 +142,9 @@ for _ in $(seq 1 15); do
 done
 (( up )) && [[ $(ps -o user= -C radiusd | head -n1) == freerad ]] \
     && pass "service starts, listens on UDP 1812 and runs as freerad" \
-    || fail "service: $(systemctl is-active freeradius); radiusd -XC says:
-$("$P/sbin/radiusd" -XC -d /etc/freeradius 2>&1 | tail -n 20)"
+    || fail "service: $(systemctl is-active freeradius); umask $(umask); radiusd -XC says:
+$("$P/sbin/radiusd" -XC -d /etc/freeradius 2>&1 | tail -n 8)
+$(ls -la /etc/freeradius /etc/freeradius/certs)"
 r=$(echo 'User-Name = "nobody",User-Password = "x"' | "$P/bin/radclient" -r 1 -t 3 127.0.0.1 auth testing123 2>&1)
 grep -q 'Received Access-Reject' <<<"$r" && pass "radclient gets an answer from the packaged radiusd" || fail "radclient: $r"
 

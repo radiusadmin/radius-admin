@@ -4,6 +4,7 @@
 # restarts radiusd: the radius-admin installer does that once the configuration passes
 # radiusd -XC (install.sh --restart-freeradius, or Review and apply in the portal).
 set -e
+umask 022
 P=/opt/radius-admin-freeradius
 RADDB=/etc/freeradius
 

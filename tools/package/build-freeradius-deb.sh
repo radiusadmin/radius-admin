@@ -10,6 +10,8 @@
 # the binaries). FR_PKG_RELEASE=N sets the package revision (default 1).
 set -euo pipefail
 export LC_ALL=C
+# the package's file modes must not depend on the caller (CI runners use a permissive umask)
+umask 022
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 REPO=$(cd "$HERE/../.." && pwd)
 # shellcheck source=../lib/fr-release.sh
@@ -133,6 +135,7 @@ Description: FreeRADIUS $FR_VERSION built for radius-admin
 EOF
 for s in postinst prerm postrm; do install -m 0755 "$HERE/freeradius/$s" "$ROOT/DEBIAN/$s"; done
 
+chmod -R go-w "$ROOT"
 rm -f "$OUT/${PKG}"_*"_$ARCH.deb" "$OUT/${PKG}"_*"_$ARCH.deb.sha384"
 dpkg-deb --root-owner-group -Zxz --build "$ROOT" "$DEB" >/dev/null
 (cd "$OUT" && sha384sum "$(basename "$DEB")" > "$(basename "$DEB").sha384")
