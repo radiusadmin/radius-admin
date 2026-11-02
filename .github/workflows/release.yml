@@ -1,0 +1,100 @@
+name: Release
+
+# A signed build for the update channel of each branch (SPEC section 16): after CI passes on a
+# push to main, testing or dev, build the bundle (portal + FreeRADIUS package), sign its
+# manifest with the ECDSA P-384 key in the UPDATE_SIGNING_KEY secret and publish it as a
+# GitHub release. main publishes only when VERSION changes; testing and dev publish every
+# push and keep their newest 10 builds.
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main, testing, dev]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  release:
+    name: Signed build
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: release
+    permissions:
+      contents: write
+    env:
+      CHANNEL: ${{ github.event.workflow_run.head_branch }}
+      SHA: ${{ github.event.workflow_run.head_sha }}
+      GH_TOKEN: ${{ github.token }}
+      OUT: ${{ runner.temp }}/release
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+      - name: Version
+        id: v
+        run: |
+          ver=$(tools/release/build-version.sh "$CHANNEL" HEAD)
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
+          if git rev-parse -q --verify "refs/tags/v$ver" >/dev/null; then
+            echo "::notice::v$ver is already released"
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          fi
+          case $CHANNEL in
+            main) prev=$(git tag -l 'v*' --sort=-v:refname | grep -v -- - | grep -vx "v$ver" | head -n1 || true) ;;
+            testing) prev=$(git tag -l 'v*-rc.*' --sort=-v:refname | grep -vx "v$ver" | head -n1 || true) ;;
+            dev) prev=$(git tag -l 'v*-dev.*' --sort=-v:refname | grep -vx "v$ver" | head -n1 || true) ;;
+          esac
+          echo "prev=$prev" >> "$GITHUB_OUTPUT"
+          echo "Building $ver for $CHANNEL (previous: ${prev:-none})"
+      - name: Signing key present
+        id: key
+        if: steps.v.outputs.exists != 'true'
+        env:
+          KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+        run: |
+          if [ -z "$KEY" ] || [ ! -s deploy/keys/update-signing.pem ]; then
+            echo "::warning::No release published: set the UPDATE_SIGNING_KEY secret and commit deploy/keys/update-signing.pem (RUNBOOK section 9.3)."
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Build radius-admin-freeradius
+        if: steps.key.outputs.ok == 'true'
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends build-essential pkg-config dpkg-dev \
+              binutils libtalloc-dev libssl-dev libpq-dev libldap-dev curl gnupg ca-certificates file
+          sudo tools/package/build-freeradius-deb.sh "$GITHUB_WORKSPACE/packages" /var/tmp/ra-frpkg
+          sudo chown -R "$(id -u):$(id -g)" packages
+      - name: Build and sign the release
+        if: steps.key.outputs.ok == 'true'
+        env:
+          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+        run: tools/release/make-release.sh "$CHANNEL" "$OUT" "${{ steps.v.outputs.prev }}"
+      - name: Publish
+        if: steps.key.outputs.ok == 'true'
+        run: |
+          v=${{ steps.v.outputs.version }}
+          flags=(--latest)
+          if [ "$CHANNEL" != main ]; then flags=(--prerelease --latest=false); fi
+          gh release create "v$v" --repo "$GITHUB_REPOSITORY" --target "$SHA" \
+              --title "radius-admin $v" --notes-file "$OUT/notes.md" "${flags[@]}" \
+              "$OUT/radius-admin-$v.tar.gz" "$OUT/manifest.json" "$OUT/manifest.json.sig"
+      - name: Keep the newest 10 builds of this channel
+        if: steps.key.outputs.ok == 'true' && env.CHANNEL != 'main'
+        run: |
+          suffix=$([ "$CHANNEL" = testing ] && echo rc || echo dev)
+          gh release list --repo "$GITHUB_REPOSITORY" --limit 200 --json tagName --jq '.[].tagName' \
+            | grep -- "-$suffix\." | sort -V -r | tail -n +11 \
+            | while read -r t; do gh release delete "$t" --repo "$GITHUB_REPOSITORY" --cleanup-tag -y; done

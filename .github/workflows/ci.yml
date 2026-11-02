@@ -32,8 +32,8 @@ jobs:
         run: |
           sudo apt-get install -y -q shellcheck >/dev/null
           shellcheck -S warning deploy/*.sh tests/freeradius/*.sh tests/migration/*.sh \
-              tests/installer/*.sh tests/package/*.sh tools/*.sh tools/ci/*.sh tools/lib/*.sh \
-              tools/package/*.sh
+              tests/installer/*.sh tests/package/*.sh tests/release/*.sh tools/*.sh tools/ci/*.sh \
+              tools/lib/*.sh tools/package/*.sh tools/release/*.sh
       - name: Site-data scan
         env:
           SITE_TERMS_CONTENT: ${{ secrets.SITE_TERMS }}
@@ -72,10 +72,16 @@ jobs:
           cd "$REPO" && sudo -E python3 -m pytest -q -p no:cacheprovider tests/helper | tee "$LOGS/helper.log"
       - name: Installer answers tests
         run: cd "$REPO" && sudo bash tests/installer/test_answers.sh | tee "$LOGS/installer.log"
+      - name: Update install checks
+        run: cd "$REPO" && sudo bash tests/installer/test_update_install.sh | tee "$LOGS/update-install.log"
+      - name: Release tooling tests
+        run: cd "$REPO" && sudo bash tests/release/test_release.sh | tee "$LOGS/release.log"
       - name: Count tests
         id: counts
         if: always()
-        run: tools/ci/test-counts.py "$LOGS/helper.log" "$LOGS/installer.log" | tee -a "$GITHUB_OUTPUT"
+        run: |
+          tools/ci/test-counts.py "$LOGS/helper.log" "$LOGS/installer.log" "$LOGS/update-install.log" \
+              "$LOGS/release.log" | tee -a "$GITHUB_OUTPUT"
 
   package:
     name: FreeRADIUS package

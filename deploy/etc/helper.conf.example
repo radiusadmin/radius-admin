@@ -23,6 +23,17 @@ runuser = /usr/sbin/runuser
 ss = /usr/bin/ss
 radius_port = 1812
 
+# updates (SPEC section 16): downloads by the update check service (owned by update_owner),
+# the pinned public key their signed manifests must verify with, and the installed build
+# update_dir = /var/lib/radius-admin/updates
+# update_owner = radius-admin
+# update_pubkey = /usr/local/share/radius-admin/update-signing.pem
+# openssl = /usr/bin/openssl
+# build_file = /opt/radius-admin/BUILD.json
+# update_check_unit = radius-admin-update-check.service
+# update_install_unit = radius-admin-update-install
+# update_max_mib = 256
+
 # timeouts (seconds). Worst-case apply = lock + validate + 2 x (restart + wait)
 # = 10 + 30 + 2 x (20 + 15) = 110 s; must stay below the app's helper_timeout (120).
 lock_timeout = 10

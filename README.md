@@ -76,6 +76,13 @@ automatically if FreeRADIUS does not come back up.
 - Interactive installer (or an answers file for unattended installs).
 - A setup checklist in the console that tracks what is left to configure.
 
+**Updates**
+- An Updates page that shows the installed and the latest version, the changelog in between,
+  and installs with a click: database backup first, health checks after, automatic rollback.
+- Choose the channel to follow (`main` for stable releases, `testing`, `dev`), notify-only or
+  automatic updates, and a maintenance window for updates that restart FreeRADIUS.
+- Builds are signed in CI (ECDSA P-384); the server verifies the signature before installing.
+
 ## How it works
 
 ```
@@ -184,8 +191,9 @@ Being a young project, some parts are still to come:
 - The bundled FreeRADIUS package is built for Ubuntu 24.04 (amd64); Debian 12 follows.
 - The nginx phase expects the site CA bundle and an OCSP responder for client-certificate MFA.
 - Vendor profiles: Cisco Catalyst 1200/1300 is the tested switch family today.
-- Signed updates from GitHub Releases are planned. Today, updates use `deploy/update.sh` or the
-  Windows push script.
+- Updates from the portal need the project's signing key to be set up once
+  ([RUNBOOK §9.3](docs/RUNBOOK.md#93-updates-from-the-portal-signed-builds)); until then,
+  updates use `deploy/update.sh` or the Windows push script.
 
 ## Licence
 

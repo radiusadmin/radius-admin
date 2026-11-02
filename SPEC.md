@@ -344,6 +344,21 @@ Actions:
   "policy_sha256":.., "clients_sha256":..}`.
 - `rollback` `{"backup_id": "<ts>"}` (format `^\d{8}T\d{6}Z$`) → restore that backup,
   validate, restart, same failure handling.
+- `update_status` → `{"ok":true, "installed": {version, channel, commit, built} from
+  `build_file`, "key_present": bool, "key_fingerprint": sha256 of the pinned key's DER,
+  "state": {state: queued|installing|done|failed|rolled_back, version, from, channel,
+  restarts_freeradius, actor, requested, finished, message, log}}`. A queued/installing
+  state whose install unit is no longer running is marked failed (section 16).
+- `update_check` → `systemctl start --no-block <update_check_unit>`.
+- `update_install` `{"version": "X.Y.Z[-rc.N|-dev.N]", "allow_downgrade": true|absent,
+  "actor": "<username>"|"auto"}` → copies `<update_dir>/<version>/{manifest.json,
+  manifest.json.sig, radius-admin-<version>.tar.gz}` (regular, single-linked, owned by
+  `update_owner`, opened O_NOFOLLOW) into `<work_dir>/update/<version>/`, verifies the
+  manifest with `openssl dgst -sha384 -verify <update_pubkey>`, checks the manifest
+  (format 1, product, version, channel, bundle name/size ≤ update_max_mib) and the bundle's
+  SHA-384, refuses a version not newer than the installed one unless `allow_downgrade` is
+  JSON `true`, refuses while another install runs, writes the state and starts
+  `<update_install_unit>@<version>.service`. Only `allow_downgrade: true` (the boolean) counts.
 Staging path is fixed in helper.conf, never taken from the request. Helper safety
 checks: files ≤ 1 MiB, UTF-8, no NUL; clients file must consist only of `client <name> {`
 blocks containing whitelisted keys (ipaddr, ipv4addr, ipv6addr, secret, shortname,
@@ -693,3 +708,69 @@ CSV columns (header row required, exact names, any order tolerated by name):
 - Tests: `tests/package/test_freeradius_deb.sh` (package contents; with `--install`, the installer
   phase, idempotency, kept configuration, checksum refusal, start and answer, upgrade without
   restart, purge).
+
+## 16. Change (2026-11-02): updates from signed GitHub builds
+
+- **Versions.** `VERSION` holds X.Y.Z. `tools/release/build-version.sh BRANCH` gives the build
+  version: `main` X.Y.Z, `testing` X.Y.Z-rc.N, `dev` X.Y.Z-dev.N, with N = commits since
+  `VERSION` last changed. Ordering (same X.Y.Z): dev < rc < release (`radius_admin.versions`,
+  and a copy in the helper). Bump `VERSION` on `dev` right after a release. `CHANGELOG.md`
+  has an `## Unreleased` section and one `## X.Y.Z — date` section per release.
+- **Releases** (`.github/workflows/release.yml`, after CI passes on a push to main, testing
+  or dev; job in the `release` environment): builds the FreeRADIUS package and the bundle
+  (`make-bundle.sh --channel`, which writes `BUILD.json`), then `tools/release/make-release.sh`
+  writes `manifest.json` `{format: 1, product, version, channel, commit, created,
+  restarts_freeradius, bundle: {name, size, sha384}, notes}` and `manifest.json.sig`
+  (ECDSA P-384 over SHA-384, `openssl dgst -sha384 -sign`), and publishes release
+  `v<version>` (testing/dev as prereleases) with the bundle, manifest and signature as
+  assets. The key is the `UPDATE_SIGNING_KEY` secret; the script refuses a key that is not
+  P-384 or does not match `deploy/keys/update-signing.pem`, the public key servers pin.
+  Without the secret or the pinned key the job warns and publishes nothing. main publishes
+  only when `VERSION` changes; testing and dev keep their newest 10 releases.
+  `restarts_freeradius` is true when `freeradius/`, `tools/package/` or
+  `tools/lib/fr-release.sh` changed since the previous release on the channel (or there is
+  none). Notes: the release's CHANGELOG section; previews get `Unreleased` plus the
+  commit subjects since the previous preview.
+- **Settings** (`sql/90-updates.sql`, ui.setting): `update_channel` main|testing|dev
+  (default main), `update_mode` off|notify|auto (default notify), `update_window_day`
+  mon…sun|daily (default sun), `update_window_hour` 0–23 (default 3, server local time),
+  `update_check_requested` (ISO time of the last "Check now"). Table `ui.update_check`
+  (one row): checked_at, ok, error, channel, installed_version, latest_version, downgrade,
+  restarts_freeradius, downloaded, releases (jsonb: version, published, notes,
+  restarts_freeradius; newest first, at most 20).
+- **Update check** (`radius_admin.updater`, `radius-admin-update-check.service` run hourly by
+  its timer as radius-admin; the only component with outbound HTTPS, honours `HTTPS_PROXY`
+  from `/etc/radius-admin/update.env`): off → returns without network. notify → runs when the
+  last check is ≥ 23 h old, the channel changed, or `update_check_requested` is newer; auto →
+  every run. Lists `GET <update_api>/repos/<update_repo>/releases`, keeps non-draft
+  releases whose tag is `v<version>` and that carry all three assets, picks the newest on the
+  channel; if none is newer but the installed build is from another channel, offers the
+  channel's newest as a downgrade. Downloads it to `<update_dir>/<version>/` (https only;
+  sizes capped; discarded unless the bundle matches the manifest's SHA-384; other versions
+  removed) and records the row. auto: installs (helper `update_install`, actor `auto`) when
+  the listed builds do not restart FreeRADIUS, otherwise only within the window hour; never
+  when the helper's state shows this version failed, rolled back or still running; audited
+  `update.auto_install`.
+- **Install** (`deploy/update-install.sh` as `/usr/local/libexec/radius-admin/
+  radius-admin-update-install`, unit `radius-admin-update-install@<version>.service`, root):
+  re-checks the verified copy against the manifest, `pg_dump -Fc radius` to
+  `/var/backups/radius-admin/radius-db-before-<version>-<ts>.dump` (newest 5 kept), runs the
+  bundle's `deploy/update.sh --package … --yes --keep-upload` (plus `--with-freeradius --
+  --restart-freeradius` when the release restarts FreeRADIUS), then health checks (portal
+  answers on its socket, helper socket active, FreeRADIUS active and on UDP 1812 when
+  restarted, `/opt/radius-admin/BUILD.json` names the version) for up to a minute. On an
+  installer error it re-runs the previous release's app phase; on failed health checks
+  `update.sh --rollback`. Progress in the helper's `update-state.json`, log in
+  `/var/log/radius-admin/update-<version>-<ts>.log`, outcome audited `update.install`
+  (`radius_admin.cli record-update`).
+- **Installer**: `/var/lib/radius-admin/updates` (radius-admin 0750); app phase installs the
+  install script, the three units (timer enabled), `deploy/keys/update-signing.pem` as
+  `/usr/local/share/radius-admin/update-signing.pem` (root 0644; warns when the release has
+  none) and `BUILD.json` as `/opt/radius-admin/BUILD.json` (from a checkout: version from
+  `VERSION`, channel `local`). The helper unit may read `/var/lib/radius-admin/updates`.
+- **Updates page** (`/updates`, admin; settings and install need step-up): installed →
+  latest version, the notes of every newer build (a safe Markdown subset), "restarts
+  FreeRADIUS" marks, install (only the build the last check downloaded; a downgrade needs an
+  explicit confirmation), install progress (refreshes every 10 s) and the last result,
+  "Check now" (not in off mode), and the settings. A nav badge shows an available update.
+  Audited `update.settings`, `update.check`, `update.install_requested`.

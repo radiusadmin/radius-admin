@@ -84,6 +84,7 @@
     <li><a href="{{ url_for('sso.settings') }}" {% if ep.startswith('sso.') %}aria-current="page"{% endif %}>Single sign-on</a></li>
     <li><a href="{{ url_for('admins.index') }}" {% if ep.startswith('admins.') %}aria-current="page"{% endif %}>UI admins</a></li>
     <li><a href="{{ url_for('setup.index') }}" {% if ep.startswith('setup.') %}aria-current="page"{% endif %}>Setup checklist</a></li>
+    <li><a href="{{ url_for('updates.index') }}" {% if ep.startswith('updates.') %}aria-current="page"{% endif %}>Updates{% if nav_counts and nav_counts.update_version %}<span class="badge" title="Update available: {{ nav_counts.update_version }}">1<span class="sr-only"> update available</span></span>{% endif %}</a></li>
   </ul>
   {% endif %}
 </nav>

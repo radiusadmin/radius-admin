@@ -17,7 +17,8 @@
 #   freeradius backup /etc/freeradius, install freeradius/ files, disable modules,
 #              remove inner-tunnel, render+install policy/clients, radiusd -XC.
 #              Does NOT restart FreeRADIUS unless --restart-freeradius.
-#   app        code to /opt/radius-admin, configs, helper, systemd units (enabled, started)
+#   app        code to /opt/radius-admin, configs, helper, systemd units (enabled, started),
+#              update check timer, BUILD.json and the pinned update-signing key
 #   site       with answers: /etc/radius-admin/site.yaml and the portal certificate
 #              (self-signed, CSR for your CA, or existing files)
 #   nginx      TLS site on <management IP>:443 (needs /etc/radius-admin/tls/server.{key,crt})
@@ -76,6 +77,8 @@ LIB=/var/lib/radius-admin
 STAGING=$LIB/staging
 HELPER_DIR=/var/lib/radius-admin-helper
 HELPER_BIN=/usr/local/libexec/radius-admin/radius-admin-helper
+UPDATE_BIN=/usr/local/libexec/radius-admin/radius-admin-update-install
+UPDATE_KEY=/usr/local/share/radius-admin/update-signing.pem
 TS=$(date -u +%Y%m%dT%H%M%SZ)
 
 usage() { awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"; exit "${1:-0}"; }
@@ -292,6 +295,7 @@ phase_users() {
     install -d -o root -g root -m 0700 "$ETC/tls"
     install -d -o radius-admin -g radius-admin -m 0750 "$LIB"
     install -d -o radius-admin -g radius-admin -m 0700 "$STAGING"
+    install -d -o radius-admin -g radius-admin -m 0750 "$LIB/updates"
     install -d -o root -g root -m 0711 "$HELPER_DIR"
     install -d -o root -g root -m 0700 "$HELPER_DIR/backups" "$RA_BACKUP_DIR"
     install -d -o root -g adm -m 0750 /var/log/radius-admin
@@ -694,6 +698,25 @@ phase_app() {
     done
     install_app_config
     put "$SRC/helper/radius-admin-helper" "$HELPER_BIN" root:root 0755 || true
+    put "$HERE/update-install.sh" "$UPDATE_BIN" root:root 0755 || true
+    # updates (SPEC section 16): the public key every downloaded build must be signed with,
+    # and which build this is
+    if [[ -s $SRC/deploy/keys/update-signing.pem ]]; then
+        install -d -o root -g root -m 0755 "$(dirname "$UPDATE_KEY")"
+        put "$SRC/deploy/keys/update-signing.pem" "$UPDATE_KEY" root:root 0644 || true
+    else
+        warn "this release has no deploy/keys/update-signing.pem: updates from the portal stay off"
+    fi
+    local build; build=$(mktemp)
+    if [[ -s $SRC/BUILD.json ]]; then
+        cp "$SRC/BUILD.json" "$build"
+    else   # a checkout, not a release bundle
+        printf '{"version": "%s", "channel": "local", "commit": "%s", "built": ""}\n' \
+            "$(tr -d '[:space:]' < "$SRC/VERSION" 2>/dev/null)" \
+            "$(git -C "$SRC" rev-parse HEAD 2>/dev/null || true)" > "$build"
+    fi
+    put "$build" "$OPT/BUILD.json" root:root 0644 || true
+    rm -f "$build"
 
     # helper.conf (root:root 0644): detected service name / radiusd path
     local hc=$ETC/helper.conf tmp
@@ -717,7 +740,9 @@ phase_app() {
     rm -f "$tmp"
 
     local u reload=0
-    for u in radius-admin.service radius-admin-helper.socket radius-admin-helper@.service; do
+    for u in radius-admin.service radius-admin-helper.socket radius-admin-helper@.service \
+             radius-admin-update-check.service radius-admin-update-check.timer \
+             radius-admin-update-install@.service; do
         if put "$HERE/systemd/$u" "/etc/systemd/system/$u" root:root 0644; then reload=1; fi
     done
     if put "$HERE/firewall/radius-admin-firewall.service" /etc/systemd/system/radius-admin-firewall.service root:root 0644; then reload=1; fi
@@ -738,6 +763,7 @@ phase_app() {
     fi
 
     systemctl enable --now radius-admin-helper.socket >/dev/null
+    systemctl enable --now radius-admin-update-check.timer >/dev/null
     if ! command -v snmpget >/dev/null 2>&1; then
         warn "Net-SNMP tools missing (apt install snmp): switch monitoring will report errors"
     fi

@@ -13,7 +13,9 @@ SETTING_KEYS = ("admin_subnet", "admin_priv15", "custom_policy", "banner_text", 
                 "radsec_idle_timeout", "radsec_ocsp", "radsec_ocsp_url",
                 "saml_enabled", "saml_idp_metadata", "saml_entity_id", "saml_group_attribute",
                 "saml_name_attribute", "saml_local_login", "setup_skipped", "setup_finished",
-                "session_idle_minutes", "session_absolute_hours", "stepup_minutes")
+                "session_idle_minutes", "session_absolute_hours", "stepup_minutes",
+                "update_channel", "update_mode", "update_window_day", "update_window_hour",
+                "update_check_requested")
 RADSEC_KEYS = ("enabled", "listen", "port", "max_connections", "idle_timeout", "ocsp", "ocsp_url")
 SAML_KEYS = ("enabled", "idp_metadata", "entity_id", "group_attribute", "name_attribute", "local_login")
 DEFAULT_BANNER = ("This system is for authorized use only. Activity on this system is "
@@ -46,6 +48,11 @@ def get_settings(conn=None):
         "setup_finished": raw.get("setup_finished", "false") == "true",
         # console session limits as stored ('' = the config file's value; see session_limits())
         "session": {k: raw.get(k, "") for k in ("session_idle_minutes", "session_absolute_hours", "stepup_minutes")},
+        # updates (SPEC section 16; views/updates.py validates)
+        "update": {"channel": raw.get("update_channel", "main"), "mode": raw.get("update_mode", "notify"),
+                   "window_day": raw.get("update_window_day", "sun"),
+                   "window_hour": raw.get("update_window_hour", "3"),
+                   "requested": raw.get("update_check_requested", "")},
     }
 
 
