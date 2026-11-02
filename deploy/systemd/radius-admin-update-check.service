@@ -1,0 +1,50 @@
+# Checks GitHub for a newer signed build on the chosen channel and downloads it
+# (SPEC section 16). Unprivileged; the only radius-admin component with outbound HTTPS,
+# and only while it runs. With automatic updates it asks the helper to install.
+# A proxy: put HTTPS_PROXY=http://proxy.example.net:3128 in /etc/radius-admin/update.env
+[Unit]
+Description=radius-admin update check
+Documentation=file:/opt/radius-admin/docs/RUNBOOK.md
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=radius-admin
+Group=radius-admin
+EnvironmentFile=-/etc/radius-admin/update.env
+Environment=RADIUS_ADMIN_CONFIG=/etc/radius-admin/radius-admin.conf
+Environment=PYTHONPATH=/opt/radius-admin/app
+Environment=PYTHONDONTWRITEBYTECODE=1
+WorkingDirectory=/var/lib/radius-admin
+ExecStart=/usr/bin/python3 -s -m radius_admin.updater check
+TimeoutStartSec=900
+UMask=0027
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/radius-admin/updates
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RemoveIPC=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+SystemCallErrorNumber=EPERM
+DevicePolicy=closed
+InaccessiblePaths=-/etc/freeradius -/var/lib/radius-admin-helper -/etc/radius-admin/helper.conf -/var/lib/radius-admin/staging

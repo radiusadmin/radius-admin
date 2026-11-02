@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block title %}Updates{% endblock %}
+{% block head %}{% if running %}<meta http-equiv="refresh" content="10">{% endif %}{% endblock %}
+{% block content %}
+<header class="page-head">
+  <div><h1>Updates</h1>
+  <p class="lede">Signed builds of radius-admin from GitHub. Before installing one, the server checks its signature, backs up the database, and goes back to the previous release by itself if the new one does not start.</p></div>
+</header>
+
+{% if not status.ok %}<p class="flash flash-error" role="alert">The helper did not answer ({{ status.message }}), so updates cannot be installed right now.</p>
+{% elif key_missing %}<p class="flash flash-error" role="alert"><strong>Updates are not set up on this server.</strong> The public key that checks build signatures is missing. Install a release that includes <span class="mono">deploy/keys/update-signing.pem</span> with the installer (RUNBOOK section 9.3).</p>{% endif %}
+
+<section class="panel" aria-labelledby="ver-h">
+  <h2 id="ver-h" class="sr-only">Versions</h2>
+  <div class="update-versions">
+    <div>
+      <p class="small muted">Installed</p>
+      <p class="update-version mono">{{ installed.version or 'unknown' }}</p>
+      <p class="small muted">{% if installed.channel and installed.channel != 'local' %}{{ installed.channel }} channel{% elif installed.channel == 'local' %}installed from a local copy{% else %}no build information{% endif %}{% if installed.commit %} · <span class="mono">{{ installed.commit[:7] }}</span>{% endif %}</p>
+    </div>
+    <span class="update-arrow" aria-hidden="true">→</span>
+    <div>
+      <p class="small muted">Latest on {{ s.channel }}</p>
+      {% if available %}<p class="update-version mono">{{ check.latest_version }}</p>
+      <p class="small muted">{% if check.downgrade %}older than the installed build{% else %}newer{% endif %}{% if check.restarts_freeradius %} · restarts FreeRADIUS{% endif %}</p>
+      {% elif check and check.ok and check.channel == s.channel %}<p class="update-version">Up to date</p>
+      {% else %}<p class="update-version muted">Not checked yet</p>{% endif %}
+    </div>
+  </div>
+
+  {% if running %}
+  <p class="flash flash-info" role="status"><strong>Installing {{ state.version }}:</strong> {{ state.message }}. This page refreshes by itself; the console restarts once during the install.</p>
+  {% elif state.state in ('done', 'failed', 'rolled_back') %}
+  <p class="flash {{ 'flash-success' if state.state == 'done' else 'flash-error' }}" role="status">
+    Last install{% if state.finished %} ({{ state.finished[:16]|replace('T', ' ') }} UTC){% endif %}: {{ state.message }}.</p>
+  {% endif %}
+
+  {% if available and not running and status.ok and not key_missing %}
+  <form method="post" action="{{ url_for('updates.install') }}" class="stack update-install"
+        data-confirm="Install {{ check.latest_version }} now?{% if check.restarts_freeradius %} FreeRADIUS restarts, so RADIUS is unavailable for a few seconds.{% endif %}">
+    {{ m.csrf() }}
+    <input type="hidden" name="version" value="{{ check.latest_version }}">
+    <input type="hidden" name="return_to" value="{{ url_for('updates.index') }}">
+    {% if check.restarts_freeradius %}<p class="small">This update changes FreeRADIUS and restarts it: RADIUS is unavailable for a few seconds. Install it in a quiet moment.</p>{% endif %}
+    {% if check.downgrade %}
+    <p class="small">{{ check.latest_version }} is older than the installed {{ installed.version }}. Switching to an older build keeps the database as it is (changes are only ever added), but features added since then disappear.</p>
+    <label class="check"><input type="checkbox" name="confirm_downgrade" value="1" required> Install the older build {{ check.latest_version }}</label>
+    {% endif %}
+    <div class="actions"><button type="submit" class="btn btn-primary">Install {{ check.latest_version }}</button></div>
+  </form>
+  {% endif %}
+
+  <div class="actions update-check">
+    {% if check %}<p class="small muted">Last checked {{ check.checked_at.strftime('%Y-%m-%d %H:%M') }} UTC{% if not check.ok %}: <span class="update-error">{{ check.error }}</span>{% endif %}.</p>{% endif %}
+    {% if s.mode != 'off' %}{{ m.post_button(url_for('updates.check_now'), 'Check now') }}{% endif %}
+  </div>
+</section>
+
+<section class="panel" aria-labelledby="notes-h">
+  <h2 id="notes-h">{% if check and check.downgrade %}About {{ check.latest_version }}{% else %}What's new{% endif %}</h2>
+  {% if available and releases %}
+  {% for r in releases %}
+  <article class="update-notes">
+    <h3><span class="mono">{{ r.version }}</span>{% if r.published %} <span class="small muted">{{ r.published[:10] }}</span>{% endif %}{% if r.restarts_freeradius %} <span class="tag">restarts FreeRADIUS</span>{% endif %}</h3>
+    {{ notes_html(r.notes) }}
+  </article>
+  {% endfor %}
+  {% else %}<p class="empty muted">No newer builds on the {{ s.channel }} channel.</p>{% endif %}
+</section>
+
+<section class="panel narrow" aria-labelledby="set-h">
+  <h2 id="set-h">Update settings</h2>
+  <form method="post" action="{{ url_for('updates.save_settings') }}" class="stack">
+    {{ m.csrf() }}
+    <input type="hidden" name="return_to" value="{{ url_for('updates.index') }}">
+    <label for="channel">Channel</label>
+    <select id="channel" name="channel" aria-describedby="channel-hint">
+      {% for c, label in channels %}<option value="{{ c }}" {{ 'selected' if c == s.channel else '' }}>{{ label }}</option>{% endfor %}
+    </select>
+    <p id="channel-hint" class="small muted">The branch whose builds this server installs. <strong>main</strong> gets the stable releases. <strong>testing</strong> gets release candidates and <strong>dev</strong> every change; use them on test servers.</p>
+    <fieldset><legend>Update mode</legend>
+      {% for mo, label in modes %}<label class="check"><input type="radio" name="mode" value="{{ mo }}" {{ 'checked' if mo == s.mode else '' }}> {{ label }}</label>{% endfor %}
+    </fieldset>
+    <p class="small muted">Automatic updates install as soon as they are found when they only change the console. Updates that restart FreeRADIUS wait for the maintenance window. A build that failed to install is not retried by itself.</p>
+    <div class="grid-2">
+      <div><label for="window_day">Maintenance window</label>
+        <select id="window_day" name="window_day">{% for d, label in days %}<option value="{{ d }}" {{ 'selected' if d == s.window_day else '' }}>{{ label }}</option>{% endfor %}</select></div>
+      <div><label for="window_hour">Starting at (server time)</label>
+        <select id="window_hour" name="window_hour">{% for h in hours %}<option value="{{ h }}" {{ 'selected' if h|string == s.window_hour else '' }}>{{ '%02d:00'|format(h) }}</option>{% endfor %}</select></div>
+    </div>
+    <div class="actions"><button type="submit" class="btn btn-primary">Save update settings</button></div>
+  </form>
+</section>
+{% endblock %}

@@ -28,7 +28,7 @@ NoNewPrivileges=yes
 ProtectSystem=strict
 # Writes: the two generated files (atomic rename needs the directories) + its work dir.
 ReadWritePaths=/etc/freeradius /var/lib/radius-admin-helper
-ReadOnlyPaths=/var/lib/radius-admin/staging
+ReadOnlyPaths=/var/lib/radius-admin/staging -/var/lib/radius-admin/updates
 ProtectHome=yes
 # radiusd -XC as freerad must be able to read the validation copy in
 # /var/lib/radius-admin-helper/validate; it does not use /tmp.

@@ -865,6 +865,67 @@ FIPS indicator.
 
 ---
 
+### 9.3 Updates from the portal (signed builds)
+
+Every push to `main`, `testing` or `dev` that passes CI becomes a signed build on GitHub
+(a release `v<version>`). A server follows one of those branches, its **channel**, and
+installs only builds whose signature verifies with the public key it was installed with.
+
+**One-time setup for the repository (maintainer).** On a trusted machine, not a server:
+
+```bash
+openssl ecparam -name secp384r1 -genkey -noout -out update-signing.key
+openssl pkey -in update-signing.key -pubout -out deploy/keys/update-signing.pem
+```
+
+Commit `deploy/keys/update-signing.pem` (the public key), add the private key as the
+repository secret `UPDATE_SIGNING_KEY` (Settings → Secrets and variables → Actions), and keep
+an offline copy of `update-signing.key` somewhere safe, then delete it from the machine. Until
+both exist, CI publishes no builds and the Updates page says updates are not set up.
+Optionally require a reviewer for the `release` environment (Settings → Environments), so a
+person approves every published build.
+
+**Releasing.** Bump `VERSION` on `dev` right after a release (for example `0.2.0`), describe
+changes under `## Unreleased` in `CHANGELOG.md`, and when releasing rename that section to
+`## 0.2.0 — <date>`. `dev` builds are `0.2.0-dev.N`, `testing` builds `0.2.0-rc.N`, and the
+merge to `main` publishes `0.2.0`. A push to `main` without a `VERSION` change publishes
+nothing.
+
+**On a server.** Administration → **Updates** shows the installed and the latest build on the
+channel, what changed in between, and whether the update restarts FreeRADIUS.
+- **Channel:** main (stable releases) for production; testing and dev for test servers.
+  Switching to a channel whose newest build is older offers it as a downgrade, which needs an
+  extra confirmation (the database stays as it is; migrations only add).
+- **Mode:** Off never contacts GitHub. Notify (default) checks once a day. Automatic checks every
+  hour and installs builds that only change the console at once; builds that restart
+  FreeRADIUS wait for the maintenance window (day and hour, server time). A build that failed
+  to install is never retried automatically.
+- **Install** asks for step-up. The helper verifies the signature and the bundle's SHA-384, then
+  `radius-admin-update-install@<version>` backs up the database, installs, checks the portal
+  and FreeRADIUS, and rolls back if they do not come up. The page refreshes while it runs.
+
+Outbound access: the check service needs HTTPS to `api.github.com`, `github.com` and
+`objects.githubusercontent.com`. Behind a proxy, put `HTTPS_PROXY=http://proxy.example.net:3128`
+in `/etc/radius-admin/update.env`.
+
+**If an update fails.** The page shows the result; details are in
+`/var/log/radius-admin/update-<version>-<time>.log` and `journalctl -u
+'radius-admin-update-install@*'`. The database backup taken before the install is
+`/var/backups/radius-admin/radius-db-before-<version>-<time>.dump`
+(`pg_restore -d radius --clean` as postgres, only if a migration went wrong). By hand:
+`sudo /opt/radius-admin-src/current/deploy/update.sh --rollback`. A server installed from a
+checkout has no previous release to roll back to until its first update.
+
+**Check a build by hand** (for example before uploading it to an offline server):
+
+```bash
+openssl dgst -sha384 -verify /usr/local/share/radius-admin/update-signing.pem \
+    -signature manifest.json.sig manifest.json
+```
+```bash
+sha384sum radius-admin-<version>.tar.gz     # compare with bundle.sha384 in manifest.json
+```
+
 ## 10. Rollback of the whole change
 
 ```bash

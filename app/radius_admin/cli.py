@@ -8,6 +8,9 @@
   render --out-dir DIR                                      writes policy + clients (0600)
   verify-audit                                              verifies the audit hash chain
   check-fips                                                reports FIPS state (exit 1 if not FIPS)
+  record-update --version V --result R [--from F] [--message M] [--actor A]
+                                                            audit the outcome of an update install
+                                                            (run by radius-admin-update-install)
 """
 import argparse
 import os
@@ -147,6 +150,20 @@ def cmd_check_fips(cfg, args):
     return 0 if st["ok"] else 1
 
 
+def cmd_record_update(cfg, args):
+    actor = args.actor if args.actor and args.actor != "auto" else None
+    conn = _conn(cfg)
+    try:
+        audit.write("update.install", success=args.result == "done",
+                    actor=actor or "automatic update", object_type="update", object_id=args.version[:40],
+                    detail={"from": args.from_version[:40], "to": args.version[:40], "result": args.result,
+                            "message": args.message[:500], "automatic": args.actor == "auto"}, conn=conn)
+        conn.commit()
+    finally:
+        conn.close()
+    return 0
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="python3 -m radius_admin.cli", description="radius-admin tools")
     p.add_argument("--config", help="config file (default: $RADIUS_ADMIN_CONFIG or /etc/radius-admin/radius-admin.conf)")
@@ -166,6 +183,12 @@ def main(argv=None):
     r.add_argument("--out-dir", required=True)
     sub.add_parser("verify-audit", help="verify the audit log hash chain")
     sub.add_parser("check-fips", help="report FIPS status")
+    ru = sub.add_parser("record-update", help="audit the outcome of an update install")
+    ru.add_argument("--version", required=True)
+    ru.add_argument("--from", dest="from_version", default="")
+    ru.add_argument("--result", required=True, choices=["done", "failed", "rolled_back"])
+    ru.add_argument("--message", default="")
+    ru.add_argument("--actor", default="")
     args = p.parse_args(argv)
     try:
         cfg = load_config(args.config)
@@ -178,7 +201,7 @@ def main(argv=None):
         return 3
     return {"create-admin": cmd_create_admin, "reset-password": cmd_reset_password,
             "unlock": cmd_unlock, "reset-mfa": cmd_reset_mfa, "render": cmd_render, "verify-audit": cmd_verify_audit,
-            "check-fips": cmd_check_fips}[args.cmd](cfg, args)
+            "check-fips": cmd_check_fips, "record-update": cmd_record_update}[args.cmd](cfg, args)
 
 
 if __name__ == "__main__":
