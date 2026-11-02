@@ -79,6 +79,10 @@ radius-admin/
     systemd/radius-admin-helper@.service
     postgres/pg_hba.conf.snippet  postgres/pg_ident.conf.snippet
     etc/radius-admin.conf.example
+  tools/lib/fr-release.sh      FreeRADIUS release, signing key, verified download
+  tools/package/               build-freeradius-deb.sh (radius-admin-freeradius .deb),
+                               make-bundle.sh (release .tar.gz), freeradius/ (unit, maintainer scripts)
+  packages/                    built packages (not in git; part of the release bundle)
 ```
 
 ## 2. OS accounts, paths, permissions
@@ -97,6 +101,7 @@ radius-admin/
 | Helper work | `/var/lib/radius-admin-helper/` (root 0700): `backups/<UTC ts>/`, `validate/`, `state.json`, lock file |
 | Generated policy | `/etc/freeradius/policy.d/radius-admin` (root:freerad 0640) |
 | Generated clients | `/etc/freeradius/radius-admin-clients.conf` (root:freerad 0640) |
+| FreeRADIUS (bundled package) | `/opt/radius-admin-freeradius/` (`sbin/radiusd`, `bin/radclient`, `lib/rlm_*.so`, `share/freeradius` dictionaries), unit `freeradius.service`, logs `/var/log/freeradius/` (freerad 0750), raddb `/etc/freeradius` (root:freerad 0750) |
 
 Config file `/etc/radius-admin/radius-admin.conf` (INI):
 ```
@@ -646,3 +651,42 @@ CSV columns (header row required, exact names, any order tolerated by name):
   standard mode and fails on "FIPS". Row and account drop-down menus are positioned against the
   window (`app.js`), so a scrolling table cannot clip them.
 
+## 15. Change (2026-10-31): bundled FreeRADIUS package
+
+- **`radius-admin-freeradius`** (`tools/package/build-freeradius-deb.sh`): FreeRADIUS 3.2.10 from the
+  signed upstream release (key `FR_KEY_FPR` in `tools/lib/fr-release.sh`, shared with the bench
+  build), `--enable-fips-workaround`, prefix `/opt/radius-admin-freeradius`, raddb `/etc/freeradius`,
+  logs `/var/log/freeradius`. Modules needing libraries the product does not use (perl, python,
+  mysql, sqlite, redis, rest, …) are configured out, so the package does not depend on the build
+  host; the build fails unless `rlm_sql_postgresql`, `rlm_ldap`, `rlm_eap_tls`, `rlm_sql`, `rlm_files`
+  and `rlm_pap` were built. Depends are the distribution packages owning the directly linked
+  libraries (≥ the build host's version); the package is built per distribution release and its
+  version says which (`3.2.10-1~ubuntu24.04`). `Conflicts: freeradius`.
+- **The package owns no file in `/etc`.** The stock raddb ships as
+  `/opt/radius-admin-freeradius/share/raddb-dist` (no test certificates: built with `PACKAGE=…`;
+  `user = freerad`, `group = freerad`). `postinst` creates the `freerad` user/group and
+  `/var/log/freeradius`, and copies raddb-dist to `/etc/freeradius` **only when that does not
+  exist** (root:freerad, no group write, no world access). Upgrades, reinstalls and purge never
+  change or delete `/etc/freeradius`. `postinst` never starts, restarts or enables radiusd; `prerm`
+  stops and disables it on removal only.
+- **Unit `freeradius.service`**: radiusd starts as root and drops to `freerad` itself (no `User=`),
+  `ExecStartPre … -Cx`, `ProtectSystem=full`, `NoNewPrivileges`, writable `/var/log/freeradius` only.
+  The existing detection (`detect_fr_service`, `detect_radiusd` from `ExecStart`, `detect_fr_libdir`
+  from the RUNPATH) finds it unchanged; `helper.conf` gets `radiusd = /opt/radius-admin-freeradius/sbin/radiusd`.
+- **Release layout.** The packages go in `packages/` of the release tree with a `.sha384` each,
+  plus `packages/source/` (upstream tarball and signature, for the GPLv2). `tools/package/make-bundle.sh`
+  makes `radius-admin-<git describe>.tar.gz` from HEAD plus `packages/` with a `.sha256`.
+- **Installer phase `fr-package`** (after `packages`, before `users`): picks
+  `packages/radius-admin-freeradius_*~<ID><VERSION_ID>_<arch>.deb` (or `--freeradius-deb FILE`),
+  refuses it without a matching `.sha384`, and installs it with `apt-get` when no FreeRADIUS is
+  installed, or upgrades it when the bundled version is newer. A FreeRADIUS installed any other
+  way (the distribution's `freeradius`, or a source build with its own unit) is kept with a
+  warning. On upgrade the running radiusd is restarted only with `--restart-freeradius`. Without a
+  bundled package and without FreeRADIUS the phase stops. The `freeradius` phase now enables the
+  unit after `radiusd -XC` passes. Preflight reports a host without FreeRADIUS as ready when a
+  bundled package is present. `update.sh` adds `fr-package` when `packages/` changed.
+- **radclient**: `/opt/radius-admin-freeradius/bin` is searched first (app `coa.SEARCH_DIRS`,
+  dictionaries `DICT_DIRS`, installer).
+- Tests: `tests/package/test_freeradius_deb.sh` (package contents; with `--install`, the installer
+  phase, idempotency, kept configuration, checksum refusal, start and answer, upgrade without
+  restart, purge).

@@ -43,6 +43,7 @@ record them in the SSP.
 | EAP-TLS (TLS 1.2, FIPS cipher list) | FreeRADIUS rlm_eap_tls | libssl | OpenSSL FIPS provider |
 | LDAPS to AD | FreeRADIUS rlm_ldap → libldap | **GnuTLS** — Ubuntu's libldap is built against GnuTLS, so this connection does **not** use the OpenSSL FIPS provider | **Outside the OpenSSL boundary — see exception 5.** Verify whether the GnuTLS in use is a FIPS-validated module in your Ubuntu Pro FIPS stream |
 | Package signatures | apt | gpgv | not a FIPS function (integrity of software supply, outside the boundary) |
+| Bundled FreeRADIUS package integrity | installer (`fr-package`) | `sha384sum`; the upstream source signature is checked with `gpg` at build time | not a FIPS function (supply-chain integrity). The `.sha384` travels in the same bundle, so it detects damage, not tampering: that comes from the bundle's SHA-256 checked by `update.sh --sha256` (the push script passes it) until releases carry a signed manifest |
 
 The app refuses to start (and the CLI refuses to run) when `require_fips = true` unless
 `/proc/sys/crypto/fips_enabled == 1` and `_hashlib.get_fips_mode() == 1`. The dashboard

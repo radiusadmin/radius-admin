@@ -1,0 +1,26 @@
+#!/bin/sh
+# radius-admin-freeradius postinst. Never touches an existing /etc/freeradius: the portal
+# owns that tree, and an upgrade must not overwrite a live setting. Never starts or
+# restarts radiusd: the radius-admin installer does that once the configuration passes
+# radiusd -XC (install.sh --restart-freeradius, or Review and apply in the portal).
+set -e
+P=/opt/radius-admin-freeradius
+RADDB=/etc/freeradius
+
+if [ "$1" = configure ]; then
+    getent group freerad >/dev/null || groupadd --system freerad
+    if ! getent passwd freerad >/dev/null; then
+        useradd --system --gid freerad --home-dir "$RADDB" --no-create-home \
+            --shell /usr/sbin/nologin --comment "FreeRADIUS" freerad
+    fi
+    install -d -o freerad -g freerad -m 0750 /var/log/freeradius
+    if [ ! -e "$RADDB" ]; then
+        cp -a "$P/share/raddb-dist" "$RADDB"
+        chown -R root:freerad "$RADDB"
+        chmod -R g-w,o-rwx "$RADDB"
+        chmod 0750 "$RADDB"
+        echo "radius-admin-freeradius: stock FreeRADIUS configuration installed in $RADDB"
+    fi
+    if [ -d /run/systemd/system ]; then systemctl daemon-reload || true; fi
+fi
+exit 0

@@ -54,64 +54,71 @@ fi
 
 hdr "FreeRADIUS"
 SVC=$(detect_fr_service || true)
-if [[ -n $SVC ]]; then
-    ok "systemd unit: $SVC.service ($(systemctl is-active "$SVC.service" 2>/dev/null || true), $(systemctl is-enabled "$SVC.service" 2>/dev/null || true))"
+BUNDLED=$(detect_bundled_fr "$HERE/../packages" || true)
+if [[ -z $SVC && -n $BUNDLED ]] && ! detect_radiusd "" >/dev/null; then
+    # A new server: the installer's fr-package phase installs FreeRADIUS, the freerad
+    # user and /etc/freeradius from the package that ships with this release.
+    ok "FreeRADIUS not installed yet: the installer adds the bundled package $(basename "$BUNDLED")"
 else
-    bad "no freeradius.service or radiusd.service unit found"
-fi
-RADIUSD=$(detect_radiusd "$SVC" || true)
-if [[ -n $RADIUSD ]]; then
-    ok "radiusd binary: $RADIUSD"
-    VER=$("$RADIUSD" -v 2>/dev/null | head -n1 || true)
-    info "${VER:-version unknown}"
-    [[ $VER == *3.2.10* ]] || warn "expected FreeRADIUS 3.2.10"
-    if "$RADIUSD" -v 2>/dev/null | grep -q WITH_VERIFY_PTR; then warn "radiusd is a developer build (WITH_VERIFY_PTR): rebuild with --disable-developer for production"; fi
-    for f in "$(dirname "$(dirname "$RADIUSD")")"/src/freeradius*/config.log /usr/local/src/freeradius*/config.log; do
-        [[ ! -r $f ]] || info "configure flags ($f): $(sed -n 's/^  \$ \(.*configure.*\)/\1/p' "$f" | head -n1)"
-    done
-    if strings "$RADIUSD" 2>/dev/null | grep -qi 'fips'; then info "radiusd binary references FIPS (built with FIPS workaround support)"; fi
-    LIBDIR=$(detect_fr_libdir "$RADIUSD" || true)
-    if [[ -n $LIBDIR ]]; then
-        info "module dir: $LIBDIR"
-        if [[ -e $LIBDIR/rlm_sql_postgresql.so ]]; then
-            ok "rlm_sql_postgresql.so present"
-            if ldd "$LIBDIR/rlm_sql_postgresql.so" 2>/dev/null | grep -q 'not found'; then
-                bad "rlm_sql_postgresql.so has unresolved libraries (install libpq5): $(ldd "$LIBDIR/rlm_sql_postgresql.so" | grep 'not found' | tr -s ' ' | tr '\n' ';')"
+    if [[ -n $SVC ]]; then
+        ok "systemd unit: $SVC.service ($(systemctl is-active "$SVC.service" 2>/dev/null || true), $(systemctl is-enabled "$SVC.service" 2>/dev/null || true))"
+    else
+        bad "no freeradius.service or radiusd.service unit found"
+    fi
+    RADIUSD=$(detect_radiusd "$SVC" || true)
+    if [[ -n $RADIUSD ]]; then
+        ok "radiusd binary: $RADIUSD"
+        VER=$("$RADIUSD" -v 2>/dev/null | head -n1 || true)
+        info "${VER:-version unknown}"
+        [[ $VER == *3.2.10* ]] || warn "expected FreeRADIUS 3.2.10"
+        if "$RADIUSD" -v 2>/dev/null | grep -q WITH_VERIFY_PTR; then warn "radiusd is a developer build (WITH_VERIFY_PTR): rebuild with --disable-developer for production"; fi
+        for f in "$(dirname "$(dirname "$RADIUSD")")"/src/freeradius*/config.log /usr/local/src/freeradius*/config.log; do
+            [[ ! -r $f ]] || info "configure flags ($f): $(sed -n 's/^  \$ \(.*configure.*\)/\1/p' "$f" | head -n1)"
+        done
+        if strings "$RADIUSD" 2>/dev/null | grep -qi 'fips'; then info "radiusd binary references FIPS (built with FIPS workaround support)"; fi
+        LIBDIR=$(detect_fr_libdir "$RADIUSD" || true)
+        if [[ -n $LIBDIR ]]; then
+            info "module dir: $LIBDIR"
+            if [[ -e $LIBDIR/rlm_sql_postgresql.so ]]; then
+                ok "rlm_sql_postgresql.so present"
+                if ldd "$LIBDIR/rlm_sql_postgresql.so" 2>/dev/null | grep -q 'not found'; then
+                    bad "rlm_sql_postgresql.so has unresolved libraries (install libpq5): $(ldd "$LIBDIR/rlm_sql_postgresql.so" | grep 'not found' | tr -s ' ' | tr '\n' ';')"
+                fi
+            else
+                bad "rlm_sql_postgresql.so MISSING in $LIBDIR. Rebuild FreeRADIUS: apt install libpq-dev; in the original source tree re-run ./configure with the SAME flags (incl. --enable-fips-workaround), check 'rlm_sql_postgresql ... OK' in the output, then make && make install. See docs/RUNBOOK.md."
+            fi
+            if [[ -e $LIBDIR/rlm_sql_sqlite.so ]]; then info "rlm_sql_sqlite.so present (needed for rollback)"; fi
+            # LDAPS to AD: which TLS library does libldap use? (Ubuntu: GnuTLS -> outside the
+            # OpenSSL FIPS provider; see docs/SECURITY.md section 1.1 exception 5)
+            if [[ -e $LIBDIR/rlm_ldap.so ]]; then
+                LDAPLIB=$(ldd "$LIBDIR/rlm_ldap.so" 2>/dev/null | awk '/libldap/ {print $3}' | head -n1)
+                TLSLIB=$( { ldd "$LIBDIR/rlm_ldap.so"; if [[ -n $LDAPLIB ]]; then ldd "$LDAPLIB"; fi; } 2>/dev/null \
+                    | grep -oE 'lib(gnutls|ssl|crypto)\.so[.0-9]*' | sort -u | tr '\n' ' ')
+                if grep -q gnutls <<<"$TLSLIB"; then
+                    warn "rlm_ldap -> ${LDAPLIB:-libldap} uses GnuTLS ($TLSLIB): LDAPS to AD is NOT protected by the OpenSSL FIPS provider and cipher_list does not apply. Restrict the DC (Schannel) to TLS1.2+/AES-GCM and verify whether this GnuTLS is a FIPS-validated module in your Ubuntu Pro stream (docs/SECURITY.md)."
+                else
+                    info "rlm_ldap TLS libraries: ${TLSLIB:-unknown} (libldap ${LDAPLIB:-not found})"
+                fi
             fi
         else
-            bad "rlm_sql_postgresql.so MISSING in $LIBDIR. Rebuild FreeRADIUS: apt install libpq-dev; in the original source tree re-run ./configure with the SAME flags (incl. --enable-fips-workaround), check 'rlm_sql_postgresql ... OK' in the output, then make && make install. See docs/RUNBOOK.md."
+            warn "could not locate the FreeRADIUS module directory"
         fi
-        if [[ -e $LIBDIR/rlm_sql_sqlite.so ]]; then info "rlm_sql_sqlite.so present (needed for rollback)"; fi
-        # LDAPS to AD: which TLS library does libldap use? (Ubuntu: GnuTLS -> outside the
-        # OpenSSL FIPS provider; see docs/SECURITY.md section 1.1 exception 5)
-        if [[ -e $LIBDIR/rlm_ldap.so ]]; then
-            LDAPLIB=$(ldd "$LIBDIR/rlm_ldap.so" 2>/dev/null | awk '/libldap/ {print $3}' | head -n1)
-            TLSLIB=$( { ldd "$LIBDIR/rlm_ldap.so"; if [[ -n $LDAPLIB ]]; then ldd "$LDAPLIB"; fi; } 2>/dev/null \
-                | grep -oE 'lib(gnutls|ssl|crypto)\.so[.0-9]*' | sort -u | tr '\n' ' ')
-            if grep -q gnutls <<<"$TLSLIB"; then
-                warn "rlm_ldap -> ${LDAPLIB:-libldap} uses GnuTLS ($TLSLIB): LDAPS to AD is NOT protected by the OpenSSL FIPS provider and cipher_list does not apply. Restrict the DC (Schannel) to TLS1.2+/AES-GCM and verify whether this GnuTLS is a FIPS-validated module in your Ubuntu Pro stream (docs/SECURITY.md)."
+        if [[ -d $RA_RADDB ]] && id freerad >/dev/null 2>&1; then
+            # Run as root, exactly like the service: radiusd parses its config files as root
+            # (some, e.g. switches.conf, are root-only) and drops to "user = freerad" itself
+            # before instantiating modules.
+            if OUT=$(timeout 60 "$RADIUSD" -XC -d "$RA_RADDB" 2>&1) && grep -q 'appears to be OK' <<<"$OUT"; then
+                ok "current configuration passes radiusd -XC"
             else
-                info "rlm_ldap TLS libraries: ${TLSLIB:-unknown} (libldap ${LDAPLIB:-not found})"
+                bad "current configuration FAILS radiusd -XC: $(tail -n 3 <<<"$OUT" | tr '\n' ' ')"
             fi
         fi
     else
-        warn "could not locate the FreeRADIUS module directory"
+        bad "radiusd binary not found (command -v radiusd freeradius)"
     fi
-    if [[ -d $RA_RADDB ]] && id freerad >/dev/null 2>&1; then
-        # Run as root, exactly like the service: radiusd parses its config files as root
-        # (some, e.g. switches.conf, are root-only) and drops to "user = freerad" itself
-        # before instantiating modules.
-        if OUT=$(timeout 60 "$RADIUSD" -XC -d "$RA_RADDB" 2>&1) && grep -q 'appears to be OK' <<<"$OUT"; then
-            ok "current configuration passes radiusd -XC"
-        else
-            bad "current configuration FAILS radiusd -XC: $(tail -n 3 <<<"$OUT" | tr '\n' ' ')"
-        fi
-    fi
-else
-    bad "radiusd binary not found (command -v radiusd freeradius)"
+    if id freerad >/dev/null 2>&1; then ok "user freerad exists ($(id freerad))"; else bad "user freerad missing"; fi
+    if [[ -d $RA_RADDB ]]; then ok "raddb $RA_RADDB"; else bad "raddb $RA_RADDB missing"; fi
 fi
-if id freerad >/dev/null 2>&1; then ok "user freerad exists ($(id freerad))"; else bad "user freerad missing"; fi
-if [[ -d $RA_RADDB ]]; then ok "raddb $RA_RADDB"; else bad "raddb $RA_RADDB missing"; fi
 
 if [[ -d $RA_RADDB ]]; then
     SQLMOD=$RA_RADDB/mods-available/sql

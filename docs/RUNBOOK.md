@@ -20,8 +20,8 @@ Contents: 1 Prerequisites · 2 Plan the maintenance window · 3 Install step by 
 | Ubuntu Pro FIPS stream | `pro status` (see SECURITY.md §1 about `fips-updates` vs `fips`) |
 | Internal apt mirror reachable | `apt-get update` |
 | Packages available | `apt-cache policy postgresql nginx python3-flask python3-psycopg2 gunicorn python3-cryptography python3-qrcode nftables` |
-| FreeRADIUS unit + binary | `systemctl list-unit-files 'freeradius*' 'radiusd*'`; `command -v radiusd freeradius` |
-| **`rlm_sql_postgresql.so` in the custom build** | see below |
+| FreeRADIUS unit + binary | new server: nothing to do, the release bundle carries `packages/radius-admin-freeradius_*.deb` (§1.2). Existing server: `systemctl list-unit-files 'freeradius*' 'radiusd*'`; `command -v radiusd freeradius` |
+| **`rlm_sql_postgresql.so` in the custom build** | existing builds only, see below |
 | management address on this host | `ip -4 addr` (an address in 192.0.2.0/24) |
 | DNS for `pki.example.net` | `getent hosts pki.example.net` (nginx refuses to start otherwise) |
 | UI certificate | issued by pki.example.net from the CSR made by `deploy/make-csr.sh` |
@@ -67,6 +67,43 @@ module). `make install` does not overwrite existing files under `/etc/freeradius
 `tar -czpf /root/freeradius-etc-prebuild.tgz /etc/freeradius`.
 Production builds should not use `--enable-developer` (preflight warns if radiusd was
 built with `WITH_VERIFY_PTR`).
+
+### 1.2 The bundled FreeRADIUS package
+
+A release bundle contains `packages/radius-admin-freeradius_3.2.10-<n>~<distro>_amd64.deb`: the
+signed upstream 3.2.10 release built with `--enable-fips-workaround` (one build for both modes),
+installed under `/opt/radius-admin-freeradius`, with the unit `freeradius.service`. The installer's
+`fr-package` phase installs it on a server that has no FreeRADIUS:
+
+```bash
+sudo ./deploy/install.sh --phase fr-package       # also part of a full install
+```
+
+- The package is refused unless it matches its `.sha384` file.
+- It never owns or changes `/etc/freeradius`. On first install it creates that directory from
+  the stock configuration only if it does not exist; upgrades, reinstalls and even
+  `apt-get purge` leave it alone.
+- It never starts or restarts radiusd. The `freeradius` phase enables the unit once
+  `radiusd -XC` passes and restarts it with `--restart-freeradius`.
+- A FreeRADIUS installed another way (the distribution's `freeradius` package or a source build)
+  is kept; the phase warns and does nothing. Moving such a server onto the package is a
+  separate, planned step.
+- Upgrades: a release with a newer package upgrades it in the `fr-package` phase (also from
+  `update.sh`). The running daemon keeps the old binaries until you restart it in a window
+  (`systemctl restart freeradius`, or `--restart-freeradius`).
+
+Building the package (on the distribution release it is for, as root, network access to GitHub
+and freeradius.org):
+
+```bash
+sudo tools/package/build-freeradius-deb.sh            # -> packages/*.deb, *.sha384, packages/source/
+sudo bash tests/package/test_freeradius_deb.sh         # inspect the package
+tools/package/make-bundle.sh                            # -> dist/radius-admin-<version>.tar.gz
+```
+
+The upstream source tarball and its signature are kept in `packages/source/` and ship in the
+bundle (FreeRADIUS is GPLv2). `/opt/radius-admin-freeradius/share/doc/radius-admin-freeradius/SOURCE`
+records the URL, SHA-256, signing key and configure line.
 
 ---
 
