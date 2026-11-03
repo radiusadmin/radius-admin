@@ -7,13 +7,18 @@
 # Phases (in order):
 #   preflight  read-only checks (deploy/preflight.sh); aborts on blocking failures
 #   packages   apt install from the configured mirror
+#   fr-package install the bundled FreeRADIUS package (packages/radius-admin-freeradius_*.deb)
+#              when no FreeRADIUS is installed, or upgrade it when the bundled one is newer.
+#              A FreeRADIUS installed some other way is kept. Restarts radiusd only with
+#              --restart-freeradius.
 #   users      OS users/groups, directories, AES key (openssl rand 32)
 #   postgres   pg_hba/pg_ident/listen_addresses, roles, schema (sql/*.sql)
 #   migrate    SQLite -> PostgreSQL (deploy/migrate_sqlite_to_pg.py); needs --confirm-migrate
 #   freeradius backup /etc/freeradius, install freeradius/ files, disable modules,
 #              remove inner-tunnel, render+install policy/clients, radiusd -XC.
 #              Does NOT restart FreeRADIUS unless --restart-freeradius.
-#   app        code to /opt/radius-admin, configs, helper, systemd units (enabled, started)
+#   app        code to /opt/radius-admin, configs, helper, systemd units (enabled, started),
+#              update check timer, BUILD.json and the pinned update-signing key
 #   site       with answers: /etc/radius-admin/site.yaml and the portal certificate
 #              (self-signed, CSR for your CA, or existing files)
 #   nginx      TLS site on <management IP>:443 (needs /etc/radius-admin/tls/server.{key,crt})
@@ -26,14 +31,21 @@
 #   -i, --interactive       ask the set-up questions (server name, subnet, certificate, first admin)
 #   --answers FILE          take the answers from FILE (format: deploy/answers.sh; site.yaml works)
 #   --print-answers         with --answers/--interactive: check and print the answers, install nothing
+#   --print-settings        print the portal settings this run would use and where each comes from
 #   --phase NAME            run only this phase (repeatable, or comma-separated)
 #   --from NAME             run this phase and all following ones
 #   --confirm-migrate       allow the migrate phase to run
-#   --restart-freeradius    restart FreeRADIUS at the end of the freeradius phase
+#   --restart-freeradius    restart FreeRADIUS at the end of the fr-package and freeradius phases
+#   --freeradius-deb FILE   FreeRADIUS package for fr-package (default: the bundled one in packages/)
 #   --listen-ip IP          nginx bind address (default: detected address in admin net)
-#   --admin-net CIDR        default 192.0.2.0/24
-#   --server-name NAME      default radius.example.net
+#   --admin-net CIDR        management subnet allowed to reach the portal
+#   --server-name NAME      FQDN of the portal
 #   --resolver "IP [IP]"    DNS for nginx OCSP lookups (default: resolvectl/resolv.conf)
+#                           These four override the answers. Without answers they default to
+#                           this host's settings: /etc/radius-admin/site.yaml, else the installed
+#                           nginx site, else the firewall table (an update keeps them that way).
+#   --switch-nets "CIDR …"  networks the monitor may reach for SNMP and CoA (default: kept
+#                           from the installed monitor unit, else site.yaml, else the admin net)
 #   --sqlite PATH           default /var/lib/freeradius/sqlite/freeradius.db
 #   --skip-preflight        do not abort on preflight failures (not recommended)
 #   -y, --yes               do not ask for confirmation
@@ -43,23 +55,28 @@ export LC_ALL=C
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 SRC=$(cd "$HERE/.." && pwd)
+OPT_OCSP_URL=${RA_OCSP_URL:-}   # set in the environment: wins over the installed nginx site
 # shellcheck source=lib.sh
 . "$HERE/lib.sh"
 # shellcheck source=answers.sh
 . "$HERE/answers.sh"
 
-ALL_PHASES=(preflight packages users postgres migrate freeradius app site nginx firewall bootstrap)
+ALL_PHASES=(preflight packages fr-package users postgres migrate freeradius app site nginx firewall bootstrap)
 PHASES=()
 FROM=""
 CONFIRM_MIGRATE=0
 RESTART_FR=0
+FR_DEB=""
 LISTEN_IP=""
 RESOLVER=""
+SWITCH_NETS=""
+OPT_LISTEN_IP="" OPT_ADMIN_NET="" OPT_SERVER_NAME="" OPT_RESOLVER=""
 SKIP_PREFLIGHT=0
 ASSUME_YES=0
 INTERACTIVE=0
 ANSWERS=""
 PRINT_ANSWERS=0
+PRINT_SETTINGS=0
 USE_ANSWERS=0
 CSR_PENDING=0
 [[ $# -eq 0 && -t 0 ]] && INTERACTIVE=1
@@ -70,6 +87,8 @@ LIB=/var/lib/radius-admin
 STAGING=$LIB/staging
 HELPER_DIR=/var/lib/radius-admin-helper
 HELPER_BIN=/usr/local/libexec/radius-admin/radius-admin-helper
+UPDATE_BIN=/usr/local/libexec/radius-admin/radius-admin-update-install
+UPDATE_KEY=/usr/local/share/radius-admin/update-signing.pem
 TS=$(date -u +%Y%m%dT%H%M%SZ)
 
 usage() { awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"; exit "${1:-0}"; }
@@ -80,30 +99,54 @@ while [[ $# -gt 0 ]]; do
         --from) FROM=$2; shift 2 ;;
         --confirm-migrate) CONFIRM_MIGRATE=1; shift ;;
         --restart-freeradius) RESTART_FR=1; shift ;;
-        --listen-ip) LISTEN_IP=$2; shift 2 ;;
-        --admin-net) RA_ADMIN_NET=$2; shift 2 ;;
-        --server-name) RA_SERVER_NAME=$2; shift 2 ;;
-        --resolver) RESOLVER=$2; shift 2 ;;
+        --freeradius-deb) FR_DEB=$2; shift 2 ;;
+        --listen-ip) OPT_LISTEN_IP=$2; shift 2 ;;
+        --admin-net) OPT_ADMIN_NET=$2; shift 2 ;;
+        --switch-nets) SWITCH_NETS=$2; shift 2 ;;
+        --server-name) OPT_SERVER_NAME=$2; shift 2 ;;
+        --resolver) OPT_RESOLVER=$2; shift 2 ;;
         --sqlite) RA_SQLITE_DB=$2; shift 2 ;;
         --skip-preflight) SKIP_PREFLIGHT=1; shift ;;
         -y|--yes) ASSUME_YES=1; shift ;;
         -i|--interactive) INTERACTIVE=1; shift ;;
         --answers) ANSWERS=$2; shift 2 ;;
         --print-answers) PRINT_ANSWERS=1; shift ;;
+        --print-settings) PRINT_SETTINGS=1; shift ;;
         -h|--help) usage 0 ;;
         *) printf 'unknown option: %s\n\n' "$1" >&2; usage 2 ;;
     esac
 done
 require_root
 
+# Where each portal setting comes from: option, answers, site.yaml, nginx site, firewall
+# table or (nothing known) default. nginx and firewall refuse a default management subnet.
+declare -A SETTING_SRC=()
+declare -A SITE=()
+live_pick() { # live_pick VAR KEY OPTION: OPTION, else this host's value (rule 10), else VAR as is
+    local var=$1 key=$2 opt=$3 v
+    if [[ -n $opt ]]; then printf -v "$var" '%s' "$opt"; SETTING_SRC[$key]=option; return 0; fi
+    if [[ -n ${SITE[$key]:-} ]]; then v=${SITE[$key]}; SETTING_SRC[$key]=$RA_SITE_YAML
+    elif v=$(live_nginx "$key"); then SETTING_SRC[$key]=$RA_NGINX_SITE
+    elif v=$(live_nft "$key"); then SETTING_SRC[$key]=$RA_FIREWALL_NFT
+    else SETTING_SRC[$key]=default; return 0; fi
+    printf -v "$var" '%s' "$v"
+}
+
 if (( INTERACTIVE )) || [[ -n $ANSWERS ]]; then
     USE_ANSWERS=1
     if [[ -n $ANSWERS ]]; then ans_load "$ANSWERS"; fi
+    for k in server_name admin_net listen_ip resolver; do [[ -n ${ANS[$k]:-} ]] && SETTING_SRC[$k]=answers; done
+    [[ -n $OPT_SERVER_NAME ]] && ANS[server_name]=$OPT_SERVER_NAME && SETTING_SRC[server_name]=option
+    [[ -n $OPT_ADMIN_NET ]] && ANS[admin_net]=$OPT_ADMIN_NET && SETTING_SRC[admin_net]=option
+    [[ -n $OPT_LISTEN_IP ]] && ANS[listen_ip]=$OPT_LISTEN_IP && SETTING_SRC[listen_ip]=option
+    [[ -n $OPT_RESOLVER ]] && ANS[resolver]=$OPT_RESOLVER && SETTING_SRC[resolver]=option
+    if [[ -n $SWITCH_NETS ]]; then ANS[switch_nets]=$SWITCH_NETS; fi
     ans_defaults
     if (( INTERACTIVE )); then ans_interactive; fi
     ans_validate
+    for k in server_name admin_net listen_ip resolver; do : "${SETTING_SRC[$k]:=answers}"; done
     RA_SERVER_NAME=${ANS[server_name]}; RA_ADMIN_NET=${ANS[admin_net]}
-    LISTEN_IP=${ANS[listen_ip]}; RESOLVER=${ANS[resolver]}
+    LISTEN_IP=${ANS[listen_ip]}; RESOLVER=${ANS[resolver]}; SWITCH_NETS=${ANS[switch_nets]}
     if (( PRINT_ANSWERS )); then ans_print; exit 0; fi
     if (( INTERACTIVE )); then
         say ""; ans_print | sed '1d; s/^/    /'
@@ -111,6 +154,38 @@ if (( INTERACTIVE )) || [[ -n $ANSWERS ]]; then
     fi
 elif (( PRINT_ANSWERS )); then
     die "--print-answers needs --answers FILE or --interactive"
+else
+    # No answers (an update, or a phase run by hand): keep what this host runs rather than
+    # the example defaults, which could lock the administrators out of the portal.
+    if [[ -r $RA_SITE_YAML ]]; then ans_load "$RA_SITE_YAML" SITE; fi
+    live_pick RA_SERVER_NAME server_name "$OPT_SERVER_NAME"
+    live_pick RA_ADMIN_NET admin_net "$OPT_ADMIN_NET"
+    live_pick LISTEN_IP listen_ip "$OPT_LISTEN_IP"
+    live_pick RESOLVER resolver "$OPT_RESOLVER"
+    _ans_py fqdn "$RA_SERVER_NAME" \
+        || die "server name '$RA_SERVER_NAME' (${SETTING_SRC[server_name]}) is not a fully qualified host name"
+    _ans_py net "$RA_ADMIN_NET" \
+        || die "management subnet '$RA_ADMIN_NET' (${SETTING_SRC[admin_net]}) is not a network in CIDR form (no host bits, not /0)"
+    [[ -z $LISTEN_IP ]] || _ans_py ip "$LISTEN_IP" \
+        || die "listen address '$LISTEN_IP' (${SETTING_SRC[listen_ip]}) is not an IP address"
+    for r in $RESOLVER; do _ans_py ip "$r" || die "resolver '$r' (${SETTING_SRC[resolver]}) is not an IP address"; done
+fi
+live_pick RA_OCSP_URL ocsp_url "$OPT_OCSP_URL"
+_ans_py url "$RA_OCSP_URL" || die "OCSP responder '$RA_OCSP_URL' (${SETTING_SRC[ocsp_url]}) is not an http(s) URL"
+if [[ ${SETTING_SRC[ocsp_url]} != default ]]; then RA_OCSP_HOST=$(sed -E 's#^[a-z]+://([^/:]+).*#\1#' <<<"$RA_OCSP_URL"); fi
+
+if (( PRINT_SETTINGS )); then
+    for k in server_name admin_net listen_ip resolver ocsp_url; do
+        case $k in
+            server_name) v=$RA_SERVER_NAME ;; admin_net) v=$RA_ADMIN_NET ;; ocsp_url) v=$RA_OCSP_URL ;;
+            listen_ip) v=${LISTEN_IP:-$(detect_vlan_ip "$RA_ADMIN_NET" || true)} ;;
+            resolver) v=${RESOLVER:-$(detect_resolvers || true)} ;;
+        esac
+        s=${SETTING_SRC[$k]:-default}
+        if [[ $s == default && $k =~ ^(listen_ip|resolver)$ ]]; then s=detected; fi
+        printf '%s: %s (%s)\n' "$k" "${v:-none}" "$s"
+    done
+    exit 0
 fi
 
 valid_phase() { local p; for p in "${ALL_PHASES[@]}"; do [[ $p == "$1" ]] && return 0; done; return 1; }
@@ -163,6 +238,15 @@ fr_check() { # fr_check RADDB -> runs radiusd -XC as root (radiusd parses config
     return 1
 }
 
+fr_restart() { # fr_restart -> restart FreeRADIUS and wait until it listens on UDP 1812
+    systemctl restart "$FR_SVC.service" || true
+    for _ in $(seq 1 15); do
+        systemctl is-active --quiet "$FR_SVC.service" && ss -H -lun | awk '{print $4}' | grep -q ':1812$' && return 0
+        sleep 1
+    done
+    return 1
+}
+
 app_env() { # run a command as radius-admin with the app environment
     runuser -u radius-admin -- env -i PATH=/usr/bin:/bin LANG=C.UTF-8 \
         "RADIUS_ADMIN_CONFIG=$ETC/radius-admin.conf" "PYTHONPATH=$OPT/app" \
@@ -185,15 +269,72 @@ phase_preflight() {
 phase_packages() {
     hdr "Phase packages"
     # python3-pysaml2 + xmlsec1: portal single sign-on (SAML signature checks)
+    # tzdata: the zones offered for the console's display time zone
     local pkgs=(postgresql nginx python3-flask python3-psycopg2 gunicorn python3-cryptography
-                python3-qrcode python3-pysaml2 xmlsec1 nftables libpq5 sqlite3 snmp ieee-data ldap-utils)
-    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${pkgs[@]}"
+                python3-qrcode python3-pysaml2 xmlsec1 nftables libpq5 sqlite3 snmp ieee-data ldap-utils
+                tzdata)
+    # NEEDRESTART_SUSPEND: Ubuntu's needrestart would otherwise restart FreeRADIUS (and other
+    # services) after apt; the installer restarts radiusd only with --restart-freeradius.
+    DEBIAN_FRONTEND=noninteractive NEEDRESTART_SUSPEND=1 apt-get install -y --no-install-recommends "${pkgs[@]}"
     ok "packages installed: ${pkgs[*]}"
     # Debian's nginx package enables a port-80 default site; we never want it on this host.
     if [[ -L /etc/nginx/sites-enabled/default ]]; then
         rm -f /etc/nginx/sites-enabled/default
         info "disabled nginx default site (port 80)"
         systemctl reload nginx 2>/dev/null || true
+    fi
+}
+
+phase_fr_package() {
+    hdr "Phase fr-package"
+    local deb=$FR_DEB
+    [[ -n $deb ]] || deb=$(detect_bundled_fr "$SRC/packages" || true)
+    if [[ -z $deb ]]; then
+        if detect_fr_service >/dev/null; then
+            info "no bundled FreeRADIUS package for this system; using the installed FreeRADIUS"
+            return 0
+        fi
+        die "FreeRADIUS is not installed and this release has no radius-admin-freeradius package for this system (build one with tools/package/build-freeradius-deb.sh, or pass --freeradius-deb FILE)"
+    fi
+    deb=$(realpath "$deb")
+    [[ -f $deb ]] || die "FreeRADIUS package not found: $deb"
+    [[ -f $deb.sha384 ]] || die "checksum file missing: $deb.sha384"
+    (cd "$(dirname "$deb")" && sha384sum --quiet --strict -c "$(basename "$deb").sha384") \
+        || die "$deb does not match $deb.sha384 (damaged or replaced package)"
+    local name ver have svc
+    name=$(dpkg-deb -f "$deb" Package); ver=$(dpkg-deb -f "$deb" Version)
+    [[ $name == radius-admin-freeradius ]] || die "$deb is not the radius-admin-freeradius package ($name)"
+    ok "bundled package $name $ver (SHA-384 verified)"
+    have=$(dpkg-query -W -f '${Status} ${Version}\n' radius-admin-freeradius 2>/dev/null \
+           | awk '$1 == "install" && $3 == "installed" {print $4}' || true)
+    if [[ -n $have ]] && dpkg --compare-versions "$have" ge "$ver"; then
+        ok "radius-admin-freeradius $have is installed"
+        return 0
+    fi
+    if [[ -z $have ]]; then
+        # Never replace a FreeRADIUS installed some other way: its configuration and
+        # binaries are live. Moving such a server onto the package is a separate step.
+        if dpkg-query -W -f '${Status}' freeradius 2>/dev/null | grep -q 'install ok installed'; then
+            warn "the distribution's freeradius package is installed; keeping it (the bundled package is not installed)"
+            return 0
+        fi
+        svc=$(detect_fr_service || true)
+        if [[ -n $svc ]]; then
+            warn "FreeRADIUS is already installed ($svc.service, $(detect_radiusd "$svc" || echo 'radiusd not found')); keeping it (the bundled package is not installed)"
+            return 0
+        fi
+    fi
+    DEBIAN_FRONTEND=noninteractive NEEDRESTART_SUSPEND=1 apt-get install -y -q --no-install-recommends "$deb"
+    ok "installed radius-admin-freeradius $ver${have:+ (was $have)}"
+    FR_SVC=""; RADIUSD=""
+    detect_fr
+    if [[ -n $have ]] && systemctl is-active --quiet "$FR_SVC.service"; then
+        if (( RESTART_FR )); then
+            fr_restart || die "$FR_SVC did not come up after the upgrade to $ver: see /var/log/freeradius/radius.log and journalctl -u $FR_SVC"
+            ok "$FR_SVC restarted on $ver and listening on UDP 1812"
+        else
+            warn "FreeRADIUS still runs $have. Restart it in the maintenance window: systemctl restart $FR_SVC  (or re-run with --restart-freeradius)"
+        fi
     fi
 }
 
@@ -221,6 +362,7 @@ phase_users() {
     install -d -o root -g root -m 0700 "$ETC/tls"
     install -d -o radius-admin -g radius-admin -m 0750 "$LIB"
     install -d -o radius-admin -g radius-admin -m 0700 "$STAGING"
+    install -d -o radius-admin -g radius-admin -m 0750 "$LIB/updates"
     install -d -o root -g root -m 0711 "$HELPER_DIR"
     install -d -o root -g root -m 0700 "$HELPER_DIR/backups" "$RA_BACKUP_DIR"
     install -d -o root -g adm -m 0750 /var/log/radius-admin
@@ -587,13 +729,11 @@ phase_freeradius() {
         restore_raddb "$tarball"
         die "freeradius phase failed; previous configuration restored (service was not restarted)"
     fi
+    if ! systemctl is-enabled --quiet "$FR_SVC.service"; then
+        systemctl enable --quiet "$FR_SVC.service"; info "enabled $FR_SVC.service"
+    fi
     if (( RESTART_FR )); then
-        systemctl restart "$FR_SVC.service"
-        for _ in $(seq 1 15); do
-            systemctl is-active --quiet "$FR_SVC.service" && ss -H -lun | awk '{print $4}' | grep -q ':1812$' && break
-            sleep 1
-        done
-        if systemctl is-active --quiet "$FR_SVC.service" && ss -H -lun | awk '{print $4}' | grep -q ':1812$'; then
+        if fr_restart; then
             ok "$FR_SVC restarted and listening on UDP 1812"
         else
             bad "$FR_SVC did not come up; restoring $tarball"
@@ -625,6 +765,25 @@ phase_app() {
     done
     install_app_config
     put "$SRC/helper/radius-admin-helper" "$HELPER_BIN" root:root 0755 || true
+    put "$HERE/update-install.sh" "$UPDATE_BIN" root:root 0755 || true
+    # updates (SPEC section 16): the public key every downloaded build must be signed with,
+    # and which build this is
+    if [[ -s $SRC/deploy/keys/update-signing.pem ]]; then
+        install -d -o root -g root -m 0755 "$(dirname "$UPDATE_KEY")"
+        put "$SRC/deploy/keys/update-signing.pem" "$UPDATE_KEY" root:root 0644 || true
+    else
+        warn "this release has no deploy/keys/update-signing.pem: updates from the portal stay off"
+    fi
+    local build; build=$(mktemp)
+    if [[ -s $SRC/BUILD.json ]]; then
+        cp "$SRC/BUILD.json" "$build"
+    else   # a checkout, not a release bundle
+        printf '{"version": "%s", "channel": "local", "commit": "%s", "built": ""}\n' \
+            "$(tr -d '[:space:]' < "$SRC/VERSION" 2>/dev/null)" \
+            "$(git -C "$SRC" rev-parse HEAD 2>/dev/null || true)" > "$build"
+    fi
+    put "$build" "$OPT/BUILD.json" root:root 0644 || true
+    rm -f "$build"
 
     # helper.conf (root:root 0644): detected service name / radiusd path
     local hc=$ETC/helper.conf tmp
@@ -648,13 +807,21 @@ phase_app() {
     rm -f "$tmp"
 
     local u reload=0
-    for u in radius-admin.service radius-admin-helper.socket radius-admin-helper@.service; do
+    for u in radius-admin.service radius-admin-helper.socket radius-admin-helper@.service \
+             radius-admin-update-check.service radius-admin-update-check.timer \
+             radius-admin-update-install@.service; do
         if put "$HERE/systemd/$u" "/etc/systemd/system/$u" root:root 0644; then reload=1; fi
     done
     if put "$HERE/firewall/radius-admin-firewall.service" /etc/systemd/system/radius-admin-firewall.service root:root 0644; then reload=1; fi
-    # SNMP monitor: network access only to the management subnet
-    local snmpu; snmpu=$(mktemp)
-    sed -e "s#@ADMIN_NET@#$RA_ADMIN_NET#g" "$HERE/systemd/radius-admin-snmp.service" > "$snmpu"
+    # SNMP monitor: network access only to the switch networks. Without answers (updates)
+    # keep what the installed unit allows; the admin net is only the first-install default.
+    local snmpu nets; snmpu=$(mktemp)
+    nets=${SWITCH_NETS:-$(live_switch_nets || true)}
+    nets=${nets:-${SITE[switch_nets]:-}}
+    nets=${nets:-$RA_ADMIN_NET}
+    render_snmp_unit "$HERE/systemd/radius-admin-snmp.service" "$snmpu" "$nets" \
+        || { rm -f "$snmpu"; die "cannot render radius-admin-snmp.service"; }
+    info "monitor (SNMP, CoA) may reach: $nets"
     if grep -v '^[[:space:]]*#' "$snmpu" | grep -qE '@[A-Z_]+@'; then rm -f "$snmpu"; die "unrendered placeholder in radius-admin-snmp.service"; fi
     if put "$snmpu" /etc/systemd/system/radius-admin-snmp.service root:root 0644; then reload=1; fi
     rm -f "$snmpu"
@@ -669,18 +836,19 @@ phase_app() {
     fi
 
     systemctl enable --now radius-admin-helper.socket >/dev/null
+    systemctl enable --now radius-admin-update-check.timer >/dev/null
     if ! command -v snmpget >/dev/null 2>&1; then
         warn "Net-SNMP tools missing (apt install snmp): switch monitoring will report errors"
     fi
     # Disconnect / re-authenticate use radclient from the FreeRADIUS build (SPEC section 13)
     local rc_found="" d
-    for d in /usr/local/bin /usr/bin /usr/local/sbin /usr/sbin /opt/freeradius/bin "$(dirname "$RADIUSD")" \
+    for d in /opt/radius-admin-freeradius/bin /usr/local/bin /usr/bin /usr/local/sbin /usr/sbin /opt/freeradius/bin "$(dirname "$RADIUSD")" \
              "$(dirname "$(dirname "$RADIUSD")")/bin"; do
         if [[ -x $d/radclient ]]; then rc_found=$d/radclient; break; fi
     done
     if [[ -n $rc_found ]]; then
         ok "radclient found: $rc_found (disconnect / re-authenticate available)"
-        if [[ $rc_found != /usr/local/bin/radclient && $rc_found != /usr/bin/radclient && \
+        if [[ $rc_found != /opt/radius-admin-freeradius/bin/radclient && $rc_found != /usr/local/bin/radclient && $rc_found != /usr/bin/radclient && \
               $rc_found != /usr/local/sbin/radclient && $rc_found != /usr/sbin/radclient && \
               $rc_found != /opt/freeradius/bin/radclient ]] && ! grep -q '^radclient *=' "$ETC/radius-admin.conf"; then
             warn "radclient is not in a standard path: add 'radclient = $rc_found' to $ETC/radius-admin.conf [app]"
@@ -726,8 +894,15 @@ s.sendall(sys.stdin.buffer.read()); print(s.recv(65536).decode().strip())' 2>&1 
     if [[ $st == *'"ok":true'* ]]; then ok "helper reachable by radius-admin: $st"; else warn "helper status failed: $st"; fi
 }
 
+need_admin_net() {
+    [[ ${SETTING_SRC[admin_net]} != default ]] \
+        || die "management subnet unknown (no answers, no $RA_SITE_YAML, no installed nginx site): give --answers FILE or --admin-net CIDR"
+    info "management subnet $RA_ADMIN_NET (${SETTING_SRC[admin_net]})"
+}
+
 phase_nginx() {
     hdr "Phase nginx"
+    need_admin_net
     local ip=${LISTEN_IP:-$(detect_vlan_ip "$RA_ADMIN_NET" || true)}
     [[ -n $ip ]] || die "no address in $RA_ADMIN_NET found; pass --listen-ip"
     local res=${RESOLVER:-$(detect_resolvers || true)}
@@ -766,6 +941,7 @@ phase_nginx() {
         systemctl enable nginx >/dev/null 2>&1 || true
         systemctl reload-or-restart nginx
         ok "nginx serving https://$RA_SERVER_NAME on $ip:443 (resolver $res)"
+        ans_record "$RA_SITE_YAML" server_name "$RA_SERVER_NAME" admin_net "$RA_ADMIN_NET" listen_ip "$ip" resolver "$res"
         if [[ -n $old ]]; then rm -f "$old"; fi
     else
         if [[ -n $old ]]; then cp -p "$old" "$site"; rm -f "$old"; else rm -f /etc/nginx/sites-enabled/radius-admin; fi
@@ -778,6 +954,7 @@ phase_nginx() {
 
 phase_firewall() {
     hdr "Phase firewall"
+    need_admin_net
     local ip=${LISTEN_IP:-$(detect_vlan_ip "$RA_ADMIN_NET" || true)}
     [[ -n $ip ]] || die "no address in $RA_ADMIN_NET found; pass --listen-ip"
     local fw; fw=$(detect_firewall)
@@ -793,6 +970,7 @@ phase_firewall() {
     systemctl enable radius-admin-firewall.service >/dev/null
     systemctl restart radius-admin-firewall.service
     ok "nftables table inet radius_admin: TCP 443 on $ip only from $RA_ADMIN_NET"
+    ans_record "$RA_SITE_YAML" admin_net "$RA_ADMIN_NET" listen_ip "$ip"
     case $fw in
         ufw)
             if ! ufw status | grep -qE "^$ip 443/tcp +ALLOW +$RA_ADMIN_NET"; then
@@ -899,6 +1077,7 @@ for p in "${ALL_PHASES[@]}"; do
     case $p in
         preflight) phase_preflight ;;
         packages) phase_packages ;;
+        fr-package) phase_fr_package ;;
         users) phase_users ;;
         postgres) phase_postgres ;;
         migrate) phase_migrate ;;

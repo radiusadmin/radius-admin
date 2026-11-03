@@ -45,19 +45,19 @@ Verified in FreeRADIUS 3.2.10 source:
 ```
 radius-admin/
   SPEC.md                      this file
-  README.md                    overview / quick start            (DEPLOY agent)
-  docs/RUNBOOK.md              install, migrate, verify, rollback (DEPLOY agent)
-  docs/SECURITY.md             FIPS boundary, exceptions, 800-171 mapping, findings (DEPLOY agent)
-  app/                         Python application                 (APP agent, except unlang.py)
+  README.md                    overview / quick start
+  docs/RUNBOOK.md              install, migrate, verify, rollback
+  docs/SECURITY.md             FIPS boundary, exceptions, 800-171 mapping, findings
+  app/                         Python application
     radius_admin/
       __init__.py              create_app()
-      unlang.py                policy + clients file rendering & validators (FR agent owns)
+      unlang.py                policy + clients file rendering & validators
       ...
     tests/
-  helper/radius-admin-helper   root helper, python3 stdlib only   (DEPLOY agent)
-  sql/                         Postgres DDL                       (FR agent)
+  helper/radius-admin-helper   root helper, python3 stdlib only
+  sql/                         Postgres DDL
     00-roles.sql 10-freeradius-schema.sql 20-radius-admin-schema.sql 30-grants.sql
-  freeradius/                  FreeRADIUS config deliverables     (FR agent)
+  freeradius/                  FreeRADIUS config deliverables
     mods-available/sql
     mods-available/eap
     mods-available/ldap
@@ -67,10 +67,10 @@ radius-admin/
     mods-config/files/authorize
     modules-to-disable.txt
     diffs/*.diff               unified diffs vs stock FreeRADIUS 3.2.10 raddb
-  deploy/                      (DEPLOY agent unless stated)
+  deploy/
     install.sh                 idempotent installer
     preflight.sh               read-only checks before anything changes
-    migrate_sqlite_to_pg.py    (FR agent)
+    migrate_sqlite_to_pg.py
     rollback.sh
     make-csr.sh
     nginx/radius-admin.conf
@@ -79,6 +79,10 @@ radius-admin/
     systemd/radius-admin-helper@.service
     postgres/pg_hba.conf.snippet  postgres/pg_ident.conf.snippet
     etc/radius-admin.conf.example
+  tools/lib/fr-release.sh      FreeRADIUS release, signing key, verified download
+  tools/package/               build-freeradius-deb.sh (radius-admin-freeradius .deb),
+                               make-bundle.sh (release .tar.gz), freeradius/ (unit, maintainer scripts)
+  packages/                    built packages (not in git; part of the release bundle)
 ```
 
 ## 2. OS accounts, paths, permissions
@@ -97,6 +101,7 @@ radius-admin/
 | Helper work | `/var/lib/radius-admin-helper/` (root 0700): `backups/<UTC ts>/`, `validate/`, `state.json`, lock file |
 | Generated policy | `/etc/freeradius/policy.d/radius-admin` (root:freerad 0640) |
 | Generated clients | `/etc/freeradius/radius-admin-clients.conf` (root:freerad 0640) |
+| FreeRADIUS (bundled package) | `/opt/radius-admin-freeradius/` (`sbin/radiusd`, `bin/radclient`, `lib/rlm_*.so`, `share/freeradius` dictionaries), unit `freeradius.service`, logs `/var/log/freeradius/` (freerad 0750), raddb `/etc/freeradius` (root:freerad 0750) |
 
 Config file `/etc/radius-admin/radius-admin.conf` (INI):
 ```
@@ -238,12 +243,13 @@ genesis prev_hash = 64 zeros. Insert must be serialized with
 `SELECT pg_advisory_xact_lock(7212001)` inside the transaction (LOCK TABLE is not
 possible: radius_admin has no UPDATE/DELETE on that table).
 
-The SQL files in `sql/` are ALREADY WRITTEN and validated (by the lead). Agents must not
-change them without reporting why. A sandbox PostgreSQL 16 cluster is running
-(`pg_ctlcluster 16 main`, socket /var/run/postgresql) with roles and database `radius`
-loaded from these files.
+The SQL files in `sql/` are applied in numeric order. Change them only with a reason
+recorded in the commit; a migration only adds objects, and old ones go at least one
+release later, so a rollback never needs a database restore. A sandbox
+PostgreSQL 16 cluster (`pg_ctlcluster 16 main`, socket /var/run/postgresql) has the
+roles and database `radius` loaded from these files.
 
-## 4. FreeRADIUS changes (FR agent)
+## 4. FreeRADIUS changes
 
 1. `mods-available/sql`: dialect postgresql, driver rlm_sql_postgresql,
    `radius_db = "dbname=radius host=/var/run/postgresql user=radius_fr"`, `read_clients`
@@ -255,7 +261,7 @@ loaded from these files.
 3. `sites-available/default`:
    - authorize: remove `chap`, `mschap`, `digest`; after `preprocess` insert
      `radius_admin_mab` then `if (&control:Auth-Type == Accept) { return }`... (exact
-     form is FR agent's choice but MAB must not hit LDAP/PAP).
+     form is free but MAB must not hit LDAP/PAP).
    - authenticate: remove CHAP, MS-CHAP, `mschap`, `digest`.
    - post-auth: replace the hand-written "Site policy" block (orig lines 847–934) with
      the single line `radius_admin_postauth`. Everything else unchanged.
@@ -276,7 +282,7 @@ loaded from these files.
 10. Must be validated against a real FreeRADIUS 3.2.10 built from source with
    `--enable-fips-workaround` (sandbox), including functional radtest checks.
 
-## 5. Generated unlang (FR agent implements in `app/radius_admin/unlang.py`)
+## 5. Generated unlang
 
 `render_policy(settings: dict, rules: list[dict], custom: str) -> str` produces the full
 content of `/etc/freeradius/policy.d/radius-admin`. It defines exactly these policies:
@@ -320,7 +326,7 @@ limit_proxy_state = .. }` per enabled client, sorted by name, deterministic. Use
 `ipv4addr`/`ipv6addr` per family; CIDR allowed.
 The helper performs its own independent safety checks (§6).
 
-## 6. Root helper protocol (DEPLOY agent implements; APP agent's client)
+## 6. Root helper protocol
 
 Socket `/run/radius-admin-helper.sock`, one JSON object per line (UTF-8, ≤ 64 KiB) in,
 one JSON line out, then the connection closes. Request: `{"action": <str>, ...}`.
@@ -338,6 +344,21 @@ Actions:
   "policy_sha256":.., "clients_sha256":..}`.
 - `rollback` `{"backup_id": "<ts>"}` (format `^\d{8}T\d{6}Z$`) → restore that backup,
   validate, restart, same failure handling.
+- `update_status` → `{"ok":true, "installed": {version, channel, commit, built} from
+  `build_file`, "key_present": bool, "key_fingerprint": sha256 of the pinned key's DER,
+  "state": {state: queued|installing|done|failed|rolled_back, version, from, channel,
+  restarts_freeradius, actor, requested, finished, message, log}}`. A queued/installing
+  state whose install unit is no longer running is marked failed (section 16).
+- `update_check` → `systemctl start --no-block <update_check_unit>`.
+- `update_install` `{"version": "X.Y.Z[-rc.N|-dev.N]", "allow_downgrade": true|absent,
+  "actor": "<username>"|"auto"}` → copies `<update_dir>/<version>/{manifest.json,
+  manifest.json.sig, radius-admin-<version>.tar.gz}` (regular, single-linked, owned by
+  `update_owner`, opened O_NOFOLLOW) into `<work_dir>/update/<version>/`, verifies the
+  manifest with `openssl dgst -sha384 -verify <update_pubkey>`, checks the manifest
+  (format 1, product, version, channel, bundle name/size ≤ update_max_mib) and the bundle's
+  SHA-384, refuses a version not newer than the installed one unless `allow_downgrade` is
+  JSON `true`, refuses while another install runs, writes the state and starts
+  `<update_install_unit>@<version>.service`. Only `allow_downgrade: true` (the boolean) counts.
 Staging path is fixed in helper.conf, never taken from the request. Helper safety
 checks: files ≤ 1 MiB, UTF-8, no NUL; clients file must consist only of `client <name> {`
 blocks containing whitelisted keys (ipaddr, ipv4addr, ipv6addr, secret, shortname,
@@ -345,7 +366,7 @@ nas_type, require_message_authenticator, limit_proxy_state) and comments; policy
 must not contain `$INCLUDE`, `$-INCLUDE`, `$ENV`, `$TEMPLATE`, `%{exec:`, `Exec-Program`,
 backticks. Helper logs every action to syslog (ident `radius-admin-helper`).
 
-## 7. Crypto / FIPS rules (ALL agents)
+## 7. Crypto / FIPS rules (all components)
 
 - All crypto through system OpenSSL 3 (FIPS provider). Python: `hashlib`, `hmac`
   (OpenSSL-backed), `ssl.RAND_bytes` for ALL randomness (tokens, salts, secrets, TOTP
@@ -380,7 +401,7 @@ require_ma: wifi-aps 'yes', switches 'auto').
 radcheck: existing `Crypt-Password` rows migrated unchanged (flagged legacy in UI);
 radpostauth/radacct history migrated WITHOUT `pass`.
 
-## 9. Web app requirements (APP agent)
+## 9. Web app requirements
 
 Flask (apt python3-flask 3.0.x), Jinja2 autoescape, psycopg2 (apt), gunicorn (apt),
 python3-cryptography, optional python3-qrcode (SVG; fall back to showing the secret).
@@ -432,7 +453,7 @@ No Flask sessions/itsdangerous; own server-side sessions (§3.2).
 User decision: access rules and settings take effect immediately (no restart); RADIUS
 clients and custom policy keep the validate → apply → restart flow.
 
-- `sql/40-live-policy.sql` (written + validated by the lead, loaded in sandbox DBs
+- `sql/40-live-policy.sql` (loaded in sandbox DBs
   `radius` and `radius_apptest`) adds SECURITY DEFINER functions, EXECUTE granted to
   radius_fr and radius_admin (radius_fr still has NO rights on schema ui):
   - `radius_admin_vlan(port_type text, called_station_id text, groups text) -> text|NULL`
@@ -463,7 +484,7 @@ CSV columns (header row required, exact names, any order tolerated by name):
   `encrypted` | `none` (case-insensitive). `key_scope`: `server` | `global` | `none` (or empty; `host` accepted as alias of server)
   (`global` = the switch has no per-server key and uses its global `radius-server key`).
   `dot1x_ports`: free text (e.g. `gi1/0/1-24`), informational, ≤ 1000 chars, stored as is.
-- `sql/50-client-import.sql` (written + validated by the lead, loaded in sandbox DBs) adds
+- `sql/50-client-import.sql` (loaded in sandbox DBs) adds
   to ui.radius_client: `key_status` ('ok'|'encrypted'|'missing', default 'ok'),
   `key_scope` (NULL = none|'server'|'global'), `dot1x_ports` (text, default ''), and CHECK
   `key_status = 'ok' OR NOT enabled` — a client without a usable plaintext key can never
@@ -514,7 +535,10 @@ CSV columns (header row required, exact names, any order tolerated by name):
   IEEE8021-PAE-MIB port control (2 = auto → 802.1X port), IF-MIB ifName (standalone C1300 `gi4`
   → `gi1/0/4`), RADIUS-AUTH-CLIENT-MIB ext table (RFC 4668) or old table.
 - `radius_admin/snmp_poller.py` + `deploy/systemd/radius-admin-snmp.service`: OS user
-  radius-admin, the only component with network access (IPAddressAllow = admin subnet).
+  radius-admin, the only component with network access (IPAddressAllow = the switch networks:
+  answers key `switch_nets` / `install.sh --switch-nets`, default the admin subnet; runs without
+  answers keep the installed unit's list). A send that systemd drops (EPERM) is reported as
+  "not sent: <address> is outside the switch networks…" (`snmp.blocked_message`), for SNMP and CoA.
   Polls only clients with `ui.radius_client.is_switch` (default false) that are a single address; optional auto-sync of `dot1x_ports` (audited,
   actor `system:snmp-poller`), compared as port sets.
 - UI: Switch monitoring page (admin + step-up; passphrases write-only), Refresh now and Test
@@ -536,8 +560,14 @@ CSV columns (header row required, exact names, any order tolerated by name):
     and `rule_id`; indexes for station and reject queries; `radacct` indexes for open sessions.
   - `mab_device.expires_at`; `mab_pending` (unknown MACs: first/last seen, attempts, NAS, port, ignored),
     written only by `radius_admin_mab_hex(mac, nas_hex, port_hex)` (SECURITY DEFINER, VOLATILE, granted to
-    radius_fr only). It returns `<vlan>` / `disabled` / `expired` / `unknown` / NULL and queues unknown MACs
-    (best effort, at most 2000 rows; never blocks the reply).
+    radius_fr only). It returns `<vlan>` / `disabled` / `expired` / `certificate` / `unknown` / NULL and queues
+    unknown MACs (best effort, at most 2000 rows; never blocks the reply). *(2026-11-02)* `certificate`: the
+    MAC is not registered but has an EAP-TLS Access-Accept in `radpostauth` (Calling-Station-Id compared by
+    its hex digits; partial expression index `radpostauth_cert_mac_idx`). Such a MAC is never queued, an
+    earlier queue row is deleted, and the policy rejects with "MAB not used: this device authenticates
+    with a certificate". A registered MAC keeps its VLAN. The console reads the queue (list, counts, nav
+    badge, auth detail) through the view `mab_pending_open`, which leaves out those MACs, so a device
+    queued before its first certificate login disappears at once.
   - `radius_admin_vlan_rule_hex()` = `radius_admin_vlan_hex()` returning `<vlan>:<rule id>`
     (`radius_admin_vlan_rule_core()` mirrors `radius_admin_vlan_core()`).
   - `ui.switch_status` gains `fail_count`, `last_ok_at`, `ports` (jsonb per-port state).
@@ -626,11 +656,23 @@ CSV columns (header row required, exact names, any order tolerated by name):
   and not pending) and optional ones (second admin, switch admins, SSO, RadSec, monitoring, alert
   e-mail; skippable). Dashboard strip until finished. Audited `setup.skip|restore|finish|reopen`.
 - **Installer answers** (`deploy/answers.sh`): `install.sh` with no options on a terminal, or
-  `--interactive`, asks server name, management subnet, listen address, resolvers, portal
+  `--interactive`, asks server name, management subnet, listen address, switch networks, resolvers, portal
   certificate (self-signed ECDSA P-384 / CSR / existing) and the first admin; `--answers FILE`
   takes the same unattended; `--print-answers` validates and prints only. New phase `site` writes
   `/etc/radius-admin/site.yaml` (root 0640) and the certificate; `bootstrap` creates the first
   admin. With a CSR the run stops until the issued certificate is installed.
+- **Portal settings without answers** (`update.sh`, which runs `install.sh --phase … -y`, or a
+  phase run by hand): `server_name`, `admin_net`, `listen_ip` and `resolver` come from
+  `/etc/radius-admin/site.yaml` (read with `ans_load`), else from the installed nginx site
+  (`server_name`, `allow`, `listen …:443`, `resolver`), else from `/etc/radius-admin/firewall.nft`
+  (`ip saddr`/`ip daddr`); `ocsp_url` from the nginx site (`ssl_ocsp_responder`) unless
+  `RA_OCSP_URL` is set. Values found this way are validated like answers and a bad one stops the
+  run. `--admin-net`, `--listen-ip`, `--server-name` and `--resolver` win over all of these and
+  over an answers file. The `nginx` and `firewall` phases stop when no management subnet is
+  known instead of using the 192.0.2.0/24 example, and after they install write the values in use
+  back into an existing `site.yaml` (other keys kept), so a later update does not revert an
+  option. `install.sh --print-settings` prints each value and its source; `update.sh` shows it in
+  the plan when it runs `nginx` or `firewall`, and stops (release discarded) if it fails.
 - **Navigation and wording.** Side navigation grouped by topic: Network access (RADIUS clients,
   access rules, MAB devices, switch admins, custom policy, Apply changes), Monitoring, Records,
   Administration (settings, single sign-on, UI admins, setup checklist; admins only). The
@@ -645,3 +687,123 @@ CSV columns (header row required, exact names, any order tolerated by name):
   standard mode and fails on "FIPS". Row and account drop-down menus are positioned against the
   window (`app.js`), so a scrolling table cannot clip them.
 
+## 15. Change (2026-10-31): bundled FreeRADIUS package
+
+- **`radius-admin-freeradius`** (`tools/package/build-freeradius-deb.sh`): FreeRADIUS 3.2.10 from the
+  signed upstream release (key `FR_KEY_FPR` in `tools/lib/fr-release.sh`, shared with the bench
+  build), `--enable-fips-workaround`, prefix `/opt/radius-admin-freeradius`, raddb `/etc/freeradius`,
+  logs `/var/log/freeradius`. Modules needing libraries the product does not use (perl, python,
+  mysql, sqlite, redis, rest, …) are configured out, so the package does not depend on the build
+  host; the build fails unless `rlm_sql_postgresql`, `rlm_ldap`, `rlm_eap_tls`, `rlm_sql`, `rlm_files`
+  and `rlm_pap` were built. Depends are the distribution packages owning the directly linked
+  libraries (≥ the build host's version); the package is built per distribution release and its
+  version says which (`3.2.10-1~ubuntu24.04`). `Conflicts: freeradius`.
+- **The package owns no file in `/etc`.** The stock raddb ships as
+  `/opt/radius-admin-freeradius/share/raddb-dist` (no test certificates: built with `PACKAGE=…`;
+  `user = freerad`, `group = freerad`). `postinst` creates the `freerad` user/group and
+  `/var/log/freeradius`, and copies raddb-dist to `/etc/freeradius` **only when that does not
+  exist** (root:freerad, no group write, no world access; modes only, no ACLs, so a default ACL on
+  `/opt` cannot make later files world-writable, which radiusd refuses). Upgrades, reinstalls and purge never
+  change or delete `/etc/freeradius`. `postinst` never starts, restarts or enables radiusd; `prerm`
+  stops and disables it on removal only.
+- **Unit `freeradius.service`**: radiusd starts as root and drops to `freerad` itself (no `User=`),
+  `ExecStartPre … -Cx`, `ProtectSystem=full`, `NoNewPrivileges`, writable `/var/log/freeradius` only.
+  The existing detection (`detect_fr_service`, `detect_radiusd` from `ExecStart`, `detect_fr_libdir`
+  from the RUNPATH) finds it unchanged; `helper.conf` gets `radiusd = /opt/radius-admin-freeradius/sbin/radiusd`.
+- **Release layout.** The packages go in `packages/` of the release tree with a `.sha384` each,
+  plus `packages/source/` (upstream tarball and signature, for the GPLv2). `tools/package/make-bundle.sh`
+  makes `radius-admin-<git describe>.tar.gz` from HEAD plus `packages/` with a `.sha256`.
+- **Installer phase `fr-package`** (after `packages`, before `users`): picks
+  `packages/radius-admin-freeradius_*~<ID><VERSION_ID>_<arch>.deb` (or `--freeradius-deb FILE`),
+  refuses it without a matching `.sha384`, and installs it with `apt-get` when no FreeRADIUS is
+  installed, or upgrades it when the bundled version is newer. A FreeRADIUS installed any other
+  way (the distribution's `freeradius`, or a source build with its own unit) is kept with a
+  warning. On upgrade the running radiusd is restarted only with `--restart-freeradius`; the
+  installer's `apt-get` calls set `NEEDRESTART_SUSPEND=1` so Ubuntu's needrestart cannot restart
+  it behind the installer's back. Without a
+  bundled package and without FreeRADIUS the phase stops. The `freeradius` phase now enables the
+  unit after `radiusd -XC` passes. Preflight reports a host without FreeRADIUS as ready when a
+  bundled package is present. `update.sh` adds `fr-package` when `packages/` changed.
+- **radclient**: `/opt/radius-admin-freeradius/bin` is searched first (app `coa.SEARCH_DIRS`,
+  dictionaries `DICT_DIRS`, installer).
+- Tests: `tests/package/test_freeradius_deb.sh` (package contents; with `--install`, the installer
+  phase, idempotency, kept configuration, checksum refusal, start and answer, upgrade without
+  restart, purge).
+
+## 16. Change (2026-11-02): updates from signed GitHub builds
+
+- **Versions.** `VERSION` holds X.Y.Z. `tools/release/build-version.sh BRANCH` gives the build
+  version: `main` X.Y.Z, `testing` X.Y.Z-rc.N, `dev` X.Y.Z-dev.N, with N = commits since
+  `VERSION` last changed. Ordering (same X.Y.Z): dev < rc < release (`radius_admin.versions`,
+  and a copy in the helper). Bump `VERSION` on `dev` right after a release. `CHANGELOG.md`
+  has an `## Unreleased` section and one `## X.Y.Z — date` section per release.
+- **Releases** (`.github/workflows/release.yml`, after CI passes on a push to main, testing
+  or dev; job in the `release` environment): builds the FreeRADIUS package and the bundle
+  (`make-bundle.sh --channel`, which writes `BUILD.json`), then `tools/release/make-release.sh`
+  writes `manifest.json` `{format: 1, product, version, channel, commit, created,
+  restarts_freeradius, bundle: {name, size, sha384}, notes}` and `manifest.json.sig`
+  (ECDSA P-384 over SHA-384, `openssl dgst -sha384 -sign`), and publishes release
+  `v<version>` (testing/dev as prereleases) with the bundle, manifest and signature as
+  assets. The key is the `UPDATE_SIGNING_KEY` secret; the script refuses a key that is not
+  P-384 or does not match `deploy/keys/update-signing.pem`, the public key servers pin.
+  Without the secret or the pinned key the job warns and publishes nothing. main publishes
+  only when `VERSION` changes; testing and dev keep their newest 10 releases.
+  `restarts_freeradius` is true when `freeradius/`, `tools/package/` or
+  `tools/lib/fr-release.sh` changed since the previous release on the channel (or there is
+  none). Notes: the release's CHANGELOG section; previews get `Unreleased` plus the
+  commit subjects since the previous preview.
+- **Settings** (`sql/90-updates.sql`, ui.setting): `update_channel` main|testing|dev
+  (default main), `update_mode` off|notify|auto (default notify), `update_window_day`
+  mon…sun|daily (default sun), `update_window_hour` 0–23 (default 3, server local time),
+  `update_check_requested` (ISO time of the last "Check now"). Table `ui.update_check`
+  (one row): checked_at, ok, error, channel, installed_version, latest_version, downgrade,
+  restarts_freeradius, downloaded, releases (jsonb: version, published, notes,
+  restarts_freeradius; newest first, at most 20).
+- **Update check** (`radius_admin.updater`, `radius-admin-update-check.service` run hourly by
+  its timer as radius-admin; the only component with outbound HTTPS, honours `HTTPS_PROXY`
+  from `/etc/radius-admin/update.env`): off → returns without network. notify → runs when the
+  last check is ≥ 23 h old, the channel changed, or `update_check_requested` is newer; auto →
+  every run. Lists `GET <update_api>/repos/<update_repo>/releases`, keeps non-draft
+  releases whose tag is `v<version>` and that carry all three assets, picks the newest on the
+  channel; if none is newer but the installed build is from another channel, offers the
+  channel's newest as a downgrade. Downloads it to `<update_dir>/<version>/` (https only;
+  sizes capped; discarded unless the bundle matches the manifest's SHA-384; other versions
+  removed) and records the row. auto: installs (helper `update_install`, actor `auto`) when
+  the listed builds do not restart FreeRADIUS, otherwise only within the window hour; never
+  when the helper's state shows this version failed, rolled back or still running; audited
+  `update.auto_install`.
+- **Install** (`deploy/update-install.sh` as `/usr/local/libexec/radius-admin/
+  radius-admin-update-install`, unit `radius-admin-update-install@<version>.service`, root):
+  re-checks the verified copy against the manifest, `pg_dump -Fc radius` to
+  `/var/backups/radius-admin/radius-db-before-<version>-<ts>.dump` (newest 5 kept), runs the
+  bundle's `deploy/update.sh --package … --yes --keep-upload` (plus `--with-freeradius --
+  --restart-freeradius` when the release restarts FreeRADIUS), then health checks (portal
+  answers on its socket, helper socket active, FreeRADIUS active and on UDP 1812 when
+  restarted, `/opt/radius-admin/BUILD.json` names the version) for up to a minute. On an
+  installer error it re-runs the previous release's app phase; on failed health checks
+  `update.sh --rollback`. Progress in the helper's `update-state.json`, log in
+  `/var/log/radius-admin/update-<version>-<ts>.log`, outcome audited `update.install`
+  (`radius_admin.cli record-update`).
+- **Installer**: `/var/lib/radius-admin/updates` (radius-admin 0750); app phase installs the
+  install script, the three units (timer enabled), `deploy/keys/update-signing.pem` as
+  `/usr/local/share/radius-admin/update-signing.pem` (root 0644; warns when the release has
+  none) and `BUILD.json` as `/opt/radius-admin/BUILD.json` (from a checkout: version from
+  `VERSION`, channel `local`). The helper unit may read `/var/lib/radius-admin/updates`.
+- **Updates page** (`/updates`, admin; settings and install need step-up): installed →
+  latest version, the notes of every newer build (a safe Markdown subset), "restarts
+  FreeRADIUS" marks, install (only the build the last check downloaded; a downgrade needs an
+  explicit confirmation), install progress (refreshes every 10 s) and the last result,
+  "Check now" (not in off mode), and the settings. A nav badge shows an available update.
+  Audited `update.settings`, `update.check`, `update.install_requested`.
+
+## 17. Change (2026-11-02): display time zone
+
+- **Setting** `display_timezone` in `ui.setting` (absent = `UTC`; no migration): an IANA zone name
+  from the system zone list (`services.timezones()`, tzdata; installer package `tzdata`). Settings page (admin +
+  step-up), "Time zone" select; other names are refused. Audited in `settings.update`
+  (`display_timezone: {from, to}`).
+- **Display only.** Database sessions stay UTC (section 14) and storage is unchanged. The `dt`/`dtc`
+  filters convert to the zone (read once per request, `services.display_zone()`; a stored name
+  that is not a known zone falls back to UTC) and label times with its abbreviation (`%Z`). The
+  auth log's From/To filters are whole days in the zone. Reports and their CSVs (whole UTC days),
+  alert messages, syslog and the audit hash stay in UTC.

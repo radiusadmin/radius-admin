@@ -206,7 +206,7 @@ def radclient(prefix, client, attrs, server="127.0.0.1:1812"):
     return code, out
 
 
-def eapol(eapol_test, bench, client, method, cert=None, extra=(), identity=None, port=1812):
+def eapol(eapol_test, bench, client, method, cert=None, extra=(), identity=None, port=1812, mac=None):
     src, secret = client
     pki = os.path.join(bench, "pki")
     conf = ["network={", "\tkey_mgmt=IEEE8021X", "\teapol_flags=0", "\teap=%s" % method]
@@ -228,6 +228,8 @@ def eapol(eapol_test, bench, client, method, cert=None, extra=(), identity=None,
     try:
         cmd = [eapol_test, "-c", path, "-a", "127.0.0.1", "-p", str(port), "-s", secret, "-A", src,
                "-t", "10", "-r", "0"]
+        if mac:
+            cmd += ["-M", mac]                 # own MAC, sent as Calling-Station-Id
         for e in extra:
             cmd += ["-N", e]
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
@@ -420,6 +422,27 @@ INJECTION_PAYLOADS = [
 def tables_fingerprint():
     return psql("SELECT (SELECT count(*)||':'||coalesce(max(id),0)||':'||coalesce(sum(vlan),0) FROM ui.access_rule)"
                 "||'/'||(SELECT count(*) FROM radcheck)||'/'||(SELECT count(*) FROM mab_device)")
+
+
+def cert_mab_cases(eapol_test, bench, prefix):
+    """A MAC that authenticated with a certificate is never offered for MAB approval."""
+    eth = ['NAS-IP-Address = %s' % SW_IN[0], 'NAS-Port-Type = Ethernet', 'Service-Type = Call-Check',
+           'NAS-Port-Id = "gi1/0/9"']
+    mab = eth + ['User-Name = "aabbcc000077"', 'User-Password = "aabbcc000077"',
+                 'Calling-Station-Id = "AA-BB-CC-00-00-77"']
+    code, _ = radclient(prefix, SW_IN, mab)
+    queued = psql("SELECT count(*) FROM mab_pending WHERE mac='AA-BB-CC-00-00-77'")
+    record("MAB first (802.1X not answered yet) -> Reject, queued", code == "reject" and queued == "1", queued)
+    code, out = eapol(eapol_test, bench, SW_IN, "TLS", cert="pc1", extra=["61:d:15"], mac="aa:bb:cc:00:00:77")
+    shown = psql("SELECT count(*) FROM mab_pending_open WHERE mac='AA-BB-CC-00-00-77'")
+    record("Same MAC then EAP-TLS -> VLAN 500, no longer shown as unknown",
+           code == "accept" and vlan_of(out) == "500" and shown == "0", "%s vlan=%s shown=%s" % (code, vlan_of(out), shown))
+    code, out = radclient(prefix, SW_IN, mab)
+    queued = psql("SELECT count(*) FROM mab_pending WHERE mac='AA-BB-CC-00-00-77'")
+    reason = psql("SELECT reason FROM radpostauth WHERE authmethod='mab' AND callingstationid='AA-BB-CC-00-00-77'"
+                  " ORDER BY id DESC LIMIT 1")
+    record("MAB again for the certificate device -> Reject, queue row removed, reason says certificate",
+           code == "reject" and queued == "0" and "authenticates with a certificate" in reason, reason)
 
 
 def injection_cases(eapol_test, bench, prefix, logname):
@@ -776,6 +799,7 @@ def main():
         mab_cases(a.prefix)
         if a.eapol_test:
             eap_cases(a.eapol_test, bench, logname)
+            cert_mab_cases(a.eapol_test, bench, a.prefix)
             injection_cases(a.eapol_test, bench, a.prefix, logname)
             live_cases(a.eapol_test, bench, a.prefix, logname)
             radsec_cases(a.eapol_test, bench, a.prefix)

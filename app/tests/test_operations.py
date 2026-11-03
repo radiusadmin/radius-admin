@@ -381,6 +381,18 @@ def test_monitor_coa_failures_are_reported(app, superconn):
     assert ok is False and "radclient" in msg
 
 
+def test_coa_blocked_by_this_server(app, browser, superconn, logged_in):
+    from radius_admin import coa, snmp
+    ok, msg = coa.parse_reply("(0) Failed to send packet for ID 87: sendto failed: Operation not permitted\n", "192.0.2.10")
+    assert ok is False and snmp.is_blocked(msg) and "192.0.2.10" in msg
+    cid = _client(superconn)
+    q(superconn, "INSERT INTO ui.coa_request (client_id, action, nas_ip, requested_by, done_at, ok, message)"
+                 " VALUES (%s, 'reauth', '192.0.2.10', 'op', now(), false, %s)", (cid, msg))
+    logged_in("operator")
+    t = browser.text(browser.get("/sessions/coa/1"))
+    assert "switch_nets" in t and "dynamic authorization configured" not in t
+
+
 # ======================================================================= alerts
 @pytest.fixture
 def mon_conn(app):
@@ -645,3 +657,13 @@ def test_no_smart_card_wording(app, browser, superconn, logged_in):
             if f.endswith((".html", ".py")):
                 text = open(os.path.join(dirpath, f), encoding="utf-8").read().lower()
                 assert "smart card" not in text and "cac/piv" not in text, f
+
+
+def test_radclient_search_prefers_bundled_package(monkeypatch):
+    """The bundled radius-admin-freeradius radclient wins over a distribution one."""
+    from radius_admin import coa
+    present = {"/opt/radius-admin-freeradius/bin/radclient", "/usr/bin/radclient"}
+    monkeypatch.setattr(coa.os, "access", lambda p, mode: p in present)
+    assert coa.find_radclient() == "/opt/radius-admin-freeradius/bin/radclient"
+    present.discard("/opt/radius-admin-freeradius/bin/radclient")
+    assert coa.find_radclient() == "/usr/bin/radclient"

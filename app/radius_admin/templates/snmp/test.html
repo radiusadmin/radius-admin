@@ -13,7 +13,11 @@
   <p role="status"><span class="tag tag-ok">OK</span> {{ t.message }}</p>
 {% else %}
   <p role="alert"><span class="tag tag-warn">Failed</span> {{ t.message }}</p>
+  {% if blocked %}
+  <p class="small muted">This server did not send the request: the monitoring service may only reach the switch networks. Add the switch's network to <span class="mono">switch_nets</span> in <span class="mono">/etc/radius-admin/site.yaml</span> and run <span class="mono">sudo deploy/install.sh --answers /etc/radius-admin/site.yaml --phase app</span> (RUNBOOK §6.3).</p>
+  {% else %}
   <p class="small muted">Check that the switch has the SNMPv3 user with SHA-2 authentication and AES-128 privacy, that its SNMP access list allows this server, and that UDP 161 is open from this server.</p>
+  {% endif %}
 {% endif %}
 </section>
 {% endblock %}

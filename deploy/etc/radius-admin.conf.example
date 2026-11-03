@@ -29,7 +29,7 @@ log_syslog = true
 # server_name = radius.example.net
 # db_pool_max = 8
 # radclient =                       ; path of radclient for disconnect/re-authenticate; empty = search
-#                                   ;   /usr/local/bin, /usr/bin, /opt/freeradius/bin, ...
+#                                   ;   /opt/radius-admin-freeradius/bin, /usr/local/bin, /usr/bin, ...
 # radius_dict_dir =                 ; FreeRADIUS dictionary dir; empty = <radclient prefix>/share/freeradius
 
 [helper]

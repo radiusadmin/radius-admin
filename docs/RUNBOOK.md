@@ -20,8 +20,8 @@ Contents: 1 Prerequisites · 2 Plan the maintenance window · 3 Install step by 
 | Ubuntu Pro FIPS stream | `pro status` (see SECURITY.md §1 about `fips-updates` vs `fips`) |
 | Internal apt mirror reachable | `apt-get update` |
 | Packages available | `apt-cache policy postgresql nginx python3-flask python3-psycopg2 gunicorn python3-cryptography python3-qrcode nftables` |
-| FreeRADIUS unit + binary | `systemctl list-unit-files 'freeradius*' 'radiusd*'`; `command -v radiusd freeradius` |
-| **`rlm_sql_postgresql.so` in the custom build** | see below |
+| FreeRADIUS unit + binary | new server: nothing to do, the release bundle carries `packages/radius-admin-freeradius_*.deb` (§1.2). Existing server: `systemctl list-unit-files 'freeradius*' 'radiusd*'`; `command -v radiusd freeradius` |
+| **`rlm_sql_postgresql.so` in the custom build** | existing builds only, see below |
 | management address on this host | `ip -4 addr` (an address in 192.0.2.0/24) |
 | DNS for `pki.example.net` | `getent hosts pki.example.net` (nginx refuses to start otherwise) |
 | UI certificate | issued by pki.example.net from the CSR made by `deploy/make-csr.sh` |
@@ -67,6 +67,43 @@ module). `make install` does not overwrite existing files under `/etc/freeradius
 `tar -czpf /root/freeradius-etc-prebuild.tgz /etc/freeradius`.
 Production builds should not use `--enable-developer` (preflight warns if radiusd was
 built with `WITH_VERIFY_PTR`).
+
+### 1.2 The bundled FreeRADIUS package
+
+A release bundle contains `packages/radius-admin-freeradius_3.2.10-<n>~<distro>_amd64.deb`: the
+signed upstream 3.2.10 release built with `--enable-fips-workaround` (one build for both modes),
+installed under `/opt/radius-admin-freeradius`, with the unit `freeradius.service`. The installer's
+`fr-package` phase installs it on a server that has no FreeRADIUS:
+
+```bash
+sudo ./deploy/install.sh --phase fr-package       # also part of a full install
+```
+
+- The package is refused unless it matches its `.sha384` file.
+- It never owns or changes `/etc/freeradius`. On first install it creates that directory from
+  the stock configuration only if it does not exist; upgrades, reinstalls and even
+  `apt-get purge` leave it alone.
+- It never starts or restarts radiusd. The `freeradius` phase enables the unit once
+  `radiusd -XC` passes and restarts it with `--restart-freeradius`.
+- A FreeRADIUS installed another way (the distribution's `freeradius` package or a source build)
+  is kept; the phase warns and does nothing. Moving such a server onto the package is a
+  separate, planned step.
+- Upgrades: a release with a newer package upgrades it in the `fr-package` phase (also from
+  `update.sh`). The running daemon keeps the old binaries until you restart it in a window
+  (`systemctl restart freeradius`, or `--restart-freeradius`).
+
+Building the package (on the distribution release it is for, as root, network access to GitHub
+and freeradius.org):
+
+```bash
+sudo tools/package/build-freeradius-deb.sh            # -> packages/*.deb, *.sha384, packages/source/
+sudo bash tests/package/test_freeradius_deb.sh         # inspect the package
+tools/package/make-bundle.sh                            # -> dist/radius-admin-<version>.tar.gz
+```
+
+The upstream source tarball and its signature are kept in `packages/source/` and ship in the
+bundle (FreeRADIUS is GPLv2). `/opt/radius-admin-freeradius/share/doc/radius-admin-freeradius/SOURCE`
+records the URL, SHA-256, signing key and configure line.
 
 ---
 
@@ -457,7 +494,26 @@ On every switch, create one SNMPv3 user, security level **authPriv**, authentica
 three per-port rows the port table still shows the 802.1X state but no link or VLAN.)
 
 Restrict SNMP access on the switch to this server's address, and allow UDP 161 from
-this server to the switches in any firewall between them. (The Catalyst 1300 web UI has
+this server to the switches in any firewall between them.
+
+**Switch networks.** systemd lets `radius-admin-snmp` reach only the networks in
+`switch_nets` (installer answers; default: the management subnet). A switch outside them
+fails at once with "not sent: … outside the switch networks": the packet never leaves this
+server, so a firewall on the way logs nothing (Net-SNMP itself would say "Unknown engine ID
+(Operation not permitted)", radclient "sendto failed: Operation not permitted"). Check and
+change the list:
+
+```
+systemctl show radius-admin-snmp -p IPAddressAllow
+sudoedit /etc/radius-admin/site.yaml        # switch_nets: "192.0.2.0/24 198.51.100.0/24"
+sudo ./deploy/install.sh --answers /etc/radius-admin/site.yaml --phase app
+```
+
+(Without an answers file: `sudo ./deploy/install.sh --switch-nets "192.0.2.0/24 198.51.100.0/24"
+--phase app`.) Updates and `--phase app` runs without answers keep the networks of the
+installed unit. Releases before this one replaced them with `192.0.2.0/24` on every
+`--phase app` run without `--admin-net`; if the command above shows that example network,
+set `switch_nets` once. (The Catalyst 1300 web UI has
 this under SNMP → Views / Groups / Users; check the CLI syntax for your firmware.)
 
 Then in the UI: enter the username and both passphrases, tick **Enable switch
@@ -549,7 +605,7 @@ SIEM, add an rsyslog rule, e.g. `/etc/rsyslog.d/40-forward-radius-admin.conf`:
 **Email** (off; Alert settings, admin + step-up): relay, port, STARTTLS/TLS (certificate
 checked against the server's trust store — add the internal CA with
 `update-ca-certificates`), optional login (stored encrypted), From and To. The monitoring
-service may only reach the management subnet; for a relay outside it add one exception:
+service may only reach the switch networks (§6.3); for a relay outside them add one exception:
 
 ```
 sudo systemctl edit radius-admin-snmp
@@ -574,7 +630,11 @@ Use **Send test alert** to check delivery.
   an optional expiry. The switch admits it at its next MAB attempt (Catalyst 1300 quiet
   period, about a minute) — or use Sessions → Re-authenticate. *Hide* keeps rejecting a
   device without listing it; *Remove* drops it until it tries again. The queue keeps at
-  most 2000 MACs; entries not seen for 30 days are removed.
+  most 2000 MACs; entries not seen for 30 days are removed. A MAC that has authenticated
+  with a certificate (EAP-TLS accept) is never listed, even if the switch tried MAB first
+  or falls back to it later; such MAB attempts are rejected with the reason *MAB not used:
+  this device authenticates with a certificate*. Register the MAC under MAB devices if it
+  really needs MAB.
 
 ### 6.7 Why was it rejected?
 
@@ -646,6 +706,12 @@ After a restore, Apply once from the UI so the generated files match the databas
 Forward `radius-admin`/`radius-admin-helper` to the SIEM: uncomment the `omfwd` block in
 `/etc/rsyslog.d/30-radius-admin.conf`.
 
+**Time zone.** The database stores every time in UTC. The console shows times (authentication
+and audit logs, sessions, every other page) in the zone chosen under Settings → Time zone
+(default UTC), labelled with the zone's abbreviation, e.g. `14:00:00 CEST`; the auth log's
+From/To dates are whole days in that zone. Reports, report CSVs, alert messages, syslog and the
+audit hash chain stay in UTC.
+
 ---
 
 ## 9. Upgrading radius-admin
@@ -705,7 +771,8 @@ How `update.sh` chooses what to run: it unpacks the release to
 `/opt/radius-admin-src/releases/<UTC time>-<hash>` (root-owned), compares it with
 `/opt/radius-admin-src/current`, and runs `install.sh` with `packages` only if the package
 list changed, `postgres` if `sql/` or `deploy/postgres/` changed, always `app`, and `nginx`
-or `firewall` if their templates changed. FreeRADIUS files are only installed with
+or `firewall` if their templates changed (the plan then shows the portal settings they keep from
+this server, see section 13.1; extra `install.sh` options go after `--`). FreeRADIUS files are only installed with
 `-WithFreeradius`; FreeRADIUS is never restarted by an update. The first push (no previous
 release recorded) runs all of these phases once; they are idempotent. On success the
 uploaded file is deleted and the last 5 releases are kept; on failure the new release is
@@ -828,6 +895,67 @@ FIPS indicator.
 
 ---
 
+### 9.3 Updates from the portal (signed builds)
+
+Every push to `main`, `testing` or `dev` that passes CI becomes a signed build on GitHub
+(a release `v<version>`). A server follows one of those branches, its **channel**, and
+installs only builds whose signature verifies with the public key it was installed with.
+
+**One-time setup for the repository (maintainer).** On a trusted machine, not a server:
+
+```bash
+openssl ecparam -name secp384r1 -genkey -noout -out update-signing.key
+openssl pkey -in update-signing.key -pubout -out deploy/keys/update-signing.pem
+```
+
+Commit `deploy/keys/update-signing.pem` (the public key), add the private key as the
+repository secret `UPDATE_SIGNING_KEY` (Settings → Secrets and variables → Actions), and keep
+an offline copy of `update-signing.key` somewhere safe, then delete it from the machine. Until
+both exist, CI publishes no builds and the Updates page says updates are not set up.
+Optionally require a reviewer for the `release` environment (Settings → Environments), so a
+person approves every published build.
+
+**Releasing.** Bump `VERSION` on `dev` right after a release (for example `0.2.0`), describe
+changes under `## Unreleased` in `CHANGELOG.md`, and when releasing rename that section to
+`## 0.2.0 — <date>`. `dev` builds are `0.2.0-dev.N`, `testing` builds `0.2.0-rc.N`, and the
+merge to `main` publishes `0.2.0`. A push to `main` without a `VERSION` change publishes
+nothing.
+
+**On a server.** Administration → **Updates** shows the installed and the latest build on the
+channel, what changed in between, and whether the update restarts FreeRADIUS.
+- **Channel:** main (stable releases) for production; testing and dev for test servers.
+  Switching to a channel whose newest build is older offers it as a downgrade, which needs an
+  extra confirmation (the database stays as it is; migrations only add).
+- **Mode:** Off never contacts GitHub. Notify (default) checks once a day. Automatic checks every
+  hour and installs builds that only change the console at once; builds that restart
+  FreeRADIUS wait for the maintenance window (day and hour, server time). A build that failed
+  to install is never retried automatically.
+- **Install** asks for step-up. The helper verifies the signature and the bundle's SHA-384, then
+  `radius-admin-update-install@<version>` backs up the database, installs, checks the portal
+  and FreeRADIUS, and rolls back if they do not come up. The page refreshes while it runs.
+
+Outbound access: the check service needs HTTPS to `api.github.com`, `github.com` and
+`objects.githubusercontent.com`. Behind a proxy, put `HTTPS_PROXY=http://proxy.example.net:3128`
+in `/etc/radius-admin/update.env`.
+
+**If an update fails.** The page shows the result; details are in
+`/var/log/radius-admin/update-<version>-<time>.log` and `journalctl -u
+'radius-admin-update-install@*'`. The database backup taken before the install is
+`/var/backups/radius-admin/radius-db-before-<version>-<time>.dump`
+(`pg_restore -d radius --clean` as postgres, only if a migration went wrong). By hand:
+`sudo /opt/radius-admin-src/current/deploy/update.sh --rollback`. A server installed from a
+checkout has no previous release to roll back to until its first update.
+
+**Check a build by hand** (for example before uploading it to an offline server):
+
+```bash
+openssl dgst -sha384 -verify /usr/local/share/radius-admin/update-signing.pem \
+    -signature manifest.json.sig manifest.json
+```
+```bash
+sha384sum radius-admin-<version>.tar.gz     # compare with bundle.sha384 in manifest.json
+```
+
 ## 10. Rollback of the whole change
 
 ```bash
@@ -915,10 +1043,19 @@ the rollback option is no longer needed.
 ### 13.1 Interactive install and answers file
 
 `sudo ./deploy/install.sh` with no options asks for the server name, management subnet,
-portal address, DNS resolvers, portal certificate and first administrator, shows a summary and
+portal address, switch networks (where the monitor may send SNMP and CoA, §6.3), DNS resolvers, portal certificate and first administrator, shows a summary and
 asks for confirmation. Unattended: `--answers FILE` (format in `deploy/answers.sh`);
 `--print-answers` only checks and prints. The answers are kept in `/etc/radius-admin/site.yaml`
 (root 0640); re-run later with `--answers /etc/radius-admin/site.yaml`.
+
+Runs without answers (updates, or `--phase nginx` by hand) keep the portal settings this server
+already uses: server name, management subnet, portal address and resolvers come from `site.yaml`,
+else from the installed nginx site, else from the firewall table, and the OCSP responder from the
+nginx site. To see what a run would use: `sudo ./deploy/install.sh --print-settings`. To change
+one, give the option (`--admin-net`, `--listen-ip`, `--server-name`, `--resolver`); it wins over
+`site.yaml` and answers files, and the `nginx`/`firewall` phases record the new value in
+`site.yaml` so later updates keep it. With nothing installed and no option or answers, these two
+phases stop rather than open the portal to the 192.0.2.0/24 example subnet.
 
 Portal certificate choices:
 - `self-signed`: ECDSA P-384 for the server name (browsers warn; replace it later by installing

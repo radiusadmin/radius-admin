@@ -179,6 +179,8 @@ class FakeHelper:
         self.requests = []
         self.fail_next = {}
         self.backups = []
+        self.update_state = {}          # what update_status reports as "state"
+        self.key_present = True
         self._sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self._sock.bind(path)
         self._sock.listen(8)
@@ -241,6 +243,15 @@ class FakeHelper:
             if req.get("backup_id") not in self.backups:
                 return {"ok": False, "action": a, "message": "no such backup"}
             return {"ok": True, "action": a, "message": "rolled back", "backup_id": req["backup_id"]}
+        if a == "update_status":
+            return {"ok": True, "action": a, "message": "ok", "installed": {}, "key_present": self.key_present,
+                    "key_fingerprint": "f" * 64 if self.key_present else "", "state": self.update_state}
+        if a == "update_check":
+            return {"ok": True, "action": a, "message": "update check started"}
+        if a == "update_install":
+            self.update_state = {"state": "queued", "version": req.get("version"), "message": "queued"}
+            return {"ok": True, "action": a, "message": "update to %s started" % req.get("version"),
+                    "version": req.get("version"), "restarts_freeradius": False}
         return {"ok": False, "action": a or "", "message": "unknown action"}
 
     def close(self):
@@ -277,6 +288,7 @@ def clean_db(superconn):
         cur.execute("UPDATE ui.monitor_state SET heartbeat_at=NULL, radius_checked_at=NULL, radius_ok=NULL,"
                     " radius_message='', radclient=''")
         cur.execute("DELETE FROM ui.setting")
+        cur.execute("DELETE FROM ui.update_check")
         cur.execute("INSERT INTO ui.setting (key, value) VALUES ('admin_subnet','192.0.2.0/24'),"
                     " ('admin_priv15','false'), ('custom_policy',''),"
                     " ('banner_text','This system is for authorized use only. Testing banner text.')")

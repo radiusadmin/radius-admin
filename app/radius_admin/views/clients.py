@@ -133,7 +133,7 @@ STEPUP_MSG = ("Setting or generating a shared secret requires confirming your id
 
 
 def _secret_stepup(data, errors):
-    """L-6: a secret change (set or generate) requires step-up for every role.
+    """A secret change (set or generate) requires step-up for every role.
     Returns an HTTP status override (401) when step-up is missing or wrong."""
     if errors or data["secret"] is None or g.session.get("stepup_ok"):
         return None

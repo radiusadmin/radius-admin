@@ -1,8 +1,9 @@
 # radius-admin
 
+[![CI](https://github.com/radiusadmin/radius-admin/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/radiusadmin/radius-admin/actions/workflows/ci.yml)
 ![status](https://img.shields.io/badge/status-early%20development-orange)
-![tests](https://img.shields.io/badge/tests-620%20passing-brightgreen)
-![FreeRADIUS bench](https://img.shields.io/badge/FreeRADIUS%20bench-124%2F124-brightgreen)
+[![tests](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fradiusadmin%2Fradius-admin%2Fbadges%2Ftests.json&label=tests)](https://github.com/radiusadmin/radius-admin/actions/workflows/ci.yml?query=branch%3Amain)
+[![FreeRADIUS bench](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fradiusadmin%2Fradius-admin%2Fbadges%2Fbench.json&label=FreeRADIUS%20bench)](https://github.com/radiusadmin/radius-admin/actions/workflows/ci.yml?query=branch%3Amain)
 ![FreeRADIUS](https://img.shields.io/badge/FreeRADIUS-3.2.10-blue)
 ![Ubuntu](https://img.shields.io/badge/Ubuntu-24.04%20LTS-E95420?logo=ubuntu&logoColor=white)
 ![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)
@@ -21,8 +22,7 @@ automatically if FreeRADIUS does not come back up.
 
 > **A young project.** radius-admin is new and under active development. It grew out of a
 > console that has run a production network, and is now being turned into a product anyone can
-> install. Expect rough edges and frequent improvements. See the [roadmap](docs/PLAN-universal.md)
-> for what is coming next, and please report what you find.
+> install. Expect rough edges and frequent improvements, and please report what you find.
 >
 > Made with ❤️ for the people who keep networks running.
 
@@ -76,6 +76,13 @@ automatically if FreeRADIUS does not come back up.
 - Interactive installer (or an answers file for unattended installs).
 - A setup checklist in the console that tracks what is left to configure.
 
+**Updates**
+- An Updates page that shows the installed and the latest version, the changelog in between,
+  and installs with a click: database backup first, health checks after, automatic rollback.
+- Choose the channel to follow (`main` for stable releases, `testing`, `dev`), notify-only or
+  automatic updates, and a maintenance window for updates that restart FreeRADIUS.
+- Builds are signed in CI (ECDSA P-384); the server verifies the signature before installing.
+
 ## How it works
 
 ```
@@ -112,9 +119,12 @@ FreeRADIUS when you click **Apply**. More detail: [SPEC.md](SPEC.md) and
 
 - Ubuntu 24.04 LTS (Debian 12 is planned) with 2 vCPU, 4 GB RAM and 20 GB disk for a few
   hundred switches.
-- FreeRADIUS **3.2.10**, built from the signed upstream release with `--enable-fips-workaround`
-  (one build works in standard and FIPS mode). See [tests/freeradius/README.md](tests/freeradius/README.md)
-  for the build steps.
+- FreeRADIUS **3.2.10** comes with radius-admin: the release bundle carries the
+  `radius-admin-freeradius` package, built from the signed upstream release with
+  `--enable-fips-workaround` (one build works in standard and FIPS mode), and the installer
+  installs it on a server without FreeRADIUS. It never overwrites an existing FreeRADIUS or
+  `/etc/freeradius`. To build the package yourself: `sudo tools/package/build-freeradius-deb.sh`
+  ([RUNBOOK §1.2](docs/RUNBOOK.md#12-the-bundled-freeradius-package)).
 - Distribution packages only, with no pip or npm: PostgreSQL 16, nginx, Python 3.12 with
   `python3-flask`, `python3-psycopg2`, `python3-cryptography`, `python3-pysaml2` and friends
   ([app/requirements-apt.txt](app/requirements-apt.txt)).
@@ -138,6 +148,7 @@ FreeRADIUS when you click **Apply**. More detail: [SPEC.md](SPEC.md) and
    ```yaml
    server_name: radius.example.net
    admin_net: 192.0.2.0/24
+   switch_nets: "192.0.2.0/24 198.51.100.0/24"
    listen_ip: 192.0.2.10
    resolver: "192.0.2.53"
    tls: self-signed
@@ -174,42 +185,20 @@ allow TCP 2083 from those clients.
 
 ## Current limitations
 
-Being a young project, some parts are still on the [roadmap](docs/PLAN-universal.md):
+Being a young project, some parts are still to come:
 
-- The installer expects FreeRADIUS 3.2.10 to be installed already, with its certificates under
-  `/etc/freeradius/certs/site/`. Packaging FreeRADIUS and generating its whole configuration
-  are the next phases.
+- The installer expects the FreeRADIUS certificates under `/etc/freeradius/certs/site/`.
+  Generating the whole FreeRADIUS configuration is the next phase.
+- The bundled FreeRADIUS package is built for Ubuntu 24.04 (amd64); Debian 12 follows.
 - The nginx phase expects the site CA bundle and an OCSP responder for client-certificate MFA.
 - Vendor profiles: Cisco Catalyst 1200/1300 is the tested switch family today.
-- Signed updates from GitHub Releases are planned. Today, updates use `deploy/update.sh` or the
-  Windows push script.
-
-## Development and tests
-
-The test suites run in a sandbox (an Ubuntu 24.04 VM or WSL) and never on a production server:
-some of them stop PostgreSQL, truncate tables and add `/etc/hosts` entries.
-
-### Test status
-
-Last full run: 2026-10-29, Ubuntu 24.04, FreeRADIUS 3.2.10. **620 checks passing.**
-
-| Suite | Result | Command (as root) |
-|---|---|---|
-| Web app | 375 passed | `cd app && runuser -u postgres -- python3 -m pytest -q -p no:cacheprovider` |
-| Root helper | 89 passed, 1 skipped (needs a live raddb) | `python3 -m pytest -q -p no:cacheprovider tests/helper` |
-| FreeRADIUS bench: real radiusd, eapol_test, radsecproxy, LDAP, OCSP | 124 / 124 | `python3 tests/freeradius/run-tests.py --prefix … --bench … --eapol-test …` |
-| Migration from SQLite | 12 / 12 | `bash tests/migration/test_migrate.sh …` |
-| Installer answers | 20 / 20 | `bash tests/installer/test_answers.sh` |
-| Shell scripts | clean | `shellcheck -S warning deploy/*.sh tests/*/*.sh` |
-| Site-data scan | clean | `tools/site-scan.sh` |
-
-The design contract between the components is [SPEC.md](SPEC.md); security design and
-findings are in [docs/SECURITY.md](docs/SECURITY.md). Before every commit, `tools/site-scan.sh`
-must report clean: no real host names, addresses, accounts or secrets ever enter the repository.
+- Updates from the portal need the project's signing key to be set up once
+  ([RUNBOOK §9.3](docs/RUNBOOK.md#93-updates-from-the-portal-signed-builds)); until then,
+  updates use `deploy/update.sh` or the Windows push script.
 
 ## Licence
 
-Not decided yet (see the open questions in the [plan](docs/PLAN-universal.md)).
+Not decided yet.
 
 ---
 

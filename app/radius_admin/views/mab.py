@@ -1,7 +1,8 @@
 """MAB devices (public.mab_device). Read live by FreeRADIUS: no Apply needed.
 
 SPEC section 13: optional expiry (expires_at), vendor names (oui.py) and the
-unknown-device queue (public.mab_pending, filled by radius_admin_mab_hex()).
+unknown-device queue (public.mab_pending, filled by radius_admin_mab_hex(); shown through
+mab_pending_open, which leaves out MACs that authenticated with a certificate).
 """
 import csv
 import datetime
@@ -59,7 +60,7 @@ def index():
 
 def _counts():
     return db.query_one(
-        "SELECT (SELECT count(*) FROM mab_pending WHERE NOT ignored) AS pending,"
+        "SELECT (SELECT count(*) FROM mab_pending_open WHERE NOT ignored) AS pending,"
         " (SELECT count(*) FROM mab_device WHERE expires_at IS NOT NULL AND expires_at <= now()) AS expired,"
         " (SELECT count(*) FROM mab_device WHERE expires_at > now()"
         "  AND expires_at <= now() + interval '14 days') AS expiring")
@@ -294,7 +295,7 @@ def _default_vlan():
 def pending():
     show_ignored = request.args.get("ignored") == "1"
     q = request.args.get("q", "").strip()[:100]
-    rows = db.query("SELECT p.*, host(p.nas_ip) AS nas FROM mab_pending p WHERE ignored = %s"
+    rows = db.query("SELECT p.*, host(p.nas_ip) AS nas FROM mab_pending_open p WHERE ignored = %s"
                     " ORDER BY p.last_seen DESC", (show_ignored,))
     idx = ClientIndex.load()
     out = []

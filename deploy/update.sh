@@ -15,6 +15,8 @@
 #      with no "..", then unpacks it as root into /opt/radius-admin-src/releases/<time>-<hash>.
 #   2. Compares the new release with the current one and picks the install.sh phases:
 #        packages  if the package list in install.sh changed
+#        fr-package if the bundled FreeRADIUS package (packages/) changed; it upgrades
+#                  radius-admin-freeradius but restarts radiusd only with --restart-freeradius
 #        postgres  if sql/ or deploy/postgres/ changed (all SQL files are idempotent)
 #        app       always (installs only what changed; restarts the web UI and the poller)
 #        nginx     if deploy/nginx/ changed
@@ -22,7 +24,8 @@
 #      FreeRADIUS files (freeradius/) are never installed automatically: when they change
 #      you are told, and --with-freeradius adds the freeradius phase (it still does not
 #      restart FreeRADIUS; that happens from Review and apply or with --restart-freeradius).
-#   3. Shows the plan, asks for confirmation (unless --yes), runs install.sh, and on
+#   3. Shows the plan (with nginx/firewall: the portal settings they keep from this host,
+#      install.sh --print-settings), asks for confirmation (unless --yes), runs install.sh, and on
 #      success points /opt/radius-admin-src/current at the new release and keeps the last
 #      5 releases. On failure the new release is discarded, the "current" link is left
 #      unchanged and the uploaded package is kept. Phases that already ran before the
@@ -175,6 +178,7 @@ if [[ -n $PHASES_OVERRIDE ]]; then
     IFS=, read -r -a phases <<<"$PHASES_OVERRIDE"
 else
     if [[ -z $cur ]] || [[ "$(pkg_list "$cur")" != "$(pkg_list "$new")" ]]; then phases+=(packages); fi
+    if [[ -d $new/packages ]] && changed packages; then phases+=(fr-package); fi
     if changed sql deploy/postgres; then phases+=(postgres); fi
     if changed freeradius; then fr_changed=1; fi
     if ((WITH_FR)); then phases+=(freeradius); fi
@@ -192,6 +196,13 @@ if [[ -n $cur ]]; then
     say "  files changed: $n"
 fi
 say "  install.sh phases: ${phases[*]}"
+if [[ " ${phases[*]} " == *" nginx "* || " ${phases[*]} " == *" firewall "* ]]; then
+    # nginx/firewall are rendered from this host's settings (no answers): show them first
+    settings=$("$new/deploy/install.sh" --print-settings "${PASS[@]}" 2>&1) \
+        || { rm -rf "$new"; die "portal settings: ${settings##*$'\n'}"; }
+    say "  portal settings:"
+    while IFS= read -r l; do say "    $l"; done <<<"$settings"
+fi
 if ((fr_changed && !WITH_FR)) && [[ -z $PHASES_OVERRIDE ]]; then
     say ""
     say "  NOTE: FreeRADIUS files changed in this release but are not installed automatically."

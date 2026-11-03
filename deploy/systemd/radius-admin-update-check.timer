@@ -1,0 +1,12 @@
+# Hourly: notify mode checks once a day (the service skips earlier runs), automatic mode
+# needs the hour to hit its maintenance window.
+[Unit]
+Description=radius-admin update check (hourly)
+
+[Timer]
+OnCalendar=hourly
+RandomizedDelaySec=600
+Persistent=true
+
+[Install]
+WantedBy=timers.target

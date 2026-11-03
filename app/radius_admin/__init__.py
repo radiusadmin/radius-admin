@@ -62,10 +62,10 @@ def create_app(config_path=None, overrides=None):
 
     from .views import (account, admins, alerts as alerts_v, apply as apply_v, auth, clients, dashboard, logs,
                         mab, reports, rules, sessions, settings as settings_v, setup, snmp as snmp_v,
-                        sso as sso_v, switch_admins)
+                        sso as sso_v, switch_admins, updates)
     for bp in (auth.bp, account.bp, dashboard.bp, clients.bp, switch_admins.bp, rules.bp,
                mab.bp, apply_v.bp, logs.bp, settings_v.bp, admins.bp, snmp_v.bp, sessions.bp,
-               alerts_v.bp, reports.bp, sso_v.bp, setup.bp):
+               alerts_v.bp, reports.bp, sso_v.bp, setup.bp, updates.bp):
         app.register_blueprint(bp)
 
     # The SAML assertion consumer service receives a cross-site POST from the identity
@@ -115,9 +115,14 @@ def create_app(config_path=None, overrides=None):
             try:   # tables are missing until the postgres phase has run
                 nav = db.query_one_optional(
                     "SELECT (SELECT count(*) FROM ui.alert WHERE state = 'open') AS alerts,"
-                    " (SELECT count(*) FROM mab_pending WHERE NOT ignored) AS unknown_mab")
+                    " (SELECT count(*) FROM mab_pending_open WHERE NOT ignored) AS unknown_mab")
             except Exception:
                 nav = None
+            if nav is not None and user["role"] == "admin":   # ui.update_check: sql/90-updates.sql
+                up = db.query_one_optional(
+                    "SELECT latest_version FROM ui.update_check WHERE id = 1 AND ok AND downloaded"
+                    " AND NOT downgrade AND latest_version <> ''")
+                nav = dict(nav, update_version=up["latest_version"] if up else "")
         return {
             "current_user": user if full else None,
             "pending": pending,
@@ -228,8 +233,10 @@ def _fmt_ago(value):
 
 
 def _fmt_dt(value):
+    """Date and time in the display time zone (Settings), labelled with the zone's abbreviation."""
     if not value:
         return "—"
     if isinstance(value, datetime.datetime):
-        return value.astimezone(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        from .services import display_zone
+        return value.astimezone(display_zone()).strftime("%Y-%m-%d %H:%M:%S %Z")
     return str(value)

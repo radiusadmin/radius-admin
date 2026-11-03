@@ -5,6 +5,7 @@ import json
 from flask import Blueprint, abort, render_template, request
 
 from .. import audit, db, insight, oui
+from ..services import display_zone
 from ..security import login_required, role_required
 from . import ev
 
@@ -17,6 +18,11 @@ def _page():
         return max(1, min(10000, int(request.args.get("page", 1))))
     except ValueError:
         return 1
+
+
+def _day_start(day):
+    """Midnight starting this day in the display time zone."""
+    return datetime.datetime.combine(day, datetime.time(), tzinfo=display_zone())
 
 
 def _date(name):
@@ -52,10 +58,10 @@ def auth_log():
         params.append(f["method"])
     if since:
         where.append("authdate >= %s")
-        params.append(since)
+        params.append(_day_start(since))
     if until:
         where.append("authdate < %s")
-        params.append(until + datetime.timedelta(days=1))
+        params.append(_day_start(until + datetime.timedelta(days=1)))
     w = (" WHERE " + " AND ".join(where)) if where else ""
     page = _page()
     rows = db.query("SELECT id, authdate, username, reply, authmethod, host(nasipaddress) AS nas,"
@@ -90,7 +96,7 @@ def auth_detail(aid):
     if mac:
         mac_dash = "-".join(mac[i:i + 2] for i in range(0, 12, 2))
         mab = db.query_one("SELECT id, vlan, enabled, expires_at FROM mab_device WHERE mac = %s", (mac_dash,))
-        pending = db.query_one("SELECT mac, ignored FROM mab_pending WHERE mac = %s", (mac_dash,))
+        pending = db.query_one("SELECT mac, ignored FROM mab_pending_open WHERE mac = %s", (mac_dash,))
     history = db.query("SELECT id, authdate, reply, vlan, reason FROM radpostauth"
                        " WHERE id <> %s AND ((callingstationid IS NOT NULL AND callingstationid = %s)"
                        "  OR (callingstationid IS NULL AND username = %s))"

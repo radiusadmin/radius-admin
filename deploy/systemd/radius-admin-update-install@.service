@@ -1,0 +1,15 @@
+# Installs a verified update (SPEC section 16). Started only by the root helper, after it
+# verified the signed manifest and bundle into /var/lib/radius-admin-helper/update/%i.
+[Unit]
+Description=radius-admin update to %i
+Documentation=file:/opt/radius-admin/docs/RUNBOOK.md
+After=network.target postgresql.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/radius-admin/radius-admin-update-install %i
+TimeoutStartSec=1800
+UMask=0077
+NoNewPrivileges=yes
+ProtectHome=yes
+PrivateTmp=yes

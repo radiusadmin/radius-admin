@@ -1,7 +1,10 @@
 """Domain services shared by views and the CLI: settings, rendering, pending state,
 staging files, user/account operations."""
+import datetime
+import functools
 import os
 import tempfile
+import zoneinfo
 
 from flask import current_app, g
 
@@ -13,7 +16,9 @@ SETTING_KEYS = ("admin_subnet", "admin_priv15", "custom_policy", "banner_text", 
                 "radsec_idle_timeout", "radsec_ocsp", "radsec_ocsp_url",
                 "saml_enabled", "saml_idp_metadata", "saml_entity_id", "saml_group_attribute",
                 "saml_name_attribute", "saml_local_login", "setup_skipped", "setup_finished",
-                "session_idle_minutes", "session_absolute_hours", "stepup_minutes")
+                "session_idle_minutes", "session_absolute_hours", "stepup_minutes",
+                "update_channel", "update_mode", "update_window_day", "update_window_hour",
+                "update_check_requested", "display_timezone")
 RADSEC_KEYS = ("enabled", "listen", "port", "max_connections", "idle_timeout", "ocsp", "ocsp_url")
 SAML_KEYS = ("enabled", "idp_metadata", "entity_id", "group_attribute", "name_attribute", "local_login")
 DEFAULT_BANNER = ("This system is for authorized use only. Activity on this system is "
@@ -46,7 +51,48 @@ def get_settings(conn=None):
         "setup_finished": raw.get("setup_finished", "false") == "true",
         # console session limits as stored ('' = the config file's value; see session_limits())
         "session": {k: raw.get(k, "") for k in ("session_idle_minutes", "session_absolute_hours", "stepup_minutes")},
+        # updates (SPEC section 16; views/updates.py validates)
+        "update": {"channel": raw.get("update_channel", "main"), "mode": raw.get("update_mode", "notify"),
+                   "window_day": raw.get("update_window_day", "sun"),
+                   "window_hour": raw.get("update_window_hour", "3"),
+                   "requested": raw.get("update_check_requested", "")},
+        # IANA zone for times shown in the console (display_zone() validates)
+        "display_timezone": raw.get("display_timezone") or "UTC",
     }
+
+
+@functools.cache
+def timezones():
+    """IANA zone names known to the system (tzdata), UTC first. Scanned once per process."""
+    return ["UTC"] + sorted(z for z in zoneinfo.available_timezones() if z != "UTC")
+
+
+def valid_timezone(name):
+    """The IANA zone for name, or None. Only names from the system zone list, so a crafted
+    value cannot point ZoneInfo at a file path. UTC works without tzdata."""
+    if name == "UTC":
+        return datetime.timezone.utc
+    if name not in timezones():
+        return None
+    try:
+        return zoneinfo.ZoneInfo(name)
+    except (zoneinfo.ZoneInfoNotFoundError, ValueError):
+        return None
+
+
+def display_zone():
+    """The zone console pages show times in: the display_timezone setting, read once per
+    request; UTC outside a request or when the stored name is not a known zone."""
+    from flask import has_app_context
+    if not has_app_context():
+        return datetime.timezone.utc
+    if "display_zone" not in g:
+        try:
+            row = db.query_one_optional("SELECT value FROM ui.setting WHERE key = 'display_timezone'")
+        except Exception:                       # no database (error pages): still render times
+            row = None
+        g.display_zone = (row and valid_timezone(row["value"])) or datetime.timezone.utc
+    return g.display_zone
 
 
 def session_limits(settings=None):
