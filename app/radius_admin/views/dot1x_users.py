@@ -1,0 +1,180 @@
+"""Local 802.1X users: username and password sign-in with EAP-TTLS/PAP (SPEC section 18).
+
+Kept apart from switch admins (radcheck/net-admins): FreeRADIUS reads these accounts
+only through radius_admin_dot1x_user_hex() inside the EAP-TTLS tunnel. Live
+immediately; the access rules assign the VLAN by the user's groups.
+"""
+from flask import Blueprint, abort, g, redirect, render_template, request, url_for
+
+from .. import db
+from ..crypto import fr_pbkdf2_hash, nt_hash
+from ..flashing import flash
+from ..policy import check_switch_password, validate_switch_username
+from ..security import cfg, login_required, role_required
+from ..services import get_settings, unlang
+from . import ev, form_bool, form_str
+from .mab import expiry_date_value, parse_expiry_date
+
+bp = Blueprint("dot1x_users", __name__, url_prefix="/dot1x-users")
+
+MAX_GROUPS = 50
+
+
+def parse_groups(text):
+    """'Wired-Office, Lab' -> ['Wired-Office', 'Lab'] (validated, duplicates dropped)."""
+    out, seen = [], set()
+    for part in (text or "").split(","):
+        name = part.strip()
+        if not name:
+            continue
+        unlang().validate_ad_group(name)
+        if name.lower() not in seen:
+            seen.add(name.lower())
+            out.append(name)
+    if len(out) > MAX_GROUPS:
+        raise ValueError("Use at most %d groups." % MAX_GROUPS)
+    return out
+
+
+def _rule_groups():
+    return {r["g"] for r in db.query("SELECT DISTINCT lower(ad_group) AS g FROM ui.access_rule WHERE enabled")}
+
+
+def _get(uid):
+    u = db.query_one("SELECT *, (expires_at IS NOT NULL AND expires_at <= now()) AS expired"
+                     " FROM ui.dot1x_user WHERE id = %s", (uid,))
+    if u is None:
+        abort(404)
+    return u
+
+
+def _check_password(errors):
+    pw = request.form.get("password", "")
+    probs = check_switch_password(pw, cfg()["password_min_length"])
+    if pw != request.form.get("confirm", ""):
+        probs.append("The passwords do not match.")
+    if probs:
+        errors["password"] = " ".join(probs)
+    return pw
+
+
+def _allow_peap():
+    """The "Allow PEAP" box; never in FIPS mode (MSCHAPv2 needs MD4, SECURITY.md)."""
+    return form_bool("allow_peap") and not cfg()["require_fips"]
+
+
+def _form(errors):
+    d = {"groups_text": form_str("groups", maxlen=4000), "description": form_str("description", maxlen=200),
+         "expires": form_str("expires", maxlen=20), "enabled": form_bool("enabled")}
+    try:
+        d["groups"] = parse_groups(d["groups_text"])
+    except ValueError as e:
+        errors["groups"] = str(e)
+    try:
+        d["expires_at"] = parse_expiry_date(d["expires"])
+    except ValueError as e:
+        errors["expires"] = str(e)
+    return d
+
+
+@bp.route("/")
+@login_required
+def index():
+    users = db.query("SELECT id, username, groups, description, enabled, expires_at, nt_hash IS NOT NULL AS peap,"
+                     " (expires_at IS NOT NULL AND expires_at <= now()) AS expired"
+                     " FROM ui.dot1x_user ORDER BY lower(username)")
+    s = get_settings()
+    return render_template("dot1x_users/index.html", users=users, rule_groups=_rule_groups(),
+                           ttls_on=s["dot1x_ttls"] or (s["dot1x_peap"] and not cfg()["require_fips"]),
+                           directory_on=s["dot1x_ttls_directory"]
+                           or (s["dot1x_peap_directory"] and not cfg()["require_fips"]))
+
+
+@bp.route("/new", methods=["GET", "POST"])
+@role_required("operator")
+def new():
+    errors = {}
+    d = {"username": "", "groups_text": "", "description": "", "expires": "", "enabled": True, "peap": False}
+    if request.method == "POST":
+        d.update(_form(errors), username=form_str("username", maxlen=64), peap=_allow_peap())
+        try:
+            validate_switch_username(d["username"])
+        except ValueError as e:
+            errors["username"] = str(e)
+        if "username" not in errors and db.query_one(
+                "SELECT 1 FROM ui.dot1x_user WHERE lower(username) = lower(%s)", (d["username"],)):
+            errors["username"] = "That username already exists."
+        pw = _check_password(errors)
+        if not errors:
+            row = db.execute_returning(
+                "INSERT INTO ui.dot1x_user (username, password_hash, nt_hash, groups, description, enabled,"
+                " expires_at, created_by) VALUES (%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id",
+                (d["username"], fr_pbkdf2_hash(pw, cfg()["pbkdf2_iterations"]), nt_hash(pw) if d["peap"] else None,
+                 d["groups"], d["description"], d["enabled"], d["expires_at"], g.user["username"]))
+            ev("dot1x_user.create", object_type="dot1x_user", object_id=d["username"],
+               detail={"id": row["id"], "groups": d["groups"], "enabled": d["enabled"], "peap": d["peap"],
+                       "expires_at": d["expires_at"].isoformat() if d["expires_at"] else None})
+            flash("802.1X user %s created. This is live now." % d["username"], "success")
+            return redirect(url_for("dot1x_users.index"))
+    return render_template("dot1x_users/form.html", d=d, errors=errors, is_new=True,
+                           rule_groups=_rule_groups(), min_length=cfg()["password_min_length"]), \
+        (400 if errors else 200)
+
+
+@bp.route("/<int:uid>/edit", methods=["GET", "POST"])
+@role_required("operator")
+def edit(uid):
+    u = _get(uid)
+    errors = {}
+    d = {"username": u["username"], "groups_text": ", ".join(u["groups"]), "description": u["description"],
+         "expires": expiry_date_value(u["expires_at"]), "enabled": u["enabled"], "peap": u["nt_hash"] is not None}
+    if request.method == "POST":
+        d.update(_form(errors), peap=_allow_peap())
+        if d["peap"] and u["nt_hash"] is None:
+            # the NT hash can only be made from the password itself
+            errors["allow_peap"] = "To allow PEAP, set a new password and tick Allow PEAP there."
+        if not errors:
+            db.execute("UPDATE ui.dot1x_user SET groups=%s, description=%s, enabled=%s, expires_at=%s,"
+                       " nt_hash = CASE WHEN %s THEN nt_hash END, updated_at=now() WHERE id=%s",
+                       (d["groups"], d["description"], d["enabled"], d["expires_at"], d["peap"], uid))
+            changed = {k: {"from": a, "to": b} for k, a, b in (
+                ("groups", u["groups"], d["groups"]), ("enabled", u["enabled"], d["enabled"]),
+                ("peap", u["nt_hash"] is not None, d["peap"]),
+                ("description", u["description"], d["description"]),
+                ("expires_at", u["expires_at"].isoformat() if u["expires_at"] else None,
+                 d["expires_at"].isoformat() if d["expires_at"] else None)) if a != b}
+            ev("dot1x_user.update", object_type="dot1x_user", object_id=u["username"], detail=changed)
+            flash("802.1X user %s saved. This is live now." % u["username"], "success")
+            return redirect(url_for("dot1x_users.index"))
+    return render_template("dot1x_users/form.html", d=d, errors=errors, is_new=False, uid=uid,
+                           rule_groups=_rule_groups(), min_length=cfg()["password_min_length"]), \
+        (400 if errors else 200)
+
+
+@bp.route("/<int:uid>/password", methods=["GET", "POST"])
+@role_required("operator")
+def password(uid):
+    u = _get(uid)
+    errors = {}
+    if request.method == "POST":
+        pw = _check_password(errors)
+        peap = _allow_peap()
+        if not errors:
+            db.execute("UPDATE ui.dot1x_user SET password_hash=%s, nt_hash=%s, updated_at=now() WHERE id=%s",
+                       (fr_pbkdf2_hash(pw, cfg()["pbkdf2_iterations"]), nt_hash(pw) if peap else None, uid))
+            ev("dot1x_user.credential_reset", object_type="dot1x_user", object_id=u["username"],
+               detail={"peap": peap})
+            flash("New password for %s set. This is live now." % u["username"], "success")
+            return redirect(url_for("dot1x_users.index"))
+    return render_template("dot1x_users/password.html", u=u, errors=errors,
+                           min_length=cfg()["password_min_length"]), (400 if errors else 200)
+
+
+@bp.route("/<int:uid>/delete", methods=["POST"])
+@role_required("operator")
+def delete(uid):
+    u = _get(uid)
+    db.execute("DELETE FROM ui.dot1x_user WHERE id=%s", (uid,))
+    ev("dot1x_user.delete", object_type="dot1x_user", object_id=u["username"])
+    flash("802.1X user %s deleted." % u["username"], "success")
+    return redirect(url_for("dot1x_users.index"))

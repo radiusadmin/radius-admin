@@ -74,6 +74,8 @@ jobs:
         run: cd "$REPO" && sudo bash tests/installer/test_answers.sh | tee "$LOGS/installer.log"
       - name: Installer live settings
         run: cd "$REPO" && sudo bash tests/installer/test_live_settings.sh | tee "$LOGS/live-settings.log"
+      - name: Domain join script
+        run: cd "$REPO" && bash tests/installer/test_ad_join.sh | tee "$LOGS/ad-join.log"
       - name: Update install checks
         run: cd "$REPO" && sudo bash tests/installer/test_update_install.sh | tee "$LOGS/update-install.log"
       - name: Release tooling tests
@@ -82,7 +84,7 @@ jobs:
         id: counts
         if: always()
         run: |
-          tools/ci/test-counts.py "$LOGS/helper.log" "$LOGS/installer.log" "$LOGS/live-settings.log" \
+          tools/ci/test-counts.py "$LOGS/helper.log" "$LOGS/installer.log" "$LOGS/live-settings.log" "$LOGS/ad-join.log" \
               "$LOGS/update-install.log" "$LOGS/release.log" | tee -a "$GITHUB_OUTPUT"
 
   package:

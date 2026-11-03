@@ -41,6 +41,8 @@ record them in the SSP.
 | TOTP (RFC 6238, HMAC-SHA1) | app | `hmac` → libcrypto | OpenSSL FIPS provider (HMAC-SHA1 is approved) |
 | Session token storage (SHA-256), audit hash chain (SHA-256) | app | `hashlib` | OpenSSL FIPS provider |
 | EAP-TLS (TLS 1.2, FIPS cipher list) | FreeRADIUS rlm_eap_tls | libssl | OpenSSL FIPS provider |
+| EAP-TTLS tunnel (same TLS settings as EAP-TLS) | FreeRADIUS rlm_eap_ttls | libssl | OpenSSL FIPS provider |
+| 802.1X user password hashes (`{X-PBKDF2}HMACSHA2+256`) — created / verified | app / FreeRADIUS rlm_pap | `hashlib.pbkdf2_hmac` / `PKCS5_PBKDF2_HMAC` | OpenSSL FIPS provider |
 | LDAPS to AD | FreeRADIUS rlm_ldap → libldap | **GnuTLS** — Ubuntu's libldap is built against GnuTLS, so this connection does **not** use the OpenSSL FIPS provider | **Outside the OpenSSL boundary — see exception 5.** Verify whether the GnuTLS in use is a FIPS-validated module in your Ubuntu Pro FIPS stream |
 | Package signatures | apt | gpgv | not a FIPS function (integrity of software supply, outside the boundary) |
 | Update signatures (ECDSA P-384, SHA-384) | root helper (`update_install`), release job | `openssl dgst -sha384 -verify` / `-sign` | OpenSSL FIPS provider (approved); verified the same way in both modes |
@@ -107,6 +109,17 @@ fingerprints (`hashlib`).
    (no new MD5 implementation in radius-admin), carry Message-Authenticator and
    Event-Timestamp, and go only to switches in the management subnet. The shared secret is
    passed in a private 0600 file, never on a command line.
+8. **PEAP-MSCHAPv2 (optional, standard mode only) uses MD4, DES and SHA-1.** MSCHAPv2
+   checks a password against its NT hash (MD4 of the UTF-16LE password) and DES-encrypts
+   the challenge response. Not approved; therefore never available with `require_fips`: the
+   console hides and refuses the setting and the per-user option, and on start-up in FIPS
+   mode the app switches an earlier setting off (audited as `system:fips`), which is what
+   FreeRADIUS reads. The NT hash is unsalted and works like the password itself if stolen:
+   it is stored only for users whose "Allow PEAP" is ticked, only when a password is
+   entered, readable by FreeRADIUS only through `radius_admin_dot1x_nt_hex()` (hex argument,
+   SECURITY DEFINER), never shown, logged or audited. The MD4 for it is a small Python
+   implementation (OpenSSL 3 no longer offers MD4) used for nothing else; FreeRADIUS uses its
+   own. Prefer EAP-TLS, then EAP-TTLS/PAP (both FIPS-approved).
 
 ### 1.2 TLS parameters
 
@@ -185,7 +198,7 @@ without a FreeRADIUS restart. Security properties:
   `radius_admin_admin_source_ok_hex` and `radius_admin_priv15`, and still has no
   rights on schema `ui`. The web app gets the text-argument matcher for its
   parameterized "Test a match" tool; both use the same core matcher.
-* **Fail closed.** If PostgreSQL is unavailable, EAP-TLS, switch-admin and MAB requests
+* **Fail closed.** If PostgreSQL is unavailable, EAP-TLS, EAP-TTLS, switch-admin and MAB requests
   are rejected; service recovers by itself once the database returns (sql pool
   `retry_delay`, 30 s). PostgreSQL is now a hard dependency of every 802.1X login.
 * **Behaviour change.** AD group names now match case-insensitively (the original
@@ -376,3 +389,71 @@ secret exactly "radsec"). Anything else is refused before `radiusd -XC`.
 **Other fixes.** Database sessions run in UTC (timestamps labelled UTC were in the host's zone);
 a request no longer holds a lock on its own session row (removed a deadlock between two admins
 changing each other's accounts). The colour-theme cookie is a display hint only.
+
+**802.1X with a username and password (EAP-TTLS/PAP, local users).** Off by default
+(Settings, admin + step-up, audited).
+- The password travels inside the EAP-TTLS TLS tunnel (TLS 1.2, the EAP-TLS cipher list and
+  server certificate), never in the clear on the wire. It is only as safe as the device's server
+  check: a device that does not verify the RADIUS server certificate and name can hand the
+  password to a fake access point. RUNBOOK §6.9 makes the CA and server name mandatory in
+  device profiles. EAP-TLS remains the recommended method.
+- Stored as PBKDF2-HMAC-SHA256 (`pbkdf2_iterations`, 600,000 by default), verified by rlm_pap
+  through OpenSSL; never logged, audited or shown again. Same password rules as switch admins.
+- Separate from switch admins: the inner tunnel reads only `ui.dot1x_user` through
+  `radius_admin_dot1x_user_hex()` (hex argument, SECURITY DEFINER, `radius_fr` has no table
+  rights) and never `radcheck`, so neither account type can be used for the other. Only PAP is
+  accepted inside the tunnel (no inner EAP, no MS-CHAP).
+- The VLAN comes from the same access rules as EAP-TLS, by the user's groups; the account is
+  checked again in post-auth. The session marker that selects this branch is set only after the
+  password was accepted inside the tunnel, so an EAP-TLS or MAB request cannot reach it.
+- Logged under the name typed inside the tunnel (the outer identity may be anonymous); the
+  bench proves every request value reaches SQL as hex, including injection payloads in the inner
+  User-Name.
+- No new cryptographic algorithm: everything above is FIPS-approved, so the method is available
+  in both modes.
+
+**Directory passwords (EAP-TTLS, `ttls-ldap`).** Off by default (Settings, admin + step-up).
+- The password is checked by an LDAP simple bind as the user over the same LDAPS connection
+  settings as the computer lookup (TLS 1.2+, `require_cert = demand`, the site CA). It is never
+  stored, logged or audited; the outer TLS tunnel protects it on the wire, the LDAPS session on
+  the way to the domain controller. The LDAPS caveat of exception 5 (GnuTLS) applies to it too.
+- The second rlm_ldap section reuses the main one's server, bind account and TLS settings by
+  reference: no second copy of the bind password, one place to change it, and the installer's bind
+  test and kept live settings cover both.
+- User names reach the LDAP filter escaped by rlm_ldap; the bench sends wildcard and filter
+  injection names (`*`, `jroe)(objectClass=*`, …) and requires a reject. Computers are excluded
+  from the search, so a machine account cannot sign in this way.
+- A local 802.1X user of the same name takes precedence, so a local account cannot be bypassed
+  through the directory. Account state (disabled, locked out, expired, password expired) is the
+  directory's decision at bind time.
+- Groups come from the directory search (nested groups included), are passed to the rule matcher
+  hex-encoded and logged, as for EAP-TLS computers.
+
+**PEAP-MSCHAPv2 (`peap`, local users).** Off by default, standard mode only (§1.1
+exception 8).
+- MSCHAPv2 runs inside the PEAP TLS tunnel (same TLS settings and server certificate as
+  EAP-TLS); as for EAP-TTLS, it is only as safe as the device's check of the server certificate
+  and name. MSCHAPv2 captured from a fake access point can be cracked offline.
+- Only EAP-MSCHAPv2 is offered inside the tunnel (a separate inner EAP instance), so EAP-TLS,
+  TTLS or PEAP cannot be nested, and the inner tunnel reads only `ui.dot1x_user` (never
+  `radcheck`, never the directory).
+- A user's NT hash exists only while "Allow PEAP" is ticked; unticking deletes it, and editing
+  a user in FIPS mode deletes it too.
+- PEAP rejects finish one round after the inner tunnel refused the login; the method, user and
+  reason are carried in the outer session-state and restored before the log row is written
+  (`radius_admin_reject`), so the auth log is as precise as for EAP-TTLS.
+
+**PEAP with directory accounts (`peap-ldap`, domain join).** Off by default, standard mode only
+(§1.1 exception 8; `deploy/ad-join.sh` refuses with `require_fips`).
+- MSCHAPv2 cannot be checked with an LDAP bind, so the domain controller checks it: the server
+  is joined to the domain (Samba winbind) and rlm_mschap runs `ntlm_auth`, without a shell, with
+  the challenge and response only; the user's password and NT hash never reach this server.
+- The join creates a computer account whose secret Samba keeps in `/var/lib/samba/private`
+  (root only). `freerad` joins group `winbindd_priv` to talk to winbind; it gets no other rights.
+  The administrator password for the join is typed into `net ads join` on the console and never
+  passes through radius-admin.
+- `smb.conf` is member-only (no shares, smbd not needed). `ntlm auth = mschapv2-and-ntlmv2-only`
+  lets winbind accept MSCHAPv2 and nothing older (no NTLMv1).
+- Local users never reach the domain controller (`MS-CHAP-Use-NTLM-Auth := No` with their NT
+  hash); unknown names are rejected by the directory search before any password check. The
+  bench proves both with a stand-in ntlm_auth that records every call.

@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block title %}{{ 'Add 802.1X user' if is_new else 'Edit 802.1X user' }}{% endblock %}
+{% block content %}
+<header class="page-head"><h1>{{ 'Add 802.1X user' if is_new else 'Edit ' ~ d.username }}</h1></header>
+<section class="panel narrow">
+<form method="post" class="stack">
+  {{ m.csrf() }}
+  {% if is_new %}
+  <label for="username">Username</label>
+  <input id="username" name="username" value="{{ d.username }}" required maxlength="64" class="mono" autocomplete="off" aria-describedby="username-hint"{{ m.described(errors, 'username', True) }}>
+  <p id="username-hint" class="small muted">What the person types on the device. Letters, digits, . _ @ -; not case-sensitive.</p>
+  {{ m.field_error(errors, 'username') }}
+  <label for="password">Password</label>
+  <input id="password" name="password" type="password" required minlength="{{ min_length }}" maxlength="128" autocomplete="new-password" aria-describedby="password-hint{{ ' password-error' if errors.password else '' }}"{{ ' aria-invalid=true' if errors.password else '' }}>
+  <p id="password-hint" class="small muted">At least {{ min_length }} characters. No double quotes, backslashes or line breaks. Stored as PBKDF2-HMAC-SHA256.</p>
+  <label for="confirm">Repeat password</label>
+  <input id="confirm" name="confirm" type="password" required maxlength="128" autocomplete="new-password">
+  {{ m.field_error(errors, 'password') }}
+  {% endif %}
+  <label for="groups">Groups</label>
+  <input id="groups" name="groups" value="{{ d.groups_text }}" maxlength="4000" aria-describedby="groups-hint"{{ m.described(errors, 'groups', True) }}>
+  <p id="groups-hint" class="small muted">Comma-separated. Matched against the group names of the <a href="{{ url_for('rules.index') }}">access rules</a>, the same way a computer's directory groups are; the first matching rule sets the VLAN. Groups used by rules now: {% for grp in rule_groups|sort %}<span class="mono">{{ grp }}</span>{{ ', ' if not loop.last else '' }}{% else %}none{% endfor %}.</p>
+  {{ m.field_error(errors, 'groups') }}
+  <label for="description">Description (optional)</label>
+  <input id="description" name="description" value="{{ d.description }}" maxlength="200">
+  <label for="expires">Expires after (optional)</label>
+  <input id="expires" name="expires" type="date" value="{{ d.expires or '' }}" class="select-auto" aria-describedby="expires-hint"{{ m.described(errors, 'expires', True) }}>
+  <p id="expires-hint" class="small muted">Access ends at the end of this day (UTC). Leave empty for no expiry.</p>
+  {{ m.field_error(errors, 'expires') }}
+  <label class="check"><input type="checkbox" name="enabled" value="1" {{ 'checked' if d.enabled else '' }}> Enabled</label>
+  {% if not fips_mode %}
+  <label class="check"><input type="checkbox" name="allow_peap" value="1" aria-describedby="allow_peap-hint"{{ m.described(errors, 'allow_peap', True) }} {{ 'checked' if d.peap else '' }}> Allow PEAP (MSCHAPv2)</label>
+  <p id="allow_peap-hint" class="small muted">{% if is_new %}Stores an NT hash of the password as well: PEAP needs it, and it works like the password itself if stolen. Leave off unless the user's devices need PEAP.{% else %}Untick to remove the stored NT hash. To allow PEAP, set a new password with Allow PEAP ticked.{% endif %}</p>
+  {{ m.field_error(errors, 'allow_peap') }}
+  {% endif %}
+  <div class="actions"><button type="submit" class="btn btn-primary">{{ 'Add 802.1X user' if is_new else 'Save' }}</button>
+  <a class="btn btn-quiet" href="{{ url_for('dot1x_users.index') }}">Cancel</a></div>
+</form>
+</section>
+{% endblock %}

@@ -5,7 +5,7 @@ from flask import Blueprint, g, redirect, render_template, request, url_for
 
 from ..crypto import sha256_hex
 from ..flashing import flash
-from ..security import SESSION_LIMITS, role_required, stepup_required
+from ..security import SESSION_LIMITS, cfg, role_required, stepup_required
 from ..services import (get_settings, render_all, session_limits, set_setting, timezones, unlang,
                         valid_timezone)
 from . import ev, form_bool
@@ -33,6 +33,10 @@ def index():
                 limits[k] = int(v)
         subnet = request.form.get("admin_subnet", "").strip()
         priv15 = form_bool("admin_priv15")
+        ttls = form_bool("dot1x_ttls")
+        ttls_dir = form_bool("dot1x_ttls_directory")
+        peap = form_bool("dot1x_peap") and not cfg()["require_fips"]    # MD4/DES: standard mode only
+        peap_dir = form_bool("dot1x_peap_directory") and not cfg()["require_fips"]
         banner = request.form.get("banner_text", "").strip().replace("\r\n", "\n")
         zone = request.form.get("display_timezone", s["display_timezone"])
         if valid_timezone(zone) is None:
@@ -56,6 +60,18 @@ def index():
             if priv15 != s["admin_priv15"]:
                 set_setting("admin_priv15", "true" if priv15 else "false")
                 changed["admin_priv15"] = {"from": s["admin_priv15"], "to": priv15}
+            if ttls != s["dot1x_ttls"]:
+                set_setting("dot1x_ttls", "true" if ttls else "false")
+                changed["dot1x_ttls"] = {"from": s["dot1x_ttls"], "to": ttls}
+            if peap != s["dot1x_peap"]:
+                set_setting("dot1x_peap", "true" if peap else "false")
+                changed["dot1x_peap"] = {"from": s["dot1x_peap"], "to": peap}
+            if peap_dir != s["dot1x_peap_directory"]:
+                set_setting("dot1x_peap_directory", "true" if peap_dir else "false")
+                changed["dot1x_peap_directory"] = {"from": s["dot1x_peap_directory"], "to": peap_dir}
+            if ttls_dir != s["dot1x_ttls_directory"]:
+                set_setting("dot1x_ttls_directory", "true" if ttls_dir else "false")
+                changed["dot1x_ttls_directory"] = {"from": s["dot1x_ttls_directory"], "to": ttls_dir}
             if banner != s["banner_text"]:
                 set_setting("banner_text", banner)
                 changed["banner_text"] = {"sha256": sha256_hex(banner)}
@@ -69,7 +85,9 @@ def index():
             ev("settings.update", object_type="setting", detail=changed)
             flash("Settings saved." if changed else "No changes.", "success" if changed else "info")
             return redirect(url_for("settings.index"))
-        s = dict(s, admin_subnet=subnet, admin_priv15=priv15, banner_text=banner, display_timezone=zone,
+        s = dict(s, admin_subnet=subnet, admin_priv15=priv15, dot1x_ttls=ttls,
+                 dot1x_ttls_directory=ttls_dir, dot1x_peap=peap,
+                 dot1x_peap_directory=peap_dir, banner_text=banner, display_timezone=zone,
                  limits=dict(s["limits"], **{k: request.form.get(k, "") for k in SESSION_LIMITS}))
     return render_template("settings/index.html", s=s, errors=errors, zones=timezones()), (400 if errors else 200)
 
