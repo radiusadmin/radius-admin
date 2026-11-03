@@ -6,7 +6,10 @@ SET ROLE radius_owner;
 -- dot1x_ttls: 'true' lets local 802.1X users sign in with EAP-TTLS/PAP (off by default)
 -- dot1x_ttls_directory: 'true' also accepts directory accounts (LDAP bind as the user;
 --   SPEC section 19). A local user of the same name always wins.
-INSERT INTO ui.setting (key, value) VALUES ('dot1x_ttls', 'false'), ('dot1x_ttls_directory', 'false')
+-- dot1x_peap: 'true' lets local 802.1X users that allow it sign in with PEAP-MSCHAPv2
+--   (SPEC section 20; standard mode only, the console refuses it with require_fips)
+INSERT INTO ui.setting (key, value) VALUES ('dot1x_ttls', 'false'), ('dot1x_ttls_directory', 'false'),
+	('dot1x_peap', 'false')
 ON CONFLICT (key) DO NOTHING;
 
 -- Local 802.1X accounts. Separate from switch admins (radcheck/net-admins): a switch
@@ -27,6 +30,10 @@ CREATE TABLE IF NOT EXISTS ui.dot1x_user (
 	updated_at		timestamptz NOT NULL DEFAULT now()
 );
 CREATE UNIQUE INDEX IF NOT EXISTS dot1x_user_username_idx ON ui.dot1x_user (lower(username));
+-- MSCHAPv2 (PEAP) can only check a password against its unsalted NT hash (MD4 of the
+-- UTF-16LE password), which works as the password itself. Stored only for users whose
+-- "Allow PEAP" is ticked, when a password is entered; NULL = PEAP not allowed.
+ALTER TABLE ui.dot1x_user ADD COLUMN IF NOT EXISTS nt_hash text CHECK (nt_hash ~ '^[0-9a-f]{32}$');
 GRANT SELECT, INSERT, UPDATE, DELETE ON ui.dot1x_user TO radius_admin;
 GRANT USAGE ON SEQUENCE ui.dot1x_user_id_seq TO radius_admin;
 
@@ -77,7 +84,49 @@ EXCEPTION WHEN others THEN
 END
 $$;
 
--- VLAN for an authenticated local 802.1X user: '<vlan>:<rule id>' from the access rules
+-- NT hash for PEAP-MSCHAPv2 inside the tunnel. p_user_hex = hex(User-Name inside PEAP).
+-- Returns '0x' + 32 hex digits for rlm_mschap (NT-Password), or why there is none:
+--   'off' (setting dot1x_peap), 'unknown', 'disabled', 'expired', 'nopeap' (the user does
+--   not allow PEAP); NULL for malformed input.
+CREATE OR REPLACE FUNCTION public.radius_admin_dot1x_nt_hex(p_user_hex text)
+RETURNS text
+LANGUAGE plpgsql STABLE SECURITY DEFINER
+SET search_path = pg_catalog, public
+AS $$
+DECLARE
+	v_name text;
+	u record;
+BEGIN
+	IF coalesce((SELECT value FROM ui.setting WHERE key = 'dot1x_peap'), 'false') <> 'true' THEN
+		RETURN 'off';
+	END IF;
+	IF p_user_hex IS NULL OR p_user_hex !~ '^([0-9a-fA-F]{2}){1,64}$' THEN
+		RETURN NULL;
+	END IF;
+	v_name := radius_admin_unhex(p_user_hex);
+	IF v_name IS NULL THEN
+		RETURN NULL;
+	END IF;
+	SELECT nt_hash, enabled, expires_at INTO u FROM ui.dot1x_user WHERE lower(username) = lower(v_name);
+	IF NOT FOUND THEN
+		RETURN 'unknown';
+	END IF;
+	IF NOT u.enabled THEN
+		RETURN 'disabled';
+	END IF;
+	IF u.expires_at IS NOT NULL AND u.expires_at <= now() THEN
+		RETURN 'expired';
+	END IF;
+	IF u.nt_hash IS NULL THEN
+		RETURN 'nopeap';
+	END IF;
+	RETURN '0x' || u.nt_hash;
+EXCEPTION WHEN others THEN
+	RETURN NULL;
+END
+$$;
+
+-- VLAN for an authenticated local 802.1X user (EAP-TTLS or PEAP): '<vlan>:<rule id>' from the access rules
 -- (same matcher as EAP-TLS, the user's groups in place of directory groups), or NULL.
 -- The account is checked again so that disabling it between the password check and
 -- post-auth still rejects.
@@ -94,7 +143,7 @@ BEGIN
 	IF p_wired IS NULL OR p_user_hex IS NULL OR p_user_hex !~ '^([0-9a-fA-F]{2}){1,64}$' THEN
 		RETURN NULL;
 	END IF;
-	IF coalesce((SELECT value FROM ui.setting WHERE key = 'dot1x_ttls'), 'false') <> 'true' THEN
+	IF NOT EXISTS (SELECT 1 FROM ui.setting WHERE key IN ('dot1x_ttls', 'dot1x_peap') AND value = 'true') THEN
 		RETURN NULL;
 	END IF;
 	v_name := radius_admin_unhex(p_user_hex);
@@ -115,13 +164,15 @@ $$;
 
 REVOKE ALL ON FUNCTION public.radius_admin_dot1x_user_hex(text) FROM PUBLIC, radius_fr, radius_admin;
 REVOKE ALL ON FUNCTION public.radius_admin_dot1x_vlan_rule_hex(text, boolean, text) FROM PUBLIC, radius_fr, radius_admin;
+REVOKE ALL ON FUNCTION public.radius_admin_dot1x_nt_hex(text) FROM PUBLIC, radius_fr, radius_admin;
 GRANT EXECUTE ON FUNCTION public.radius_admin_dot1x_user_hex(text) TO radius_fr;
 GRANT EXECUTE ON FUNCTION public.radius_admin_dot1x_vlan_rule_hex(text, boolean, text) TO radius_fr;
+GRANT EXECUTE ON FUNCTION public.radius_admin_dot1x_nt_hex(text) TO radius_fr;
 
 -- MACs that authenticated with 802.1X (certificate or password) are never MAB candidates
 -- (radius_admin_mab_hex, mab_pending_open in 70-operations.sql). radpostauth_cert_mac_idx
 -- covers EAP-TLS only; it is dropped one release after this one.
 CREATE INDEX IF NOT EXISTS radpostauth_dot1x_mac_idx
 	ON radpostauth ((upper(regexp_replace(callingstationid, '[^0-9A-Fa-f]', '', 'g'))))
-	WHERE reply = 'Access-Accept' AND authmethod IN ('eap-tls', 'ttls-pap', 'ttls-ldap');
+	WHERE reply = 'Access-Accept' AND authmethod IN ('eap-tls', 'ttls-pap', 'ttls-ldap', 'peap');
 RESET ROLE;

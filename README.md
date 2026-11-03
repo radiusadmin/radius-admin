@@ -32,7 +32,8 @@ automatically if FreeRADIUS does not come back up.
   Active Directory group decides the VLAN (per wired port or per SSID). Nested groups work.
 - **802.1X with a username and password** (EAP-TTLS with PAP inside) for people and devices
   without a certificate: local accounts with groups and expiry, or Active Directory accounts
-  and their groups, with the same access rules.
+  and their groups, with the same access rules. PEAP-MSCHAPv2 for local users where devices
+  need it.
 - **Devices without 802.1X** (printers, cameras, IoT). MAC Authentication Bypass with a VLAN per
   device, optional expiry, vendor names, and an approval queue: unknown devices that try to
   connect show up for one-click approval.

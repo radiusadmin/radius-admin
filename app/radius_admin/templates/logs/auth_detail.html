@@ -28,7 +28,7 @@
     <dt>Result</dt><dd>{% if r.reply == 'Access-Accept' %}<span class="tag tag-ok">Accept</span>{% else %}<span class="tag tag-danger">{{ r.reply or '—' }}</span>{% endif %}</dd>
     <dt>Time</dt><dd>{{ r.authdate|dt }}</dd>
     <dt>User-Name</dt><dd class="mono">{{ r.username }}</dd>
-    <dt>Method</dt><dd>{{ {'eap-tls': '802.1X certificate (EAP-TLS)', 'ttls-pap': '802.1X username and password (EAP-TTLS, local user)', 'ttls-ldap': '802.1X username and password (EAP-TTLS, directory account)', 'mab': 'MAC authentication bypass', 'pap-admin': 'Switch admin login', 'other': 'Other / not reached the site policy'}.get(r.authmethod, r.authmethod or '—') }}</dd>
+    <dt>Method</dt><dd>{{ {'eap-tls': '802.1X certificate (EAP-TLS)', 'ttls-pap': '802.1X username and password (EAP-TTLS, local user)', 'ttls-ldap': '802.1X username and password (EAP-TTLS, directory account)', 'peap': '802.1X username and password (PEAP-MSCHAPv2, local user)', 'mab': 'MAC authentication bypass', 'pap-admin': 'Switch admin login', 'other': 'Other / not reached the site policy'}.get(r.authmethod, r.authmethod or '—') }}</dd>
     <dt>Switch</dt><dd>{% if client %}<a href="{{ url_for('clients.edit', cid=client.id) }}">{{ client.name }}</a> <span class="mono small muted">{{ r.nas }}</span>{% else %}<span class="mono">{{ r.nas or '—' }}</span>{% endif %}</dd>
     <dt>Port</dt><dd class="mono">{{ r.nasportid or '—' }}{% if r.nasporttype %} <span class="small muted">({{ r.nasporttype }})</span>{% endif %}</dd>
     <dt>Station</dt><dd>{% if r.callingstationid %}{{ m.mac(r.callingstationid) }}{% else %}—{% endif %}</dd>
@@ -53,7 +53,7 @@
 </section>
 {% endif %}
 
-{% if r.authmethod in ('eap-tls', 'ttls-pap', 'ttls-ldap') %}
+{% if r.authmethod in ('eap-tls', 'ttls-pap', 'ttls-ldap', 'peap') %}
 <section class="panel">
   <h2>Access rule</h2>
   {% if rule %}
@@ -66,7 +66,7 @@
   {% elif r.reply == 'Access-Accept' %}<p class="muted">Not recorded (authentication logged before this release).</p>
   {% elif reason and 'no enabled access rule' in reason %}<p>No rule matched.</p>
   {% else %}<p class="muted">Not checked: the login was refused before the access rules.</p>{% endif %}
-  {% if r.authmethod == 'ttls-pap' %}
+  {% if r.authmethod in ('ttls-pap', 'peap') %}
   <p class="small">The rule matched one of the local 802.1X user's groups{% if has_role('operator') %}; see <a href="{{ url_for('dot1x_users.index') }}">802.1X users</a>{% endif %}.</p>
   {% else %}
   <h3>{{ 'Directory groups seen' if r.authmethod == 'ttls-ldap' else 'AD groups seen' }} ({{ groups|length }})</h3>

@@ -21,7 +21,7 @@ The reference build targets (example names; every site sets its own):
   in the UI and rendered to a clients file.
 - 802.1X: EAP-TLS (machine certificates from an internal PKI, e.g. `pki.example.net`,
   with OCSP); optionally EAP-TTLS/PAP for local 802.1X users (section 18) and directory
-  accounts (section 19). LDAPS to Active Directory (e.g. `dc01.example.net`); the user filter matches
+  accounts (section 19), and PEAP-MSCHAPv2 for local users in standard mode (section 20). LDAPS to Active Directory (e.g. `dc01.example.net`); the user filter matches
   the computer object by `dNSHostName = TLS-Client-Cert-Subject-Alt-Name-Dns`;
   `LDAP-Group` checks select the VLAN.
 - Switch admin logins: PAP from the management subnet (example 192.0.2.0/24); the user
@@ -160,7 +160,7 @@ CREATE TABLE radpostauth (
   id bigserial PRIMARY KEY,
   username text NOT NULL,
   reply text,                         -- Access-Accept / Access-Reject
-  authmethod text,                    -- 'eap-tls' | 'ttls-pap' | 'ttls-ldap' | 'pap-admin' | 'mab' | 'other'
+  authmethod text,                    -- 'eap-tls' | 'ttls-pap' | 'ttls-ldap' | 'peap' | 'pap-admin' | 'mab' | 'other'
   nasipaddress inet,
   calledstationid text,
   callingstationid text,
@@ -266,16 +266,17 @@ roles and database `radius` loaded from these files.
    - authenticate: remove CHAP, MS-CHAP, `mschap`, `digest`.
    - post-auth: replace the hand-written "Site policy" block (orig lines 847–934) with
      the single line `radius_admin_postauth`. Everything else unchanged.
-4. `inner-tunnel` removed from sites-enabled (no PEAP). EAP-TTLS uses the project's own
-   `sites-available/radius-admin-inner` instead (section 18).
-5. `mods-available/eap`: keep only `tls-config tls-common`, `tls` and (section 18) a `ttls`
-   block pointing at `radius-admin-inner`. Remove md5, psk, gtc, peap, mschapv2. Remove `ca_path = ${cadir}` (test CA lives there). Set
+4. `inner-tunnel` removed from sites-enabled. EAP-TTLS and PEAP use the project's own
+   `sites-available/radius-admin-inner` and `radius-admin-peap` instead (sections 18, 20).
+5. `mods-available/eap`: keep only `tls-config tls-common`, `tls`, a `ttls` block pointing at
+   `radius-admin-inner` (section 18) and a `peap` block pointing at `radius-admin-peap`, plus the
+   inner instance `eap radius_admin_inner_eap` (mschapv2 only; section 20). Remove md5, psk, gtc. Remove `ca_path = ${cadir}` (test CA lives there). Set
    `reject_unknown_intermediate_ca = yes` (certs/site/ca.pem = Example-IssuingCA + Example-RootCA,
    sizes match). cipher_list = FIPS list (§7). Keep OCSP as is.
 6. `mods-available/ldap`: `ldap_debug = 0x0000`, `tls_min_version = "1.2"`,
    `cipher_list` = FIPS list. Nothing else.
 7. Modules to remove from mods-enabled: chap, digest, dpsk, dynamic_clients, echo,
-   mschap, ntlm_auth, passwd, unix, totp, replicate, radutmp, sradutmp,
+   ntlm_auth, passwd, unix, totp, replicate, radutmp, sradutmp (mschap stays for PEAP, section 20),
    proxy_rate_limit. (Validate with `radiusd -XC`; keep anything still referenced.)
 8. `mods-config/files/authorize`: remove `bob` and `doug`.
 9. `clients.conf`: keep `client localhost`; replace `wifi-aps` block and
@@ -898,3 +899,44 @@ directory account; the password is checked with an LDAP bind as that person.
   users page says when directory accounts are accepted. MAB treats `ttls-ldap` like the other
   802.1X methods.
 - **Upgrade.** As section 18 (`--phase postgres`, `app`, `freeradius` and a restart).
+
+## 20. Change (2026-11-03): PEAP-MSCHAPv2 for local 802.1X users (standard mode only)
+
+Step 3 of username/password 802.1X. MSCHAPv2 uses MD4, DES and SHA-1: a documented exception
+(SECURITY §1.1 exception 8), never available with `require_fips`.
+
+- **Setting** `dot1x_peap` (`'false'`; Settings, admin + step-up, audited). With `require_fips`
+  the checkbox is not shown, a posted value is ignored, `create_app` switches an earlier `'true'`
+  off (`services.fips_peap_off`, audited as `system:fips`).
+- **Column** `ui.dot1x_user.nt_hash` (32 lower-case hex digits or NULL): MD4 of the UTF-16LE
+  password (`crypto.nt_hash`, RFC 1320 in Python). Set only when a password is entered with
+  "Allow PEAP" ticked (create, set password); unticking on edit sets it to NULL; ticking on edit
+  without a password is refused. Never shown or audited (audit detail `peap: bool`). Ignored and
+  cleared on save in FIPS mode.
+- **SQL** `radius_admin_dot1x_nt_hex(user_hex)` → `'0x' || nt_hash`, or `off` / `unknown` /
+  `disabled` / `expired` / `nopeap`, NULL for malformed input; EXECUTE for `radius_fr` only.
+  `radius_admin_dot1x_vlan_rule_hex` answers while `dot1x_ttls` or `dot1x_peap` is on.
+- **FreeRADIUS.** `mods-available/eap`: `peap { tls = tls-common; default_eap_type = mschapv2;
+  virtual_server = "radius-admin-peap"; copy_request_to_tunnel = no; use_tunneled_reply = no }`
+  and, after the main section, `eap radius_admin_inner_eap { default_eap_type = mschapv2;
+  mschapv2 { send_error = no } }`. `sites-available/radius-admin-peap`: authorize
+  `filter_username`, `radius_admin_peap_authorize`, `radius_admin_inner_eap { ok = return }`;
+  authenticate `Auth-Type MS-CHAP { mschap }`, `radius_admin_inner_eap`; post-auth
+  `radius_admin_peap_postauth`, REJECT `radius_admin_inner_reject`. The installer enables the
+  site and re-enables `mods-enabled/mschap` (no longer in `modules-to-disable.txt`).
+  `sites-available/default`, Post-Auth-Type REJECT: `radius_admin_reject` before `-sql`.
+- **Policy.** `radius_admin_peap_authorize` (every inner round): method `peap` and the inner
+  User-Name on `outer.control`; no EAP-Message → reject; `NT-Password` from the function when it
+  matches `^0x[0-9a-f]{32}$`, otherwise reject with the reason. `radius_admin_peap_postauth`:
+  `outer.session-state` marker `peap`. `radius_admin_inner_reject` also stores method, user and
+  reason in `outer.session-state` (`Tmp-String-4`, `Tmp-String-5`, `Module-Failure-Message`);
+  `radius_admin_reject` restores them for the outer reject one round later (PEAP sends its
+  failure inside the tunnel), only when `control:Tmp-String-1` is unset and the stored method is
+  one of `ttls-pap|ttls-ldap|peap`. The outer post-auth branch accepts `peap` like `ttls-pap`.
+- **Log/UI.** `authmethod = 'peap'`; filter, labels, hints (turned off, not allowed for this user,
+  only EAP-MSCHAPv2 inside); PEAP tag on the 802.1X users list. MAB treats `peap` like the other
+  802.1X methods.
+- **Upgrade.** As section 18; the freeradius phase also installs the PEAP site, re-enables mschap
+  and the new default-site line. The policy and that line are installed together; after an app
+  downgrade an Apply is refused by `radiusd -XC` (the policy lacks `radius_admin_reject`) rather
+  than breaking FreeRADIUS.

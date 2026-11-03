@@ -110,10 +110,19 @@ def seed_db():
          " ('k.smith', %s, '{Lab-Only}', true, NULL),"
          " ('d.off', %s, '{Wired-Office}', false, NULL),"
          " ('e.old', %s, '{Wired-Office}', true, now() - interval '1 hour');"
-         "INSERT INTO ui.setting (key, value) VALUES ('dot1x_ttls', 'true'), ('dot1x_ttls_directory', 'false')"
-         " ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;"
-         "COMMIT;" % (q(dot1x), q(dot1x), q(dot1x), q(dot1x)))
+         "INSERT INTO ui.setting (key, value) VALUES ('dot1x_ttls', 'true'), ('dot1x_ttls_directory', 'false'),"
+         " ('dot1x_peap', 'true') ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;"
+         # PEAP allowed for j.doe and d.off (NT hash of the same password), not for k.smith
+         "UPDATE ui.dot1x_user SET nt_hash = %s WHERE username IN ('j.doe', 'd.off');"
+         "COMMIT;" % (q(dot1x), q(dot1x), q(dot1x), q(dot1x), q(nt_hash(DOT1X_PW))))
     seed_live_policy()
+
+
+def nt_hash(password):
+    sys.dont_write_bytecode = True
+    sys.path.insert(0, os.path.join(HERE, "..", "..", "app"))
+    from radius_admin.crypto import nt_hash as h
+    return h(password)
 
 
 def set_dot1x_ttls(on, key="dot1x_ttls"):
@@ -424,9 +433,67 @@ def eap_cases(eapol_test, bench, logname):
         record(name, ok, "got %s vlan=%s" % (code, vlan_of(out)))
         if "(no \\047 decoding)" in name:
             psql("DELETE FROM ui.access_rule WHERE id = 52; UPDATE ui.access_rule SET enabled = true WHERE id = 51")
-    for m in ("PEAP", "MD5"):
-        code, out = eapol(eapol_test, bench, SW_IN, m, extra=wired)
-        record("EAP-%s (removed) -> Reject / not accepted" % m, code != "accept", "got " + code)
+    code, out = eapol(eapol_test, bench, SW_IN, "MD5", extra=wired)
+    record("EAP-MD5 (removed) -> Reject / not accepted", code != "accept", "got " + code)
+
+
+def peap_cases(eapol_test, bench, prefix):
+    """PEAP with EAP-MSCHAPv2 inside, local users that allow it (NT hash), VLAN from the
+    access rules by the user's groups (SPEC section 20)."""
+    wired = ["61:d:15"]
+
+    def peap(user, pw=DOT1X_PW, extra=wired, **kw):
+        kw.setdefault("anon", "anonymous")
+        return eapol(eapol_test, bench, SW_IN if extra == wired else WIFI, "PEAP", extra=extra,
+                     identity=user, password=pw, **kw)
+
+    def last_reason():
+        return psql("SELECT coalesce(reason,'') FROM radpostauth ORDER BY id DESC LIMIT 1")
+
+    for name, user, pw, extra, want, want_vlan, why in (
+        ("PEAP-MSCHAPv2 j.doe wired (Wired-Office) -> VLAN 500", "j.doe", DOT1X_PW, wired, "accept", "500", ""),
+        ("PEAP-MSCHAPv2 j.doe SSID Example_Main -> VLAN 530", "j.doe", DOT1X_PW,
+         ["30:s:AA-BB-CC-DD-EE-FF:Example_Main", "61:d:19"], "accept", "530", ""),
+        ("PEAP-MSCHAPv2 user name in another case (J.DOE) -> VLAN 500", "J.DOE", DOT1X_PW, wired, "accept", "500", ""),
+        ("PEAP-MSCHAPv2 j.doe wrong password -> Reject", "j.doe", "wrong-password", wired, "reject", None,
+         "wrong password"),
+        ("PEAP-MSCHAPv2 k.smith (PEAP not allowed, no NT hash) -> Reject", "k.smith", DOT1X_PW, wired, "reject",
+         None, "PEAP is not allowed"),
+        ("PEAP-MSCHAPv2 disabled user -> Reject", "d.off", DOT1X_PW, wired, "reject", None, "disabled"),
+        ("PEAP-MSCHAPv2 unknown user -> Reject", "nosuch", DOT1X_PW, wired, "reject", None, "no such 802.1X user"),
+        ("PEAP-MSCHAPv2 with a switch admin's password (radcheck is never read) -> Reject", "t-admin1", ADMIN_PW,
+         wired, "reject", None, "no such 802.1X user"),
+    ):
+        code, out = peap(user, pw, extra)
+        reason = last_reason()
+        ok = code == want and (want_vlan is None or vlan_of(out) == want_vlan) and why in reason
+        record(name, ok, "got %s vlan=%s reason=%r" % (code, vlan_of(out), reason))
+    code, out = peap("j.doe", phase2="auth=GTC")
+    record("PEAP with EAP-GTC inside -> Reject (EAP-MSCHAPv2 only)", code == "reject", code)
+    set_dot1x_ttls(False, "dot1x_peap")   # live setting, no restart
+    code, out = peap("j.doe")
+    record("PEAP while it is turned off -> Reject", code == "reject" and "PEAP is turned off" in last_reason(),
+           "%s %r" % (code, last_reason()))
+    set_dot1x_ttls(True, "dot1x_peap")
+    row = psql("SELECT username||'|'||authmethod||'|'||coalesce(vlan,'')||'|'||coalesce(rule_id::text,'') FROM radpostauth"
+               " WHERE reply='Access-Accept' AND authmethod='peap' ORDER BY id LIMIT 1")
+    rule = psql("SELECT id FROM ui.access_rule WHERE ad_group='Wired-Office'")
+    record("radpostauth: PEAP Accept logs the inner user, method, VLAN and rule", row == "j.doe|peap|500|%s" % rule, row)
+    record("radpostauth: PEAP wrong password logs the inner user and method",
+           psql("SELECT username||'|'||authmethod FROM radpostauth WHERE reply='Access-Reject' AND authmethod='peap'"
+                " AND reason LIKE '%%wrong password%%' ORDER BY id LIMIT 1") == "j.doe|peap")
+    before = tables_fingerprint()
+    for i, pl in enumerate(INJECTION_PAYLOADS + ["j.doe' OR '1'='1"]):
+        code, out = peap(pl)
+        record("INJECTION #%d in the PEAP inner User-Name -> Reject, no side effect" % i,
+               code == "reject" and tables_fingerprint() == before, "%s %r" % (code, pl))
+    code, out = peap("j.doe", mac="aa:bb:cc:00:00:79")
+    eth = ['NAS-IP-Address = %s' % SW_IN[0], 'NAS-Port-Type = Ethernet', 'Service-Type = Call-Check',
+           'User-Name = "aabbcc000079"', 'User-Password = "aabbcc000079"', 'Calling-Station-Id = "AA-BB-CC-00-00-79"']
+    mcode, _ = radclient(prefix, SW_IN, eth)
+    queued = psql("SELECT count(*) FROM mab_pending WHERE mac='AA-BB-CC-00-00-79'")
+    record("MAB for a MAC that used PEAP -> Reject, not queued",
+           code == "accept" and mcode == "reject" and queued == "0", "%s %s queued=%s" % (code, mcode, queued))
 
 
 def ttls_cases(eapol_test, bench, prefix, logname):
@@ -836,6 +903,11 @@ def sql_args_audit(logname):
                 kinds.add("dot1x_user")
                 if not re.fullmatch(r"SELECT radius_admin_dot1x_user_hex\('[0-9a-f]*'\)", q_):
                     bad.append(q_[:160])
+            elif "radius_admin_dot1x_nt_hex(" in q_:
+                n += 1
+                kinds.add("dot1x_nt")
+                if not re.fullmatch(r"SELECT radius_admin_dot1x_nt_hex\('[0-9a-f]*'\)", q_):
+                    bad.append(q_[:160])
             elif "radius_admin_dot1x_vlan_rule_hex(" in q_:
                 n += 1
                 kinds.add("dot1x_vlan")
@@ -853,7 +925,7 @@ def sql_args_audit(logname):
            str(bad[:3]))
     record("AUDIT: the policy uses radius_admin_vlan_rule_hex and radius_admin_mab_hex",
            "radius_admin_vlan_rule_hex(" in kinds and "mab" in kinds and "radius_admin_vlan_hex(" not in kinds
-           and {"dot1x_user", "dot1x_vlan"} <= kinds,
+           and {"dot1x_user", "dot1x_vlan", "dot1x_nt"} <= kinds,
            str(sorted(kinds)))
 
 
@@ -957,6 +1029,7 @@ def main():
         if a.eapol_test:
             eap_cases(a.eapol_test, bench, logname)
             ttls_cases(a.eapol_test, bench, a.prefix, logname)
+            peap_cases(a.eapol_test, bench, a.prefix)
             cert_mab_cases(a.eapol_test, bench, a.prefix)
             injection_cases(a.eapol_test, bench, a.prefix, logname)
             live_cases(a.eapol_test, bench, a.prefix, logname)

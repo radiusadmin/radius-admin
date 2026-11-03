@@ -12,7 +12,9 @@ release, so previews sort after it.
   (new 802.1X users page) and, optionally, directory accounts checked with an LDAP bind as
   the user. Both are off by default in Settings. The access rules assign the VLAN by the
   user's groups (local, or directory groups including nested ones); the auth log shows the
-  name typed inside the tunnel. Needs the freeradius install phase and a FreeRADIUS restart.
+  name typed inside the tunnel. PEAP-MSCHAPv2 is available too, for local users who allow
+  it (it needs an NT hash of their password, so it is weaker; never with FIPS mode). Needs
+  the freeradius install phase and a FreeRADIUS restart.
 - Updates page: current and latest version, changelog, update channel (main, testing,
   dev) and automatic updates. Builds are signed in CI and verified by the root helper
   before anything is installed.

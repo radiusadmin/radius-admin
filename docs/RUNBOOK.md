@@ -687,7 +687,14 @@ stronger choice and keep working alongside.
    (`mods-available/ldap`). Their directory groups, nested groups included, select the VLAN
    through the access rules, exactly as for a computer. A local 802.1X user of the same name
    always wins. Disabled, locked or expired directory accounts are refused by the directory.
-5. **Check.** UI → **Auth log**, method `ttls-pap` (local) or `ttls-ldap` (directory). Rejects give
+5. **PEAP (optional, standard mode).** Settings → *Also allow PEAP with MSCHAPv2*, then tick
+   **Allow PEAP** on the users who need it, when you set their password (the NT hash MSCHAPv2
+   needs can only be made from the password; existing users need a new password). PEAP is what
+   many devices offer without a profile (Windows: *Microsoft: Protected EAP (PEAP)* with *Secured
+   password (EAP-MSCHAP v2)*), but it is weaker: prefer EAP-TTLS or certificates, and still check
+   the server certificate and name on the devices. Only local users can use PEAP. Windows 11
+   with Credential Guard does not offer saved credentials for MSCHAPv2.
+6. **Check.** UI → **Auth log**, method `ttls-pap` (local), `ttls-ldap` (directory) or `peap`. Rejects give
    the reason in plain words: turned off, no such user, disabled, expired, wrong password (or, for
    the directory, a refused account), not PAP inside the tunnel, or no access rule for the user's
    groups (§6.7). A directory record lists the groups the rule matcher saw.
@@ -698,8 +705,9 @@ never offered for MAB approval, as for certificates.
 
 Upgrade to this release: `sudo ./deploy/install.sh --phase postgres` (table and functions),
 `--phase app`, then `--phase freeradius --restart-freeradius` in a maintenance window (enables
-EAP-TTLS, `sites-enabled/radius-admin-inner` and the `ldap_user` section of
-`mods-available/ldap`; your directory settings are kept as before). EAP-TLS, MAB and switch logins behave as before.
+EAP-TTLS and PEAP with their inner servers `radius-admin-inner` and `radius-admin-peap`, the
+`mschap` module and the `ldap_user` section of `mods-available/ldap`; your directory settings
+are kept as before). Both methods stay off until you turn them on in Settings. EAP-TLS, MAB and switch logins behave as before.
 
 ## 7. Backup and restore
 

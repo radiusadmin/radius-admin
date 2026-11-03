@@ -1,0 +1,51 @@
+# -*- text -*-
+######################################################################
+#
+#	radius-admin: the virtual server behind PEAP (SPEC section 20).
+#
+#	802.1X with a username and password over PEAP: EAP-MSCHAPv2 inside
+#	the TLS tunnel, checked against the NT hash of a local 802.1X user
+#	who allows PEAP (ui.dot1x_user.nt_hash), through the policies in
+#	policy.d/radius-admin. Only EAP-MSCHAPv2 is offered inside the
+#	tunnel (radius_admin_inner_eap in mods-available/eap). It never reads
+#	radcheck, the users file or the directory. The VLAN is assigned by
+#	radius_admin_postauth in the outer server.
+#
+#	MSCHAPv2 uses MD4, DES and SHA-1: standard mode only (SECURITY.md).
+#
+#	It only receives requests from rlm_eap (virtual_server in the peap
+#	section of mods-available/eap); it has no listen section.
+#
+######################################################################
+
+server radius-admin-peap {
+
+authorize {
+	filter_username
+	radius_admin_peap_authorize
+	radius_admin_inner_eap {
+		ok = return
+	}
+}
+
+authenticate {
+	#  EAP-MSCHAPv2 hands the challenge response to this section
+	Auth-Type MS-CHAP {
+		mschap
+	}
+	radius_admin_inner_eap
+}
+
+session {
+}
+
+post-auth {
+	radius_admin_peap_postauth
+
+	Post-Auth-Type REJECT {
+		radius_admin_inner_reject
+		attr_filter.access_reject
+	}
+}
+
+}

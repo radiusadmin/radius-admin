@@ -19,7 +19,7 @@ SETTING_KEYS = ("admin_subnet", "admin_priv15", "custom_policy", "banner_text", 
                 "session_idle_minutes", "session_absolute_hours", "stepup_minutes",
                 "update_channel", "update_mode", "update_window_day", "update_window_hour",
                 "update_check_requested", "display_timezone", "dot1x_ttls",
-                "dot1x_ttls_directory")
+                "dot1x_ttls_directory", "dot1x_peap")
 RADSEC_KEYS = ("enabled", "listen", "port", "max_connections", "idle_timeout", "ocsp", "ocsp_url")
 SAML_KEYS = ("enabled", "idp_metadata", "entity_id", "group_attribute", "name_attribute", "local_login")
 DEFAULT_BANNER = ("This system is for authorized use only. Activity on this system is "
@@ -47,6 +47,8 @@ def get_settings(conn=None):
         "dot1x_ttls": raw.get("dot1x_ttls", "false") == "true",
         # ... also for directory accounts (LDAP bind as the user; SPEC section 19)
         "dot1x_ttls_directory": raw.get("dot1x_ttls_directory", "false") == "true",
+        # PEAP-MSCHAPv2 for local users that allow it (SPEC section 20; never with require_fips)
+        "dot1x_peap": raw.get("dot1x_peap", "false") == "true",
         # RadSec listener, as stored (strings); validated by unlang.validate_radsec_settings
         "radsec": {k: raw["radsec_" + k] for k in RADSEC_KEYS if "radsec_" + k in raw},
         # portal single sign-on (sso.settings normalizes)
@@ -110,6 +112,21 @@ def session_limits(settings=None):
         out[k] = min(max(int(v), lo), hi) if v.isdigit() else cfg()[k]
     return out
 
+
+
+def fips_peap_off(dsn):
+    """FIPS mode never runs PEAP-MSCHAPv2 (MD4/DES): switch an earlier dot1x_peap off at
+    start-up. FreeRADIUS reads the setting from the database, so this is what stops it."""
+    from . import audit
+    conn = db.connect(dsn)
+    try:
+        if db.execute("UPDATE ui.setting SET value = 'false', updated_at = now()"
+                      " WHERE key = 'dot1x_peap' AND value <> 'false'", conn=conn):
+            audit.write("settings.update", actor="system:fips", object_type="setting",
+                        detail={"dot1x_peap": {"from": True, "to": False}}, conn=conn)
+        conn.commit()
+    finally:
+        conn.close()
 
 def set_setting(key, value, conn=None):
     if key not in SETTING_KEYS:

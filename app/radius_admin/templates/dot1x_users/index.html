@@ -19,7 +19,7 @@
   <tbody>
   {% for u in users %}
   <tr class="{{ 'is-off' if not u.enabled or u.expired else '' }}">
-    <td><span class="mono">{{ u.username }}</span>{% if u.description %}<span class="cell-sub">{{ u.description }}</span>{% endif %}</td>
+    <td><span class="mono">{{ u.username }}</span>{% if u.peap and not fips_mode %} <span class="tag tag-muted" title="This user may also sign in with PEAP-MSCHAPv2">PEAP</span>{% endif %}{% if u.description %}<span class="cell-sub">{{ u.description }}</span>{% endif %}</td>
     <td>{% for grp in u.groups %}<span class="tag {{ 'tag-muted' if grp.lower() in rule_groups else 'tag-warn' }}"{% if grp.lower() not in rule_groups %} title="No enabled access rule uses this group"{% endif %}>{{ grp }}</span> {% else %}<span class="tag tag-warn" title="Without a group no access rule matches, so the user is rejected">No groups</span>{% endfor %}</td>
     <td>{% if u.expires_at %}{{ u.expires_at|dt }}{% if u.expired %} <span class="tag tag-warn">Expired</span>{% endif %}{% else %}<span class="muted">Never</span>{% endif %}</td>
     <td>{{ m.onoff(u.enabled) }}</td>

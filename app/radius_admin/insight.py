@@ -26,6 +26,14 @@ REASON_HINTS = (
     (r"username and password sign-in \(EAP-TTLS\) is turned off",
      "Username and password 802.1X is turned off. Turn it on in Settings, or configure the device for a "
      "certificate (EAP-TLS)."),
+    (r"sign-in with PEAP is turned off",
+     "PEAP is turned off. Turn it on in Settings, or set the device up for EAP-TTLS with PAP or a certificate "
+     "(EAP-TLS)."),
+    (r"PEAP is not allowed for this 802\.1X user",
+     "This 802.1X user does not allow PEAP. Set a new password with Allow PEAP ticked under 802.1X users, or set "
+     "the device up for EAP-TTLS with PAP."),
+    (r"only EAP-MSCHAPv2 is accepted inside PEAP",
+     "Set the device's PEAP inner method to EAP-MSCHAPv2 (secured password)."),
     (r"802\.1X user is disabled", "The local 802.1X user is disabled. Enable it under 802.1X users."),
     (r"802\.1X user has expired", "The local 802.1X user has expired. Set a new expiry date (or clear it) under "
                                   "802.1X users."),

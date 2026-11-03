@@ -394,97 +394,11 @@
  	}
  
  
-@@ -970,92 +1004,88 @@
+@@ -970,91 +1004,100 @@
  	#  EAP module.  Inside of the TLS/PEAP tunnel, we
  	#  recommend using EAP-MS-CHAPv2.
  	#
--	peap {
--		#  Which tls-config section the TLS negotiation parameters
--		#  are in - see EAP-TLS above for an explanation.
--		#
--		#  In the case that an old configuration from FreeRADIUS
--		#  v2.x is being used, all the options of the tls-config
--		#  section may also appear instead in the 'tls' section
--		#  above. If that is done, the tls= option here (and in
--		#  tls above) MUST be commented out.
--		#
--		tls = tls-common
--
--		#  The tunneled EAP session needs a default
--		#  EAP type which is separate from the one for
--		#  the non-tunneled EAP module.  Inside of the
--		#  PEAP tunnel, we recommend using MS-CHAPv2,
--		#  as that is the default type supported by
--		#  Windows clients.
--		#
--		default_eap_type = mschapv2
--
--		#  The PEAP module also has these configuration
--		#  items, which are the same as for TTLS.
--		#
--		copy_request_to_tunnel = no
--
--		#  This configuration item is deprecated.  Instead,
--		#  you should use:
--		#
--		#    update outer.session-state {
--		#      ...
--		#    }
--		#
--		#  This will cache attributes for the final Access-Accept.
--		#
--		#  See "update outer.session-state" in the "post-auth"
--		#  sections of sites-available/default, and of
--		#  sites-available/inner-tunnel
--		#
--		use_tunneled_reply = no
--
--		#  When the tunneled session is proxied, the
--		#  home server may not understand EAP-MSCHAP-V2.
--		#  Set this entry to "no" to proxy the tunneled
--		#  EAP-MSCHAP-V2 as normal MSCHAPv2.
--		#
--		#  This setting can be over-ridden on a packet by
--		#  packet basis by setting
--		#
--		#	&control:Proxy-Tunneled-Request-As-EAP = yes
--		#
--	#	proxy_tunneled_request_as_eap = yes
--
--		#  The inner tunneled request can be sent
--		#  through a virtual server constructed
--		#  specifically for this purpose.
--		#
--		#  A virtual server MUST be specified.
--		#
--		virtual_server = "inner-tunnel"
--
--		#  This option enables support for MS-SoH
--		#  see doc/SoH.txt for more info.
--		#  It is disabled by default.
--		#
--	#	soh = yes
--
--		#  The SoH reply will be turned into a request which
--		#  can be sent to a specific virtual server:
--		#
--	#	soh_virtual_server = "soh-server"
--
--		#  Unlike EAP-TLS, PEAP does not require a client certificate.
--		#  However, you can require one by setting the following
--		#  option. You can also override this option by setting
--		#
--		#    EAP-TLS-Require-Client-Cert = Yes
--		#
--		#  in the control items for a request.
--		#
--		#  Note that the majority of supplicants do not support using a
--		#  client certificate with PEAP, so this option is unlikely to
--		#  be usable for most people.
--		#
--	#	require_client_cert = yes
--	}
-+	#  radius-admin: EAP-PEAP disabled (EAP-TLS only)
++	#  radius-admin: the stock EAP-PEAP example stays commented; the active block follows it
 +#	peap {
 +#		#  Which tls-config section the TLS negotiation parameters
 +#		#  are in - see EAP-TLS above for an explanation.
@@ -566,10 +480,102 @@
 +#		#
 +#	#	require_client_cert = yes
 +#	}
++
++	#  radius-admin: PEAP with EAP-MSCHAPv2 inside, for local 802.1X users that allow it
++	#  (SPEC section 20; standard mode only). Inner requests go to
++	#  sites-available/radius-admin-peap, which offers only EAP-MSCHAPv2
++	#  (radius_admin_inner_eap below) against the NT hashes in ui.dot1x_user. The
++	#  dot1x_peap setting turns it on; while it is off the inner tunnel rejects every login.
+ 	peap {
+-		#  Which tls-config section the TLS negotiation parameters
+-		#  are in - see EAP-TLS above for an explanation.
+-		#
+-		#  In the case that an old configuration from FreeRADIUS
+-		#  v2.x is being used, all the options of the tls-config
+-		#  section may also appear instead in the 'tls' section
+-		#  above. If that is done, the tls= option here (and in
+-		#  tls above) MUST be commented out.
+-		#
+ 		tls = tls-common
+-
+-		#  The tunneled EAP session needs a default
+-		#  EAP type which is separate from the one for
+-		#  the non-tunneled EAP module.  Inside of the
+-		#  PEAP tunnel, we recommend using MS-CHAPv2,
+-		#  as that is the default type supported by
+-		#  Windows clients.
+-		#
+ 		default_eap_type = mschapv2
+-
+-		#  The PEAP module also has these configuration
+-		#  items, which are the same as for TTLS.
+-		#
+ 		copy_request_to_tunnel = no
+-
+-		#  This configuration item is deprecated.  Instead,
+-		#  you should use:
+-		#
+-		#    update outer.session-state {
+-		#      ...
+-		#    }
+-		#
+-		#  This will cache attributes for the final Access-Accept.
+-		#
+-		#  See "update outer.session-state" in the "post-auth"
+-		#  sections of sites-available/default, and of
+-		#  sites-available/inner-tunnel
+-		#
+ 		use_tunneled_reply = no
+-
+-		#  When the tunneled session is proxied, the
+-		#  home server may not understand EAP-MSCHAP-V2.
+-		#  Set this entry to "no" to proxy the tunneled
+-		#  EAP-MSCHAP-V2 as normal MSCHAPv2.
+-		#
+-		#  This setting can be over-ridden on a packet by
+-		#  packet basis by setting
+-		#
+-		#	&control:Proxy-Tunneled-Request-As-EAP = yes
+-		#
+-	#	proxy_tunneled_request_as_eap = yes
+-
+-		#  The inner tunneled request can be sent
+-		#  through a virtual server constructed
+-		#  specifically for this purpose.
+-		#
+-		#  A virtual server MUST be specified.
+-		#
+-		virtual_server = "inner-tunnel"
+-
+-		#  This option enables support for MS-SoH
+-		#  see doc/SoH.txt for more info.
+-		#  It is disabled by default.
+-		#
+-	#	soh = yes
+-
+-		#  The SoH reply will be turned into a request which
+-		#  can be sent to a specific virtual server:
+-		#
+-	#	soh_virtual_server = "soh-server"
+-
+-		#  Unlike EAP-TLS, PEAP does not require a client certificate.
+-		#  However, you can require one by setting the following
+-		#  option. You can also override this option by setting
+-		#
+-		#    EAP-TLS-Require-Client-Cert = Yes
+-		#
+-		#  in the control items for a request.
+-		#
+-		#  Note that the majority of supplicants do not support using a
+-		#  client certificate with PEAP, so this option is unlikely to
+-		#  be usable for most people.
+-		#
+-	#	require_client_cert = yes
++		virtual_server = "radius-admin-peap"
+ 	}
  
  
- 	#  EAP-MSCHAPv2
-@@ -1071,29 +1101,30 @@
+@@ -1071,29 +1114,30 @@
  	#  of MS-CHAPv2 in EAP by Cisco, which FreeRADIUS does not
  	#  currently support.
  	#
@@ -623,3 +629,20 @@
  
  
  	#  EAP-FAST
+@@ -1464,3 +1508,16 @@
+ 	#	virtual_server = inner-tunnel
+ 	#}
+ }
++
++#  radius-admin: the EAP methods allowed INSIDE the PEAP tunnel (SPEC section 20): only
++#  EAP-MSCHAPv2. Used by sites-available/radius-admin-peap; the outer "eap" module above
++#  is never called inside a tunnel, so EAP-TLS, PEAP or TTLS cannot be nested.
++eap radius_admin_inner_eap {
++	default_eap_type = mschapv2
++	timer_expire = 60
++	ignore_unknown_eap_types = no
++	max_sessions = ${max_requests}
++	mschapv2 {
++		send_error = no
++	}
++}

@@ -109,6 +109,17 @@ fingerprints (`hashlib`).
    (no new MD5 implementation in radius-admin), carry Message-Authenticator and
    Event-Timestamp, and go only to switches in the management subnet. The shared secret is
    passed in a private 0600 file, never on a command line.
+8. **PEAP-MSCHAPv2 (optional, standard mode only) uses MD4, DES and SHA-1.** MSCHAPv2
+   checks a password against its NT hash (MD4 of the UTF-16LE password) and DES-encrypts
+   the challenge response. Not approved; therefore never available with `require_fips`: the
+   console hides and refuses the setting and the per-user option, and on start-up in FIPS
+   mode the app switches an earlier setting off (audited as `system:fips`), which is what
+   FreeRADIUS reads. The NT hash is unsalted and works like the password itself if stolen:
+   it is stored only for users whose "Allow PEAP" is ticked, only when a password is
+   entered, readable by FreeRADIUS only through `radius_admin_dot1x_nt_hex()` (hex argument,
+   SECURITY DEFINER), never shown, logged or audited. The MD4 for it is a small Python
+   implementation (OpenSSL 3 no longer offers MD4) used for nothing else; FreeRADIUS uses its
+   own. Prefer EAP-TLS, then EAP-TTLS/PAP (both FIPS-approved).
 
 ### 1.2 TLS parameters
 
@@ -417,3 +428,17 @@ changing each other's accounts). The colour-theme cookie is a display hint only.
   directory's decision at bind time.
 - Groups come from the directory search (nested groups included), are passed to the rule matcher
   hex-encoded and logged, as for EAP-TLS computers.
+
+**PEAP-MSCHAPv2 (`peap`, local users).** Off by default, standard mode only (§1.1
+exception 8).
+- MSCHAPv2 runs inside the PEAP TLS tunnel (same TLS settings and server certificate as
+  EAP-TLS); as for EAP-TTLS, it is only as safe as the device's check of the server certificate
+  and name. MSCHAPv2 captured from a fake access point can be cracked offline.
+- Only EAP-MSCHAPv2 is offered inside the tunnel (a separate inner EAP instance), so EAP-TLS,
+  TTLS or PEAP cannot be nested, and the inner tunnel reads only `ui.dot1x_user` (never
+  `radcheck`, never the directory).
+- A user's NT hash exists only while "Allow PEAP" is ticked; unticking deletes it, and editing
+  a user in FIPS mode deletes it too.
+- PEAP rejects finish one round after the inner tunnel refused the login; the method, user and
+  reason are carried in the outer session-state and restored before the log row is written
+  (`radius_admin_reject`), so the auth log is as precise as for EAP-TTLS.

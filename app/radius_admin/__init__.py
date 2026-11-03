@@ -1,6 +1,7 @@
 """radius-admin: web administration UI for FreeRADIUS (FIPS deployment)."""
 import datetime
 import os
+import sys
 
 from flask import Flask, g, render_template, request, url_for
 
@@ -27,6 +28,11 @@ def create_app(config_path=None, overrides=None):
     cfg = load_config(config_path, overrides)
     if cfg["require_fips"]:
         require_fips_or_die()
+        try:
+            from .services import fips_peap_off
+            fips_peap_off(cfg["db_dsn"])
+        except Exception as e:      # the database may not be up yet; the console still refuses it
+            print("radius-admin: could not check the PEAP setting for FIPS mode: %s" % e, file=sys.stderr)
 
     app = Flask(__name__, static_folder="static", template_folder="templates")
     app.config["RA"] = cfg

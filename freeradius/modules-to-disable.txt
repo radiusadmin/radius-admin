@@ -2,12 +2,12 @@
 # the files in mods-available/ are left untouched). One name per line.
 # None of these is referenced by the modified sites-available/default once
 # inner-tunnel is removed from sites-enabled (validated with `radiusd -XC`).
+# mschap stays enabled: sites-available/radius-admin-peap uses it for PEAP.
 chap
 digest
 dpsk
 dynamic_clients
 echo
-mschap
 ntlm_auth
 passwd
 unix
