@@ -64,9 +64,10 @@ echo fake > "$R/packages/$deb"; (cd "$R/packages" && sha384sum "$deb" > "$deb.sh
 touch "$R/packages/source/freeradius-server-3.2.10.tar.gz" "$R/packages/source/freeradius-server-3.2.10.tar.gz.sig"
 (cd "$R" && g init -q -b dev && g add -A && g commit -qm import)
 MR=$R/tools/release/make-release.sh
+BASE=$(tr -d '[:space:]' < "$R/VERSION")   # the repository's VERSION, copied above
 
 ver=$(cd "$R" && UPDATE_SIGNING_KEY=$(cat "$W/key.pem") "$MR" dev "$W/out1" 2>"$W/err1")
-if [[ $? -eq 0 && $ver == 0.1.0-dev.0 && -f $W/out1/radius-admin-$ver.tar.gz ]]; then
+if [[ $? -eq 0 && $ver == "$BASE-dev.0" && -f $W/out1/radius-admin-$ver.tar.gz ]]; then
     pass "makes a dev release ($ver)"
 else fail "make-release dev: $ver $(tail -3 "$W/err1")"; fi
 openssl dgst -sha384 -verify "$R/deploy/keys/update-signing.pem" -signature "$W/out1/manifest.json.sig" \
@@ -74,17 +75,17 @@ openssl dgst -sha384 -verify "$R/deploy/keys/update-signing.pem" -signature "$W/
     || fail "signature does not verify"
 m() { python3 -I -c 'import json,sys; d=json.load(open(sys.argv[1])); print(eval(sys.argv[2], {}, {"d": d}))' "$@"; }
 [[ $(m "$W/out1/manifest.json" 'd["bundle"]["sha384"]') == $(sha384sum "$W/out1/radius-admin-$ver.tar.gz" | cut -d' ' -f1) ]] \
-    && [[ $(m "$W/out1/manifest.json" 'd["version"], d["channel"], d["restarts_freeradius"]') == "('0.1.0-dev.0', 'dev', True)" ]] \
+    && [[ $(m "$W/out1/manifest.json" 'd["version"], d["channel"], d["restarts_freeradius"]') == "('$BASE-dev.0', 'dev', True)" ]] \
     && pass "manifest records version, channel, bundle hash; first release restarts FreeRADIUS" \
     || fail "manifest: $(cat "$W/out1/manifest.json")"
 b=$(tar -xzOf "$W/out1/radius-admin-$ver.tar.gz" radius-admin/BUILD.json 2>/dev/null)
-[[ $(python3 -c 'import json,sys; d=json.loads(sys.argv[1]); print(d["version"], d["channel"])' "$b") == "0.1.0-dev.0 dev" ]] \
+[[ $(python3 -c 'import json,sys; d=json.loads(sys.argv[1]); print(d["version"], d["channel"])' "$b") == "$BASE-dev.0 dev" ]] \
     && grep -qx "radius-admin/packages/$deb" <<<"$(tar -tzf "$W/out1/radius-admin-$ver.tar.gz")" \
     && pass "bundle carries BUILD.json and the FreeRADIUS package" || fail "bundle contents: $b"
 
 (cd "$R" && g tag "v$ver" && echo x >> README.md && g commit -qam "Docs only")
 ver2=$(cd "$R" && UPDATE_SIGNING_KEY=$(cat "$W/key.pem") "$MR" dev "$W/out2" "v$ver" 2>/dev/null)
-[[ $ver2 == 0.1.0-dev.1 && $(m "$W/out2/manifest.json" 'd["restarts_freeradius"]') == False ]] \
+[[ $ver2 == "$BASE-dev.1" && $(m "$W/out2/manifest.json" 'd["restarts_freeradius"]') == False ]] \
     && grep -q -- '- Docs only' "$W/out2/notes.md" \
     && pass "a release without FreeRADIUS changes does not restart it; notes list its commits" \
     || fail "second release: $ver2 $(cat "$W/out2/manifest.json" 2>/dev/null | head -5)"
