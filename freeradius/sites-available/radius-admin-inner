@@ -1,0 +1,44 @@
+# -*- text -*-
+######################################################################
+#
+#	radius-admin: the virtual server behind EAP-TTLS (SPEC section 18).
+#
+#	802.1X with a username and password: PAP inside the TLS tunnel,
+#	checked against the local 802.1X accounts (ui.dot1x_user) through
+#	the policies in policy.d/radius-admin. It never reads radcheck, the
+#	users file or the directory, so a switch admin's password cannot
+#	open a network port. The VLAN is assigned by radius_admin_postauth
+#	in the outer server (sites-available/default).
+#
+#	It only receives requests from rlm_eap (virtual_server in the ttls
+#	section of mods-available/eap); it has no listen section.
+#
+######################################################################
+
+server radius-admin-inner {
+
+authorize {
+	filter_username
+	radius_admin_inner_authorize
+	pap
+}
+
+authenticate {
+	Auth-Type PAP {
+		pap
+	}
+}
+
+session {
+}
+
+post-auth {
+	radius_admin_inner_postauth
+
+	Post-Auth-Type REJECT {
+		radius_admin_inner_reject
+		attr_filter.access_reject
+	}
+}
+
+}

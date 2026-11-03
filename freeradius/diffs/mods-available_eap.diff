@@ -199,102 +199,11 @@
  
  			# If the OCSP Responder can not cope with nonce
  			# in the request, then it can be disabled here.
-@@ -840,97 +862,98 @@
+@@ -840,96 +862,108 @@
  	#
  	#  Surprisingly, it works quite well.
  	#
--	ttls {
--		#  Which tls-config section the TLS negotiation parameters
--		#  are in - see EAP-TLS above for an explanation.
--		#
--		#  In the case that an old configuration from FreeRADIUS
--		#  v2.x is being used, all the options of the tls-config
--		#  section may also appear instead in the 'tls' section
--		#  above. If that is done, the tls= option here (and in
--		#  tls above) MUST be commented out.
--		#
--		tls = tls-common
--
--		#  The tunneled EAP session needs a default EAP type
--		#  which is separate from the one for the non-tunneled
--		#  EAP module.  Inside of the TTLS tunnel, we recommend
--		#  using EAP-MD5.  If the request does not contain an
--		#  EAP conversation, then this configuration entry is
--		#  ignored.
--		#
--		default_eap_type = md5
--
--		#  The tunneled authentication request does not usually
--		#  contain useful attributes like 'Calling-Station-Id',
--		#  etc.  These attributes are outside of the tunnel,
--		#  and normally unavailable to the tunneled
--		#  authentication request.
--		#
--		#  By setting this configuration entry to 'yes',
--		#  any attribute which is NOT in the tunneled
--		#  authentication request, but which IS available
--		#  outside of the tunnel, is copied to the tunneled
--		#  request.
--		#
--		#  allowed values: {no, yes}
--		#
--		copy_request_to_tunnel = no
--
--		#  This configuration item is deprecated.  Instead,
--		#  you should use:
--		#
--		#    update outer.session-state {
--		#      ...
--		#    }
--		#
--		#  This will cache attributes for the final Access-Accept.
--		#
--		#  See "update outer.session-state" in the "post-auth"
--		#  sections of sites-available/default, and of
--		#  sites-available/inner-tunnel
--		#
--		#  The reply attributes sent to the NAS are usually
--		#  based on the name of the user 'outside' of the
--		#  tunnel (usually 'anonymous').  If you want to send
--		#  the reply attributes based on the user name inside
--		#  of the tunnel, then set this configuration entry to
--		#  'yes', and the reply to the NAS will be taken from
--		#  the reply to the tunneled request.
--		#
--		#  allowed values: {no, yes}
--		#
--		use_tunneled_reply = no
--
--		#  The inner tunneled request can be sent
--		#  through a virtual server constructed
--		#  specifically for this purpose.
--		#
--		#  A virtual server MUST be specified.
--		#
--		virtual_server = "inner-tunnel"
--
--		#  This has the same meaning, and overwrites, the
--		#  same field in the "tls" configuration, above.
--		#  The default value here is "yes".
--		#
--	#	include_length = yes
--
--		#  Unlike EAP-TLS, EAP-TTLS does not require a client
--		#  certificate. However, you can require one by setting the
--		#  following option. You can also override this option by
--		#  setting
--		#
--		#    EAP-TLS-Require-Client-Cert = Yes
--		#
--		#  in the control items for a request.
--		#
--		#  Note that the majority of supplicants do not support using a
--		#  client certificate with EAP-TTLS, so this option is unlikely
--		#  to be usable for most people.
--		#
--	#	require_client_cert = yes
--	}
-+	#  radius-admin: EAP-TTLS disabled (EAP-TLS only)
++	#  radius-admin: the stock EAP-TTLS example stays commented; the active block follows it
 +#	ttls {
 +#		#  Which tls-config section the TLS negotiation parameters
 +#		#  are in - see EAP-TLS above for an explanation.
@@ -386,10 +295,106 @@
 +#		#
 +#	#	require_client_cert = yes
 +#	}
++
++	#  radius-admin: EAP-TTLS with PAP inside, for local 802.1X users (SPEC section 18).
++	#  Inner requests go to sites-available/radius-admin-inner, which accepts only PAP
++	#  against ui.dot1x_user (never radcheck). The dot1x_ttls setting turns it on; while
++	#  it is off the inner tunnel rejects every login.
+ 	ttls {
+-		#  Which tls-config section the TLS negotiation parameters
+-		#  are in - see EAP-TLS above for an explanation.
+-		#
+-		#  In the case that an old configuration from FreeRADIUS
+-		#  v2.x is being used, all the options of the tls-config
+-		#  section may also appear instead in the 'tls' section
+-		#  above. If that is done, the tls= option here (and in
+-		#  tls above) MUST be commented out.
+-		#
+ 		tls = tls-common
+-
+-		#  The tunneled EAP session needs a default EAP type
+-		#  which is separate from the one for the non-tunneled
+-		#  EAP module.  Inside of the TTLS tunnel, we recommend
+-		#  using EAP-MD5.  If the request does not contain an
+-		#  EAP conversation, then this configuration entry is
+-		#  ignored.
+-		#
+-		default_eap_type = md5
+-
+-		#  The tunneled authentication request does not usually
+-		#  contain useful attributes like 'Calling-Station-Id',
+-		#  etc.  These attributes are outside of the tunnel,
+-		#  and normally unavailable to the tunneled
+-		#  authentication request.
+-		#
+-		#  By setting this configuration entry to 'yes',
+-		#  any attribute which is NOT in the tunneled
+-		#  authentication request, but which IS available
+-		#  outside of the tunnel, is copied to the tunneled
+-		#  request.
+-		#
+-		#  allowed values: {no, yes}
+-		#
+ 		copy_request_to_tunnel = no
+-
+-		#  This configuration item is deprecated.  Instead,
+-		#  you should use:
+-		#
+-		#    update outer.session-state {
+-		#      ...
+-		#    }
+-		#
+-		#  This will cache attributes for the final Access-Accept.
+-		#
+-		#  See "update outer.session-state" in the "post-auth"
+-		#  sections of sites-available/default, and of
+-		#  sites-available/inner-tunnel
+-		#
+-		#  The reply attributes sent to the NAS are usually
+-		#  based on the name of the user 'outside' of the
+-		#  tunnel (usually 'anonymous').  If you want to send
+-		#  the reply attributes based on the user name inside
+-		#  of the tunnel, then set this configuration entry to
+-		#  'yes', and the reply to the NAS will be taken from
+-		#  the reply to the tunneled request.
+-		#
+-		#  allowed values: {no, yes}
+-		#
+ 		use_tunneled_reply = no
+-
+-		#  The inner tunneled request can be sent
+-		#  through a virtual server constructed
+-		#  specifically for this purpose.
+-		#
+-		#  A virtual server MUST be specified.
+-		#
+-		virtual_server = "inner-tunnel"
+-
+-		#  This has the same meaning, and overwrites, the
+-		#  same field in the "tls" configuration, above.
+-		#  The default value here is "yes".
+-		#
+-	#	include_length = yes
+-
+-		#  Unlike EAP-TLS, EAP-TTLS does not require a client
+-		#  certificate. However, you can require one by setting the
+-		#  following option. You can also override this option by
+-		#  setting
+-		#
+-		#    EAP-TLS-Require-Client-Cert = Yes
+-		#
+-		#  in the control items for a request.
+-		#
+-		#  Note that the majority of supplicants do not support using a
+-		#  client certificate with EAP-TTLS, so this option is unlikely
+-		#  to be usable for most people.
+-		#
+-	#	require_client_cert = yes
++		virtual_server = "radius-admin-inner"
+ 	}
  
  
- 	#  EAP-PEAP
-@@ -970,92 +993,88 @@
+@@ -970,92 +1004,88 @@
  	#  EAP module.  Inside of the TLS/PEAP tunnel, we
  	#  recommend using EAP-MS-CHAPv2.
  	#
@@ -564,7 +569,7 @@
  
  
  	#  EAP-MSCHAPv2
-@@ -1071,29 +1090,30 @@
+@@ -1071,29 +1101,30 @@
  	#  of MS-CHAPv2 in EAP by Cisco, which FreeRADIUS does not
  	#  currently support.
  	#

@@ -18,7 +18,7 @@ SETTING_KEYS = ("admin_subnet", "admin_priv15", "custom_policy", "banner_text", 
                 "saml_name_attribute", "saml_local_login", "setup_skipped", "setup_finished",
                 "session_idle_minutes", "session_absolute_hours", "stepup_minutes",
                 "update_channel", "update_mode", "update_window_day", "update_window_hour",
-                "update_check_requested", "display_timezone")
+                "update_check_requested", "display_timezone", "dot1x_ttls")
 RADSEC_KEYS = ("enabled", "listen", "port", "max_connections", "idle_timeout", "ocsp", "ocsp_url")
 SAML_KEYS = ("enabled", "idp_metadata", "entity_id", "group_attribute", "name_attribute", "local_login")
 DEFAULT_BANNER = ("This system is for authorized use only. Activity on this system is "
@@ -42,6 +42,8 @@ def get_settings(conn=None):
         "custom_policy": raw.get("custom_policy", ""),
         "banner_text": raw.get("banner_text") or DEFAULT_BANNER,
         "mab_default_vlan": raw.get("mab_default_vlan", ""),
+        # 802.1X with a username and password (EAP-TTLS/PAP, local users; SPEC section 18)
+        "dot1x_ttls": raw.get("dot1x_ttls", "false") == "true",
         # RadSec listener, as stored (strings); validated by unlang.validate_radsec_settings
         "radsec": {k: raw["radsec_" + k] for k in RADSEC_KEYS if "radsec_" + k in raw},
         # portal single sign-on (sso.settings normalizes)

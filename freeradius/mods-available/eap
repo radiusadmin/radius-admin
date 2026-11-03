@@ -862,7 +862,7 @@ eap {
 	#
 	#  Surprisingly, it works quite well.
 	#
-	#  radius-admin: EAP-TTLS disabled (EAP-TLS only)
+	#  radius-admin: the stock EAP-TTLS example stays commented; the active block follows it
 #	ttls {
 #		#  Which tls-config section the TLS negotiation parameters
 #		#  are in - see EAP-TLS above for an explanation.
@@ -954,6 +954,17 @@ eap {
 #		#
 #	#	require_client_cert = yes
 #	}
+
+	#  radius-admin: EAP-TTLS with PAP inside, for local 802.1X users (SPEC section 18).
+	#  Inner requests go to sites-available/radius-admin-inner, which accepts only PAP
+	#  against ui.dot1x_user (never radcheck). The dot1x_ttls setting turns it on; while
+	#  it is off the inner tunnel rejects every login.
+	ttls {
+		tls = tls-common
+		copy_request_to_tunnel = no
+		use_tunneled_reply = no
+		virtual_server = "radius-admin-inner"
+	}
 
 
 	#  EAP-PEAP

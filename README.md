@@ -30,6 +30,8 @@ automatically if FreeRADIUS does not come back up.
 
 - **Wired and wireless 802.1X with EAP-TLS.** Computers authenticate with certificates; their
   Active Directory group decides the VLAN (per wired port or per SSID). Nested groups work.
+- **802.1X with a username and password** (EAP-TTLS with PAP inside) for people and devices
+  without a certificate: local accounts with groups, expiry and the same access rules.
 - **Devices without 802.1X** (printers, cameras, IoT). MAC Authentication Bypass with a VLAN per
   device, optional expiry, vendor names, and an approval queue: unknown devices that try to
   connect show up for one-click approval.

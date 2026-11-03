@@ -33,6 +33,7 @@ def index():
                 limits[k] = int(v)
         subnet = request.form.get("admin_subnet", "").strip()
         priv15 = form_bool("admin_priv15")
+        ttls = form_bool("dot1x_ttls")
         banner = request.form.get("banner_text", "").strip().replace("\r\n", "\n")
         zone = request.form.get("display_timezone", s["display_timezone"])
         if valid_timezone(zone) is None:
@@ -56,6 +57,9 @@ def index():
             if priv15 != s["admin_priv15"]:
                 set_setting("admin_priv15", "true" if priv15 else "false")
                 changed["admin_priv15"] = {"from": s["admin_priv15"], "to": priv15}
+            if ttls != s["dot1x_ttls"]:
+                set_setting("dot1x_ttls", "true" if ttls else "false")
+                changed["dot1x_ttls"] = {"from": s["dot1x_ttls"], "to": ttls}
             if banner != s["banner_text"]:
                 set_setting("banner_text", banner)
                 changed["banner_text"] = {"sha256": sha256_hex(banner)}
@@ -69,7 +73,7 @@ def index():
             ev("settings.update", object_type="setting", detail=changed)
             flash("Settings saved." if changed else "No changes.", "success" if changed else "info")
             return redirect(url_for("settings.index"))
-        s = dict(s, admin_subnet=subnet, admin_priv15=priv15, banner_text=banner, display_timezone=zone,
+        s = dict(s, admin_subnet=subnet, admin_priv15=priv15, dot1x_ttls=ttls, banner_text=banner, display_timezone=zone,
                  limits=dict(s["limits"], **{k: request.form.get(k, "") for k in SESSION_LIMITS}))
     return render_template("settings/index.html", s=s, errors=errors, zones=timezones()), (400 if errors else 200)
 

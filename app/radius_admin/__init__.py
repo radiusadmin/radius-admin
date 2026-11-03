@@ -60,10 +60,10 @@ def create_app(config_path=None, overrides=None):
     from .flashing import install_flash
     install_flash(app)
 
-    from .views import (account, admins, alerts as alerts_v, apply as apply_v, auth, clients, dashboard, logs,
+    from .views import (account, admins, alerts as alerts_v, apply as apply_v, auth, clients, dashboard, dot1x_users, logs,
                         mab, reports, rules, sessions, settings as settings_v, setup, snmp as snmp_v,
                         sso as sso_v, switch_admins, updates)
-    for bp in (auth.bp, account.bp, dashboard.bp, clients.bp, switch_admins.bp, rules.bp,
+    for bp in (auth.bp, account.bp, dashboard.bp, clients.bp, switch_admins.bp, dot1x_users.bp, rules.bp,
                mab.bp, apply_v.bp, logs.bp, settings_v.bp, admins.bp, snmp_v.bp, sessions.bp,
                alerts_v.bp, reports.bp, sso_v.bp, setup.bp, updates.bp):
         app.register_blueprint(bp)

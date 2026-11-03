@@ -719,6 +719,9 @@ phase_freeradius() {
         rm -f "$RA_RADDB/sites-enabled/inner-tunnel"; info "removed sites-enabled/inner-tunnel"
     fi
     [[ -L $RA_RADDB/mods-enabled/sql ]] || ln -s ../mods-available/sql "$RA_RADDB/mods-enabled/sql"
+    # the virtual server behind EAP-TTLS (802.1X with a username and password)
+    [[ -L $RA_RADDB/sites-enabled/radius-admin-inner ]] \
+        || ln -s ../sites-available/radius-admin-inner "$RA_RADDB/sites-enabled/radius-admin-inner"
     if [[ -d $RA_RADDB/policy.d ]]; then chmod o-w "$RA_RADDB/policy.d"; fi
 
     # 5. validate; on failure restore the tarball (the running daemon is untouched)

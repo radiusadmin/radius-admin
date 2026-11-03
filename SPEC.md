@@ -19,8 +19,8 @@ The reference build targets (example names; every site sets its own):
   (`deploy/migrate_sqlite_to_pg.py`).
 - Clients: `clients.conf` keeps `client localhost`; switches and access points are managed
   in the UI and rendered to a clients file.
-- 802.1X: EAP-TLS only (machine certificates from an internal PKI, e.g. `pki.example.net`,
-  with OCSP). LDAPS to Active Directory (e.g. `dc01.example.net`); the user filter matches
+- 802.1X: EAP-TLS (machine certificates from an internal PKI, e.g. `pki.example.net`,
+  with OCSP); optionally EAP-TTLS/PAP for local 802.1X users (section 18). LDAPS to Active Directory (e.g. `dc01.example.net`); the user filter matches
   the computer object by `dNSHostName = TLS-Client-Cert-Subject-Alt-Name-Dns`;
   `LDAP-Group` checks select the VLAN.
 - Switch admin logins: PAP from the management subnet (example 192.0.2.0/24); the user
@@ -159,7 +159,7 @@ CREATE TABLE radpostauth (
   id bigserial PRIMARY KEY,
   username text NOT NULL,
   reply text,                         -- Access-Accept / Access-Reject
-  authmethod text,                    -- 'eap-tls' | 'pap-admin' | 'mab' | 'other'
+  authmethod text,                    -- 'eap-tls' | 'ttls-pap' | 'pap-admin' | 'mab' | 'other'
   nasipaddress inet,
   calledstationid text,
   callingstationid text,
@@ -265,9 +265,10 @@ roles and database `radius` loaded from these files.
    - authenticate: remove CHAP, MS-CHAP, `mschap`, `digest`.
    - post-auth: replace the hand-written "Site policy" block (orig lines 847–934) with
      the single line `radius_admin_postauth`. Everything else unchanged.
-4. `inner-tunnel` removed from sites-enabled (no PEAP/TTLS).
-5. `mods-available/eap`: keep only `tls-config tls-common` + `tls`. Remove md5, psk,
-   gtc, ttls, peap, mschapv2. Remove `ca_path = ${cadir}` (test CA lives there). Set
+4. `inner-tunnel` removed from sites-enabled (no PEAP). EAP-TTLS uses the project's own
+   `sites-available/radius-admin-inner` instead (section 18).
+5. `mods-available/eap`: keep only `tls-config tls-common`, `tls` and (section 18) a `ttls`
+   block pointing at `radius-admin-inner`. Remove md5, psk, gtc, peap, mschapv2. Remove `ca_path = ${cadir}` (test CA lives there). Set
    `reject_unknown_intermediate_ca = yes` (certs/site/ca.pem = Example-IssuingCA + Example-RootCA,
    sizes match). cipher_list = FIPS list (§7). Keep OCSP as is.
 6. `mods-available/ldap`: `ldap_debug = 0x0000`, `tls_min_version = "1.2"`,
@@ -807,3 +808,56 @@ CSV columns (header row required, exact names, any order tolerated by name):
   that is not a known zone falls back to UTC) and label times with its abbreviation (`%Z`). The
   auth log's From/To filters are whole days in the zone. Reports and their CSVs (whole UTC days),
   alert messages, syslog and the audit hash stay in UTC.
+
+## 18. Change (2026-11-03): 802.1X with a username and password (EAP-TTLS/PAP, local users)
+
+Step 1 of username/password 802.1X: EAP-TTLS with PAP inside the tunnel, checked against
+local accounts. Directory passwords and PEAP-MSCHAPv2 follow in later steps.
+
+- **Setting** `dot1x_ttls` in `ui.setting` (`'false'` by default): Settings page (admin +
+  step-up), audited in `settings.update`. Read live by the SQL functions; no Apply, no restart.
+- **Table** `ui.dot1x_user` (`sql/95-dot1x-passwords.sql`): `username` (`[A-Za-z0-9._@-]{1,64}`,
+  unique case-insensitively), `password_hash` (rlm_pap `{X-PBKDF2}HMACSHA2+256:…`, PBKDF2-HMAC-SHA256,
+  `pbkdf2_iterations`), `groups text[]` (≤ 50, each a valid access-rule group name), `description`,
+  `enabled`, `expires_at`, `created_at/by`, `updated_at`. Separate from switch admins: the inner
+  tunnel never reads `radcheck`, so a switch admin's password never opens a port and an 802.1X user
+  never reaches switch management. `radius_admin` has full access; `radius_fr` none.
+- **SQL functions** (SECURITY DEFINER, EXECUTE for `radius_fr` only, hex arguments only):
+  `radius_admin_dot1x_user_hex(user_hex)` → the stored hash, or `off` / `unknown` / `disabled` /
+  `expired`, NULL for malformed input (more than 64 bytes, not hex);
+  `radius_admin_dot1x_vlan_rule_hex(user_hex, wired, csi_hex)` → `'<vlan>:<rule id>'` from
+  `radius_admin_vlan_rule_core` with the user's groups (account re-checked), or NULL.
+- **FreeRADIUS.** `mods-available/eap` gains `ttls { tls = tls-common; virtual_server =
+  "radius-admin-inner"; copy_request_to_tunnel = no; use_tunneled_reply = no }`.
+  `sites-available/radius-admin-inner` (enabled by the installer's freeradius phase) runs
+  `filter_username`, `radius_admin_inner_authorize`, `pap`; authenticate PAP only; post-auth
+  `radius_admin_inner_postauth`, Post-Auth-Type REJECT `radius_admin_inner_reject`.
+- **Policy** (`unlang.render_policy`):
+  - `radius_admin_inner_authorize`: sets `outer.control:Tmp-String-1 = "ttls-pap"` and
+    `outer.control:Stripped-User-Name` = the inner User-Name (for the log, also on reject);
+    rejects anything but PAP (EAP or MS-CHAP inside); looks the user up and copies a hash that
+    matches the PBKDF2 pattern into `control:Password-With-Header`; otherwise rejects with a
+    reason on `outer.request:Module-Failure-Message`.
+  - `radius_admin_inner_postauth`: `outer.session-state:Tmp-String-1 = "ttls-pap"` and
+    `Stripped-User-Name`, only after the password was accepted.
+  - `radius_admin_inner_reject`: reason "wrong password" when none was set.
+  - `radius_admin_postauth`, new branch after the admin branch and before EAP-TLS: EAP-Message
+    present and the session marker set → removes the marker from session-state, sets
+    `control:Tmp-String-1` / `Stripped-User-Name`, wired or SSID exactly like EAP-TLS, VLAN and
+    rule id from `radius_admin_dot1x_vlan_rule_hex`; no match → reject.
+- **Log.** The post-auth query writes `username = %{%{control:Stripped-User-Name}:-%{User-Name}}`
+  (only the policy sets `control:Stripped-User-Name`), so EAP-TTLS rows show the inner name,
+  never the outer anonymous identity; `authmethod = 'ttls-pap'`; `rule_id` and the reasons
+  `turned off`, `no such 802.1X user`, `802.1X user is disabled` / `has expired`, `wrong password
+  for 802.1X user`, `only PAP is accepted inside EAP-TTLS`, `no enabled access rule matches the
+  user's groups for this connection`.
+- **MAB.** A MAC with an EAP-TLS or EAP-TTLS Access-Accept is never queued (`radius_admin_mab_hex`,
+  `mab_pending_open`; index `radpostauth_dot1x_mac_idx`, replacing `radpostauth_cert_mac_idx` one
+  release later). The reason reads "MAB not used: this device authenticates with 802.1X".
+- **UI.** `/dot1x-users/` (all roles view; operator+ create, edit groups/description/expiry/
+  enabled, set password, delete). Groups without an enabled rule are flagged. Audited
+  `dot1x_user.create|update|credential_reset|delete` (object_id = username; never the password or
+  its hash). Auth log method filter and labels for `ttls-pap`; reason hints for each reason.
+- **Upgrade.** `--phase postgres` (table, functions), `--phase app`, then `--phase freeradius`
+  (eap, the inner site and its symlink, re-rendered policy) and a FreeRADIUS restart. Without the
+  freeradius phase nothing changes for clients: the new policies are defined but unused.

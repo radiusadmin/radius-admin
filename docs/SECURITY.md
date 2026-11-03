@@ -41,6 +41,8 @@ record them in the SSP.
 | TOTP (RFC 6238, HMAC-SHA1) | app | `hmac` → libcrypto | OpenSSL FIPS provider (HMAC-SHA1 is approved) |
 | Session token storage (SHA-256), audit hash chain (SHA-256) | app | `hashlib` | OpenSSL FIPS provider |
 | EAP-TLS (TLS 1.2, FIPS cipher list) | FreeRADIUS rlm_eap_tls | libssl | OpenSSL FIPS provider |
+| EAP-TTLS tunnel (same TLS settings as EAP-TLS) | FreeRADIUS rlm_eap_ttls | libssl | OpenSSL FIPS provider |
+| 802.1X user password hashes (`{X-PBKDF2}HMACSHA2+256`) — created / verified | app / FreeRADIUS rlm_pap | `hashlib.pbkdf2_hmac` / `PKCS5_PBKDF2_HMAC` | OpenSSL FIPS provider |
 | LDAPS to AD | FreeRADIUS rlm_ldap → libldap | **GnuTLS** — Ubuntu's libldap is built against GnuTLS, so this connection does **not** use the OpenSSL FIPS provider | **Outside the OpenSSL boundary — see exception 5.** Verify whether the GnuTLS in use is a FIPS-validated module in your Ubuntu Pro FIPS stream |
 | Package signatures | apt | gpgv | not a FIPS function (integrity of software supply, outside the boundary) |
 | Update signatures (ECDSA P-384, SHA-384) | root helper (`update_install`), release job | `openssl dgst -sha384 -verify` / `-sign` | OpenSSL FIPS provider (approved); verified the same way in both modes |
@@ -185,7 +187,7 @@ without a FreeRADIUS restart. Security properties:
   `radius_admin_admin_source_ok_hex` and `radius_admin_priv15`, and still has no
   rights on schema `ui`. The web app gets the text-argument matcher for its
   parameterized "Test a match" tool; both use the same core matcher.
-* **Fail closed.** If PostgreSQL is unavailable, EAP-TLS, switch-admin and MAB requests
+* **Fail closed.** If PostgreSQL is unavailable, EAP-TLS, EAP-TTLS, switch-admin and MAB requests
   are rejected; service recovers by itself once the database returns (sql pool
   `retry_delay`, 30 s). PostgreSQL is now a hard dependency of every 802.1X login.
 * **Behaviour change.** AD group names now match case-insensitively (the original
@@ -376,3 +378,25 @@ secret exactly "radsec"). Anything else is refused before `radiusd -XC`.
 **Other fixes.** Database sessions run in UTC (timestamps labelled UTC were in the host's zone);
 a request no longer holds a lock on its own session row (removed a deadlock between two admins
 changing each other's accounts). The colour-theme cookie is a display hint only.
+
+**802.1X with a username and password (EAP-TTLS/PAP, local users).** Off by default
+(Settings, admin + step-up, audited).
+- The password travels inside the EAP-TTLS TLS tunnel (TLS 1.2, the EAP-TLS cipher list and
+  server certificate), never in the clear on the wire. It is only as safe as the device's server
+  check: a device that does not verify the RADIUS server certificate and name can hand the
+  password to a fake access point. RUNBOOK §6.9 makes the CA and server name mandatory in
+  device profiles. EAP-TLS remains the recommended method.
+- Stored as PBKDF2-HMAC-SHA256 (`pbkdf2_iterations`, 600,000 by default), verified by rlm_pap
+  through OpenSSL; never logged, audited or shown again. Same password rules as switch admins.
+- Separate from switch admins: the inner tunnel reads only `ui.dot1x_user` through
+  `radius_admin_dot1x_user_hex()` (hex argument, SECURITY DEFINER, `radius_fr` has no table
+  rights) and never `radcheck`, so neither account type can be used for the other. Only PAP is
+  accepted inside the tunnel (no inner EAP, no MS-CHAP).
+- The VLAN comes from the same access rules as EAP-TLS, by the user's groups; the account is
+  checked again in post-auth. The session marker that selects this branch is set only after the
+  password was accepted inside the tunnel, so an EAP-TLS or MAB request cannot reach it.
+- Logged under the name typed inside the tunnel (the outer identity may be anonymous); the
+  bench proves every request value reaches SQL as hex, including injection payloads in the inner
+  User-Name.
+- No new cryptographic algorithm: everything above is FIPS-approved, so the method is available
+  in both modes.

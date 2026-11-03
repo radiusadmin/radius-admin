@@ -45,7 +45,7 @@
   <tbody>{% for s in rows %}
   <tr class="{{ 'is-off' if s.acctstoptime else '' }}">
     <td class="name-cell user-cell"><span class="mono ellip" title="{{ s.username or '' }}">{{ s.username or '—' }}</span>
-      <span class="cell-sub">{{ {'eap-tls': '802.1X certificate', 'mab': 'MAB', 'pap-admin': 'admin'}.get(s.authmethod, s.authmethod or 'method unknown') }}{% if s.framedipaddress %} · {{ s.framedipaddress }}{% endif %}</span></td>
+      <span class="cell-sub">{{ {'eap-tls': '802.1X certificate', 'ttls-pap': '802.1X password', 'mab': 'MAB', 'pap-admin': 'admin'}.get(s.authmethod, s.authmethod or 'method unknown') }}{% if s.framedipaddress %} · {{ s.framedipaddress }}{% endif %}</span></td>
     <td>{% if s.callingstationid %}<span class="mono mac">{{ s.callingstationid|mac }}</span>{% if s.vendor %}<span class="cell-sub">{{ s.vendor }}</span>{% endif %}{% else %}—{% endif %}</td>
     <td>{% if s.client %}<a class="ellip switch-link" title="{{ s.client.name }}" href="{{ url_for('clients.edit', cid=s.client.id) }}">{{ s.client.name }}</a>{% else %}<span class="mono">{{ s.nas }}</span>{% endif %}
       <span class="cell-sub mono">{{ s.nasportid or '' }}</span></td>

@@ -653,6 +653,45 @@ browser's Print → Save as PDF; *CSV* downloads a spreadsheet (cells that a spr
 would evaluate as a formula are prefixed with `'`). Shared secrets never appear. Every
 report viewed or downloaded is recorded in the audit log.
 
+### 6.9 802.1X with a username and password (EAP-TTLS)
+
+For people and devices without a machine certificate. Certificates (EAP-TLS) stay the
+stronger choice and keep working alongside.
+
+1. **Turn it on.** UI → **Settings** → *802.1X with a username and password* (admin). It
+   takes effect at the next connection; no Apply.
+2. **Add users.** UI → **802.1X users** → *Add 802.1X user* (operator): username, password,
+   groups (comma-separated), optional description and expiry. The groups are matched against
+   the access rules' group names, the same way a computer's directory groups are: a user in
+   `Wired-Office` gets the VLAN of the first enabled rule for `Wired-Office` on that kind of
+   connection (wired, or that SSID). A group without a rule is flagged on the list; a user with
+   no matching rule is rejected. Disable, set an expiry, set a new password or delete there;
+   changes apply to the next connection.
+3. **Set up the devices.** The device must use **EAP-TTLS** with **PAP** as the inner method, and
+   it **must** trust the CA that issued the RADIUS server certificate (`certs/site/ca.pem`) and
+   check the server name (the name in that certificate, for example `radius.example.net`).
+   Without that check a fake access point can collect passwords. An outer (anonymous) identity
+   such as `anonymous` is fine: the log shows the name typed inside the tunnel.
+   * Windows 10/11: no built-in prompt for TTLS; push a wired or Wi-Fi profile (Group Policy or
+     Intune) with EAP-TTLS, inner method *Unencrypted password (PAP)*, the CA as trusted root and
+     the server name.
+   * macOS / iOS: a configuration profile (Apple Configurator, MDM) with TTLS, inner PAP, the CA
+     certificate and the server name as *trusted server certificate name*.
+   * Android: *EAP method* TTLS, *Phase 2* PAP, *CA certificate* the installed CA, *Domain* the
+     server name.
+   * Linux (NetworkManager): *Tunneled TLS*, inner *PAP*, the CA certificate.
+4. **Check.** UI → **Auth log**, method `ttls-pap`. Rejects give the reason in plain words:
+   turned off, no such 802.1X user, disabled, expired, wrong password, not PAP inside the tunnel,
+   or no access rule for the user's groups (§6.7).
+
+Switch admins and 802.1X users are separate: a switch admin's password never opens a network
+port, and an 802.1X user cannot sign in to a switch. A MAC that has connected with a password is
+never offered for MAB approval, as for certificates.
+
+Upgrade to this release: `sudo ./deploy/install.sh --phase postgres` (table and functions),
+`--phase app`, then `--phase freeradius --restart-freeradius` in a maintenance window (enables
+EAP-TTLS and `sites-enabled/radius-admin-inner`). EAP-TLS, MAB and switch logins behave as before.
+
 ## 7. Backup and restore
 
 What to back up:

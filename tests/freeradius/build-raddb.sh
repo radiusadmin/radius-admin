@@ -17,6 +17,7 @@ cp "$FR/mods-available/eap"  "$R/mods-available/eap"
 cp "$FR/mods-available/ldap" "$R/mods-available/ldap"
 cp "$FR/mods-config/sql/main/postgresql/queries.conf" "$R/mods-config/sql/main/postgresql/queries.conf"
 cp "$FR/sites-available/default" "$R/sites-available/default"
+cp "$FR/sites-available/radius-admin-inner" "$R/sites-available/radius-admin-inner"
 cp "$FR/clients.conf" "$R/clients.conf"
 cp "$FR/mods-config/files/authorize" "$R/mods-config/files/authorize"
 # --- enabled modules = production list minus modules-to-disable.txt
@@ -28,6 +29,7 @@ for m in $PROD; do
 done
 rm -f "$R"/sites-enabled/*
 ln -s ../sites-available/default "$R/sites-enabled/default"   # inner-tunnel removed
+ln -s ../sites-available/radius-admin-inner "$R/sites-enabled/radius-admin-inner"
 # --- production absolute paths -> bench paths (test-only substitution)
 sed -i "s|/etc/freeradius/certs/site/|$R/certs/site/|g" "$R/mods-available/eap"
 sed -i "s|^\tpassword = 'REDACTED'|\tpassword = '$PW'|" "$R/mods-available/ldap"

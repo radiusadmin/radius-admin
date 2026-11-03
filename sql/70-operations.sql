@@ -54,8 +54,8 @@ CREATE INDEX IF NOT EXISTS radpostauth_cert_mac_idx
 --   '<vlan>'    registered, enabled, not expired -> accept into that VLAN
 --   'disabled'  registered but disabled          -> reject
 --   'expired'   registration expired              -> reject
---   'certificate' not registered, but has authenticated with a certificate (an
---               EAP-TLS Access-Accept from this MAC) -> reject, never queued
+--   'certificate' not registered, but has authenticated with 802.1X (an EAP-TLS or
+--               EAP-TTLS Access-Accept from this MAC) -> reject, never queued
 --   'unknown'   not registered (recorded in mab_pending) -> reject
 --   NULL        malformed input                   -> reject
 CREATE OR REPLACE FUNCTION public.radius_admin_mab_hex(p_mac text, p_nas_hex text, p_port_hex text)
@@ -85,7 +85,7 @@ BEGIN
 	-- A device that authenticates with a certificate is not a MAB candidate (the switch
 	-- tried MAB first or fell back to it): never queue it, and drop an earlier queue row.
 	IF EXISTS (SELECT 1 FROM radpostauth
-		   WHERE reply = 'Access-Accept' AND authmethod = 'eap-tls'
+		   WHERE reply = 'Access-Accept' AND authmethod IN ('eap-tls', 'ttls-pap')
 		     AND upper(regexp_replace(callingstationid, '[^0-9A-Fa-f]', '', 'g')) = replace(p_mac, '-', '')) THEN
 		BEGIN
 			DELETE FROM mab_pending WHERE mac = p_mac;
@@ -189,7 +189,7 @@ GRANT SELECT, UPDATE, DELETE ON mab_pending TO radius_admin;
 CREATE OR REPLACE VIEW public.mab_pending_open AS
 	SELECT p.* FROM mab_pending p
 	WHERE NOT EXISTS (SELECT 1 FROM radpostauth a
-			  WHERE a.reply = 'Access-Accept' AND a.authmethod = 'eap-tls'
+			  WHERE a.reply = 'Access-Accept' AND a.authmethod IN ('eap-tls', 'ttls-pap')
 			    AND upper(regexp_replace(a.callingstationid, '[^0-9A-Fa-f]', '', 'g')) = replace(p.mac, '-', ''));
 REVOKE ALL ON public.mab_pending_open FROM PUBLIC;
 GRANT SELECT ON public.mab_pending_open TO radius_admin;

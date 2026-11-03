@@ -8,6 +8,10 @@ release, so previews sort after it.
 ## Unreleased
 
 ### Added
+- 802.1X with a username and password: EAP-TTLS with PAP inside, for local 802.1X users
+  (new 802.1X users page, off by default in Settings). The access rules assign the VLAN by
+  each user's groups; the auth log shows the name typed inside the tunnel. Needs the
+  freeradius install phase and a FreeRADIUS restart.
 - Updates page: current and latest version, changelog, update channel (main, testing,
   dev) and automatic updates. Builds are signed in CI and verified by the root helper
   before anything is installed.
@@ -17,6 +21,8 @@ release, so previews sort after it.
 ### Fixed
 - `install.sh --phase app` without answers (and updates) no longer resets the monitor's
   allowed network to the `192.0.2.0/24` example; it keeps the installed list.
+- A MAC that connected with 802.1X is reported as such when the switch tries MAB ("authenticates
+  with 802.1X"), for passwords as for certificates.
 - A switch outside the allowed networks is reported as such, instead of Net-SNMP's
   "Unknown engine ID (Operation not permitted)" with advice about the switch.
 
