@@ -442,3 +442,18 @@ exception 8).
 - PEAP rejects finish one round after the inner tunnel refused the login; the method, user and
   reason are carried in the outer session-state and restored before the log row is written
   (`radius_admin_reject`), so the auth log is as precise as for EAP-TTLS.
+
+**PEAP with directory accounts (`peap-ldap`, domain join).** Off by default, standard mode only
+(§1.1 exception 8; `deploy/ad-join.sh` refuses with `require_fips`).
+- MSCHAPv2 cannot be checked with an LDAP bind, so the domain controller checks it: the server
+  is joined to the domain (Samba winbind) and rlm_mschap runs `ntlm_auth`, without a shell, with
+  the challenge and response only; the user's password and NT hash never reach this server.
+- The join creates a computer account whose secret Samba keeps in `/var/lib/samba/private`
+  (root only). `freerad` joins group `winbindd_priv` to talk to winbind; it gets no other rights.
+  The administrator password for the join is typed into `net ads join` on the console and never
+  passes through radius-admin.
+- `smb.conf` is member-only (no shares, smbd not needed). `ntlm auth = mschapv2-and-ntlmv2-only`
+  lets winbind accept MSCHAPv2 and nothing older (no NTLMv1).
+- Local users never reach the domain controller (`MS-CHAP-Use-NTLM-Auth := No` with their NT
+  hash); unknown names are rejected by the directory search before any password check. The
+  bench proves both with a stand-in ntlm_auth that records every call.

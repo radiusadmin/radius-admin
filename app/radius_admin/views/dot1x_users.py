@@ -86,7 +86,8 @@ def index():
     s = get_settings()
     return render_template("dot1x_users/index.html", users=users, rule_groups=_rule_groups(),
                            ttls_on=s["dot1x_ttls"] or (s["dot1x_peap"] and not cfg()["require_fips"]),
-                           directory_on=s["dot1x_ttls_directory"])
+                           directory_on=s["dot1x_ttls_directory"]
+                           or (s["dot1x_peap_directory"] and not cfg()["require_fips"]))
 
 
 @bp.route("/new", methods=["GET", "POST"])

@@ -21,7 +21,8 @@ The reference build targets (example names; every site sets its own):
   in the UI and rendered to a clients file.
 - 802.1X: EAP-TLS (machine certificates from an internal PKI, e.g. `pki.example.net`,
   with OCSP); optionally EAP-TTLS/PAP for local 802.1X users (section 18) and directory
-  accounts (section 19), and PEAP-MSCHAPv2 for local users in standard mode (section 20). LDAPS to Active Directory (e.g. `dc01.example.net`); the user filter matches
+  accounts (section 19), and PEAP-MSCHAPv2 in standard mode for local users (section 20) and
+  directory accounts on a domain-joined server (section 21). LDAPS to Active Directory (e.g. `dc01.example.net`); the user filter matches
   the computer object by `dNSHostName = TLS-Client-Cert-Subject-Alt-Name-Dns`;
   `LDAP-Group` checks select the VLAN.
 - Switch admin logins: PAP from the management subnet (example 192.0.2.0/24); the user
@@ -160,7 +161,7 @@ CREATE TABLE radpostauth (
   id bigserial PRIMARY KEY,
   username text NOT NULL,
   reply text,                         -- Access-Accept / Access-Reject
-  authmethod text,                    -- 'eap-tls' | 'ttls-pap' | 'ttls-ldap' | 'peap' | 'pap-admin' | 'mab' | 'other'
+  authmethod text,                    -- 'eap-tls' | 'ttls-pap' | 'ttls-ldap' | 'peap' | 'peap-ldap' | 'pap-admin' | 'mab' | 'other'
   nasipaddress inet,
   calledstationid text,
   callingstationid text,
@@ -940,3 +941,36 @@ Step 3 of username/password 802.1X. MSCHAPv2 uses MD4, DES and SHA-1: a document
   and the new default-site line. The policy and that line are installed together; after an app
   downgrade an Apply is refused by `radiusd -XC` (the policy lacks `radius_admin_reject`) rather
   than breaking FreeRADIUS.
+
+## 21. Change (2026-11-03): PEAP-MSCHAPv2 with directory accounts (domain join, ntlm_auth)
+
+Step 4 of username/password 802.1X. Same exception and FIPS rule as section 20.
+
+- **Join.** `deploy/ad-join.sh --realm REALM [--workgroup NAME] [--admin USER]` (console, root):
+  refuses with `require_fips`; installs `samba-common-bin winbind`; writes `/etc/samba/smb.conf`
+  (member only: `security = ads`, `ntlm auth = mschapv2-and-ntlmv2-only`, no shares; first line
+  `# radius-admin (deploy/ad-join.sh)`), replacing only nothing, the package default
+  (`/usr/share/samba/smb.conf`) or its own earlier file unless `--replace-smb-conf` (backup kept);
+  `net ads join -U USER` (prompts; the password never passes through the script); enables winbind;
+  `usermod -aG winbindd_priv freerad`; checks `net ads testjoin`, `wbinfo -t`. `--status`,
+  `--dry-run`, `--print-config`. Not run by the installer or the updater.
+- **Setting** `dot1x_peap_directory` (`'false'`; hidden and refused with `require_fips`, switched
+  off by `fips_peap_off` with `dot1x_peap`). `radius_admin_dot1x_nt_hex` returns `'directory'` for
+  a name that is not local while it is on.
+- **FreeRADIUS.** `mods-available/mschap` is shipped (stock 3.2.10 plus `ntlm_auth =
+  "/usr/bin/ntlm_auth --request-nt-key --allow-mschapv2 --username=%{%{mschap:User-Name}:-None}
+  --challenge=… --nt-response=…"`, `ntlm_auth_timeout = 5`). Local users get
+  `MS-CHAP-Use-NTLM-Auth := No` with their `NT-Password`, so ntlm_auth runs only for directory
+  names. The `ldap_user` filter uses `%{%{Stripped-User-Name}:-%{User-Name}}`.
+  `radius-admin-peap` authorize, for `"directory"`: `Stripped-User-Name := %{mschap:User-Name}`
+  (no `DOMAIN\` prefix), `ldap_user` (notfound → "not found in the directory"; other failure →
+  "could not be searched"), groups to `control:Tmp-String-9`; then the inner EAP.
+- **Policy.** `radius_admin_peap_authorize`: `outer.control:Tmp-String-1 = "peap-ldap"` for
+  directory names, no reject. `radius_admin_peap_postauth`: hex-encoded groups (shared
+  `_DIRECTORY_GROUPS_HEX`) into `outer.session-state` with marker `peap-ldap`. Outer branch and
+  `radius_admin_reject` accept `peap-ldap` like `ttls-ldap`; the directory reject reason covers it.
+- **Log/UI.** `authmethod = 'peap-ldap'`; Settings checkbox with the `ad-join.sh` hint; labels,
+  filter, directory groups on the record. MAB treats it like the other 802.1X methods.
+- **Bench.** `tests/freeradius/fake-ntlm-auth.py` stands in for ntlm_auth (checks the MSCHAPv2
+  NT-Response with DES and the NT hash, RFC 2759; logs every call). `tests/installer/test_ad_join.sh`
+  covers the script without a domain.

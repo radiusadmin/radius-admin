@@ -19,7 +19,7 @@ SETTING_KEYS = ("admin_subnet", "admin_priv15", "custom_policy", "banner_text", 
                 "session_idle_minutes", "session_absolute_hours", "stepup_minutes",
                 "update_channel", "update_mode", "update_window_day", "update_window_hour",
                 "update_check_requested", "display_timezone", "dot1x_ttls",
-                "dot1x_ttls_directory", "dot1x_peap")
+                "dot1x_ttls_directory", "dot1x_peap", "dot1x_peap_directory")
 RADSEC_KEYS = ("enabled", "listen", "port", "max_connections", "idle_timeout", "ocsp", "ocsp_url")
 SAML_KEYS = ("enabled", "idp_metadata", "entity_id", "group_attribute", "name_attribute", "local_login")
 DEFAULT_BANNER = ("This system is for authorized use only. Activity on this system is "
@@ -49,6 +49,8 @@ def get_settings(conn=None):
         "dot1x_ttls_directory": raw.get("dot1x_ttls_directory", "false") == "true",
         # PEAP-MSCHAPv2 for local users that allow it (SPEC section 20; never with require_fips)
         "dot1x_peap": raw.get("dot1x_peap", "false") == "true",
+        # ... also for directory accounts, through ntlm_auth (joined server; SPEC section 21)
+        "dot1x_peap_directory": raw.get("dot1x_peap_directory", "false") == "true",
         # RadSec listener, as stored (strings); validated by unlang.validate_radsec_settings
         "radsec": {k: raw["radsec_" + k] for k in RADSEC_KEYS if "radsec_" + k in raw},
         # portal single sign-on (sso.settings normalizes)
@@ -120,10 +122,12 @@ def fips_peap_off(dsn):
     from . import audit
     conn = db.connect(dsn)
     try:
-        if db.execute("UPDATE ui.setting SET value = 'false', updated_at = now()"
-                      " WHERE key = 'dot1x_peap' AND value <> 'false'", conn=conn):
+        rows = db.query("UPDATE ui.setting SET value = 'false', updated_at = now()"
+                        " WHERE key IN ('dot1x_peap', 'dot1x_peap_directory') AND value <> 'false' RETURNING key",
+                        conn=conn)
+        if rows:
             audit.write("settings.update", actor="system:fips", object_type="setting",
-                        detail={"dot1x_peap": {"from": True, "to": False}}, conn=conn)
+                        detail={r["key"]: {"from": True, "to": False} for r in rows}, conn=conn)
         conn.commit()
     finally:
         conn.close()

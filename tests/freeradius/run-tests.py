@@ -111,7 +111,8 @@ def seed_db():
          " ('d.off', %s, '{Wired-Office}', false, NULL),"
          " ('e.old', %s, '{Wired-Office}', true, now() - interval '1 hour');"
          "INSERT INTO ui.setting (key, value) VALUES ('dot1x_ttls', 'true'), ('dot1x_ttls_directory', 'false'),"
-         " ('dot1x_peap', 'true') ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;"
+         " ('dot1x_peap', 'true'), ('dot1x_peap_directory', 'false')"
+         " ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;"
          # PEAP allowed for j.doe and d.off (NT hash of the same password), not for k.smith
          "UPDATE ui.dot1x_user SET nt_hash = %s WHERE username IN ('j.doe', 'd.off');"
          "COMMIT;" % (q(dot1x), q(dot1x), q(dot1x), q(dot1x), q(nt_hash(DOT1X_PW))))
@@ -487,6 +488,48 @@ def peap_cases(eapol_test, bench, prefix):
         code, out = peap(pl)
         record("INJECTION #%d in the PEAP inner User-Name -> Reject, no side effect" % i,
                code == "reject" and tables_fingerprint() == before, "%s %r" % (code, pl))
+    # ---- directory accounts over PEAP: the domain controller checks MSCHAPv2 (ntlm_auth;
+    # a stand-in here), the groups come from the directory (ldap_user)
+    calls = "/var/tmp/ra-bench-ntlm-auth.log"
+    with open(calls, "w"):
+        pass
+    os.chmod(calls, 0o666)
+    code, out = peap("jroe", DIR_PW)
+    record("PEAP directory user while directory accounts over PEAP are off -> Reject (local only)",
+           code == "reject" and last_reason().endswith("no such 802.1X user"), "%s %r" % (code, last_reason()))
+    set_dot1x_ttls(True, "dot1x_peap_directory")   # live setting, no restart
+    for name, user, pw, want, want_vlan, why in (
+        ("PEAP directory jroe (Wired-Office) -> VLAN 500", "jroe", DIR_PW, "accept", "500", ""),
+        ("PEAP directory EXAMPLE\\jroe (domain prefix) -> VLAN 500", "EXAMPLE\\jroe", DIR_PW, "accept", "500", ""),
+        ("PEAP directory labtech NESTED group -> VLAN 520", "labtech", DIR_PW, "accept", "520", ""),
+        ("PEAP directory nogroup -> Reject", "nogroup", DIR_PW, "reject", None,
+         "no enabled access rule matches the user's groups"),
+        ("PEAP directory jroe wrong password -> Reject", "jroe", "wrong-password", "reject", None,
+         "the directory refused the password"),
+        ("PEAP directory unknown user -> Reject (never asks the domain controller)", "nosuch", DIR_PW, "reject",
+         None, "not found in the directory"),
+        ("PEAP j.doe is a local user: the directory password fails", "j.doe", DIR_PW, "reject", None,
+         "wrong password for 802.1X user"),
+    ):
+        code, out = peap(user, pw)
+        reason = last_reason()
+        record(name, code == want and (want_vlan is None or vlan_of(out) == want_vlan) and why in reason,
+               "got %s vlan=%s reason=%r" % (code, vlan_of(out), reason))
+    asked = open(calls).read().split()
+    record("PEAP: only directory users reach the domain controller (never local users or unknown names)",
+           "jroe" in asked and "labtech" in asked and "j.doe" not in asked and "nosuch" not in asked
+           and "k.smith" not in asked, str(sorted(set(asked))))
+    row = psql("SELECT username||'|'||authmethod||'|'||coalesce(vlan,'')||'|'||coalesce(ad_groups_hex,'') FROM radpostauth"
+               " WHERE reply='Access-Accept' AND authmethod='peap-ldap' ORDER BY id LIMIT 1").split("|")
+    groups = [bytes.fromhex(h).decode() for h in row[3].split(",")[1:]] if len(row) == 4 else []
+    record("radpostauth: directory PEAP Accept logs the inner user, peap-ldap, VLAN and the directory groups",
+           row[:3] == ["jroe", "peap-ldap", "500"] and "Wired-Office" in groups, str(row[:3] + groups))
+    record("radpostauth: directory PEAP wrong password logs the inner user and peap-ldap",
+           psql("SELECT username||'|'||authmethod FROM radpostauth WHERE reply='Access-Reject'"
+                " AND reason LIKE '%%directory refused%%' AND authmethod='peap-ldap' ORDER BY id LIMIT 1")
+           == "jroe|peap-ldap")
+    set_dot1x_ttls(False, "dot1x_peap_directory")
+
     code, out = peap("j.doe", mac="aa:bb:cc:00:00:79")
     eth = ['NAS-IP-Address = %s' % SW_IN[0], 'NAS-Port-Type = Ethernet', 'Service-Type = Call-Check',
            'User-Name = "aabbcc000079"', 'User-Password = "aabbcc000079"', 'Calling-Station-Id = "AA-BB-CC-00-00-79"']

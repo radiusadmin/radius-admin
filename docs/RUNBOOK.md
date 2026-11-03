@@ -692,9 +692,27 @@ stronger choice and keep working alongside.
    needs can only be made from the password; existing users need a new password). PEAP is what
    many devices offer without a profile (Windows: *Microsoft: Protected EAP (PEAP)* with *Secured
    password (EAP-MSCHAP v2)*), but it is weaker: prefer EAP-TTLS or certificates, and still check
-   the server certificate and name on the devices. Only local users can use PEAP. Windows 11
-   with Credential Guard does not offer saved credentials for MSCHAPv2.
-6. **Check.** UI → **Auth log**, method `ttls-pap` (local), `ttls-ldap` (directory) or `peap`. Rejects give
+   the server certificate and name on the devices. Windows 11 with Credential Guard does not
+   offer saved credentials for MSCHAPv2.
+
+   **Directory accounts over PEAP** need this server joined to the domain, because MSCHAPv2
+   cannot be checked with an LDAP login. On the console:
+   ```
+   sudo ./deploy/ad-join.sh --realm EXAMPLE.NET --dry-run        # checks, changes nothing
+   sudo ./deploy/ad-join.sh --realm EXAMPLE.NET --admin Administrator
+   sudo systemctl restart freeradius
+   ntlm_auth --request-nt-key --username=jroe                       # asks for the password: NT_KEY = works
+   sudo ./deploy/ad-join.sh --status
+   ```
+   It installs Samba's winbind, writes a member-only `/etc/samba/smb.conf` (it refuses to replace
+   one it did not write unless you add `--replace-smb-conf`), asks `net ads join` to prompt for
+   the administrator's password, and lets FreeRADIUS use `ntlm_auth`. DNS must find the domain
+   controllers and the clock must be right. The domain controllers must allow NTLM for this
+   computer account (Group Policy *Network security: Restrict NTLM*). Then tick *Also accept
+   directory accounts over PEAP* in Settings. Users type their user name or `DOMAIN\user`; their
+   directory groups select the VLAN, a local 802.1X user of the same name wins.
+6. **Check.** UI → **Auth log**, method `ttls-pap` / `peap` (local) or `ttls-ldap` / `peap-ldap`
+   (directory). Rejects give
    the reason in plain words: turned off, no such user, disabled, expired, wrong password (or, for
    the directory, a refused account), not PAP inside the tunnel, or no access rule for the user's
    groups (§6.7). A directory record lists the groups the rule matcher saw.

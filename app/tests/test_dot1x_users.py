@@ -233,8 +233,8 @@ def test_outer_branch_needs_the_inner_marker(policy):
     pa = policy[policy.index("radius_admin_postauth {"):]
     ttls = pa[pa.index("# 802.1X with a username and password"):pa.index("# 802.1X EAP-TLS")]
     assert ('elsif (&EAP-Message && &session-state:Tmp-String-1 && (&session-state:Tmp-String-1 == "ttls-pap"'
-            ' || &session-state:Tmp-String-1 == "ttls-ldap" || &session-state:Tmp-String-1 == "peap")'
-            ' && &session-state:Stripped-User-Name)') in ttls
+            ' || &session-state:Tmp-String-1 == "ttls-ldap" || &session-state:Tmp-String-1 == "peap"'
+            ' || &session-state:Tmp-String-1 == "peap-ldap") && &session-state:Stripped-User-Name)') in ttls
     assert pa.index("# Switch/device admin logins") < pa.index("# 802.1X with a username") < pa.index("# 802.1X EAP-TLS")
     assert ("%{sql:SELECT radius_admin_dot1x_vlan_rule_hex('%{hex:control:Stripped-User-Name}', "
             "%{control:Tmp-String-7}, '%{control:Tmp-String-8}')}") in ttls
@@ -254,8 +254,8 @@ def test_inner_tunnel_directory_branch(policy):
     assert '"%{control:Tmp-String-3}" !~ /^(,[0-9a-f]+)*$/' in post
     assert "&Tmp-String-3 := &control:Tmp-String-3" in post
     ttls = policy[policy.index("# 802.1X with a username and password"):policy.index("# 802.1X EAP-TLS")]
-    assert ('&control:Tmp-String-1 == "ttls-ldap" && "%{control:Tmp-String-3}" =~ /^(,[0-9a-f]+)*$/'
-            ' && "%{control:Tmp-String-8}" =~ /^([0-9a-f]{2})*$/') in ttls
+    assert ('(&control:Tmp-String-1 == "ttls-ldap" || &control:Tmp-String-1 == "peap-ldap")'
+            ' && "%{control:Tmp-String-3}" =~ /^(,[0-9a-f]+)*$/ && "%{control:Tmp-String-8}" =~ /^([0-9a-f]{2})*$/') in ttls
     assert "%{sql:SELECT radius_admin_vlan_rule_hex(%{control:Tmp-String-7}, '%{control:Tmp-String-8}', '%{control:Tmp-String-3}')}" in ttls
     assert "\t\t\t&Tmp-String-3 !* ANY\n" in ttls     # the groups leave session-state with the marker
 
@@ -270,7 +270,7 @@ def test_ldap_user_section_reuses_the_main_ldap_settings():
     for key in ("server", "port", "identity", "password", "base_dn"):
         assert re.search(r"^\t%s = \$\{modules\.ldap\.%s\}$" % (key, key), sec, re.M), key
     assert "REDACTED" not in sec and "update {" not in sec
-    assert "(!(objectClass=computer))" in sec and "sAMAccountName=%{User-Name}" in sec
+    assert "(!(objectClass=computer))" in sec and "sAMAccountName=%{%{Stripped-User-Name}:-%{User-Name}}" in sec
 
 
 # ------------------------------------------------------------------ PEAP-MSCHAPv2 (SPEC section 20)
@@ -295,6 +295,10 @@ def test_nt_hash_function(app, superconn):
     assert f(hx("j.doe")) == "0x" + nt_hash(PW) and f(hx("J.DOE")) == "0x" + nt_hash(PW)
     assert f(hx("k.smith")) == "nopeap" and f(hx("d.off")) == "disabled" and f(hx("e.old")) == "expired"
     assert f(hx("nobody")) == "unknown" and f("zz") is None and f(None) is None
+    # directory accounts over PEAP: not local -> the domain controller decides; local still wins
+    q(superconn, "INSERT INTO ui.setting (key, value) VALUES ('dot1x_peap_directory', 'true')")
+    assert f(hx("nobody")) == "directory" and f(hx("k.smith")) == "nopeap" and f(hx("d.off")) == "disabled"
+    q(superconn, "UPDATE ui.setting SET value='false' WHERE key='dot1x_peap_directory'")
     # only PEAP on: the VLAN function still answers for local users
     q(superconn, "INSERT INTO ui.access_rule (id, priority, connection, ad_group, vlan) VALUES (1, 10, 'wired', 'Wired-Office', 500)")
     assert q(superconn, "SELECT radius_admin_dot1x_vlan_rule_hex(%s, true, '')", (hx("j.doe"),))[0][0] == "500:1"
@@ -341,6 +345,12 @@ def test_peap_setting_and_fips_mode(app, browser, superconn, logged_in):
     browser.post("/settings", dict(form, dot1x_peap="1"))
     assert q(superconn, "SELECT value FROM ui.setting WHERE key='dot1x_peap'") == [("true",)]
     assert "Allow PEAP" in browser.text(browser.get("/dot1x-users/new"))
+    t = browser.text(browser.get("/settings"))
+    assert "directory accounts over PEAP" in t and "deploy/ad-join.sh" in t
+    browser.post("/settings", dict(form, dot1x_peap="1", dot1x_peap_directory="1"))
+    assert q(superconn, "SELECT value FROM ui.setting WHERE key='dot1x_peap_directory'") == [("true",)]
+    assert "Directory accounts are accepted" in browser.text(browser.get("/dot1x-users/"))
+    browser.post("/settings", dict(form, dot1x_peap="1"))
     # FIPS mode: no PEAP anywhere, refused when posted, switched off at start-up
     app.config["RA"]["require_fips"] = True
     assert "PEAP" not in browser.text(browser.get("/settings"))
@@ -352,9 +362,13 @@ def test_peap_setting_and_fips_mode(app, browser, superconn, logged_in):
                                           "enabled": "1", "allow_peap": "1"})
     assert r.status_code == 302 and q(superconn, "SELECT nt_hash FROM ui.dot1x_user")[0][0] is None
     q(superconn, "UPDATE ui.setting SET value='true' WHERE key='dot1x_peap'")
+    q(superconn, "INSERT INTO ui.setting (key, value) VALUES ('dot1x_peap_directory', 'true')"
+                 " ON CONFLICT (key) DO UPDATE SET value='true'")
     fips_peap_off(app.config["RA"]["db_dsn"])
-    assert q(superconn, "SELECT value FROM ui.setting WHERE key='dot1x_peap'") == [("false",)]
-    assert q(superconn, "SELECT actor, detail::text FROM ui.audit_log ORDER BY id DESC LIMIT 1")[0][0] == "system:fips"
+    assert q(superconn, "SELECT key, value FROM ui.setting WHERE key LIKE 'dot1x_peap%%' ORDER BY key") == [
+        ("dot1x_peap", "false"), ("dot1x_peap_directory", "false")]
+    actor, detail = q(superconn, "SELECT actor, detail::text FROM ui.audit_log ORDER BY id DESC LIMIT 1")[0]
+    assert actor == "system:fips" and set(json.loads(detail)) == {"dot1x_peap", "dot1x_peap_directory"}
     fips_peap_off(app.config["RA"]["db_dsn"])          # nothing to do: no second record
     assert q(superconn, "SELECT count(*) FROM ui.audit_log WHERE actor='system:fips'")[0][0] == 1
 
@@ -382,8 +396,46 @@ def test_peap_policy_contract(policy):
     assert "update outer.session-state" in post and '&Tmp-String-1 := "peap"' in post
     rej = policy[policy.index("radius_admin_reject {"):]
     rej = rej[:rej.index("\n}\n") + 3]
-    assert "&session-state:Tmp-String-4 =~ /^(ttls-pap|ttls-ldap|peap)$/" in rej and "!&control:Tmp-String-1" in rej
+    assert "&session-state:Tmp-String-4 =~ /^(ttls-pap|ttls-ldap|peap|peap-ldap)$/" in rej and "!&control:Tmp-String-1" in rej
     ttls = policy[policy.index("# 802.1X with a username and password"):policy.index("# 802.1X EAP-TLS")]
     assert '&session-state:Tmp-String-1 == "peap"' in ttls
     assert '(&control:Tmp-String-1 == "ttls-pap" || &control:Tmp-String-1 == "peap")' in ttls
+
+
+# ------------------------------------------------------------------ PEAP with directory accounts (SPEC section 21)
+def test_peap_directory_policy_contract(policy):
+    pa = policy[policy.index("radius_admin_peap_authorize {"):policy.index("radius_admin_peap_postauth {")]
+    local = pa[pa.index("=~ /^0x[0-9a-f]{32}$/"):pa.index('== \"directory\"') if '== \"directory\"' in pa else pa.index('"directory")')]
+    assert "&MS-CHAP-Use-NTLM-Auth := No" in local          # local users never reach the domain controller
+    d = pa[pa.index('&control:Tmp-String-0 == "directory")'):pa.index("\telse {", pa.index('== "directory")'))]
+    assert '&Tmp-String-1 := "peap-ldap"' in d and "reject" not in d and "NT-Password" not in d
+    post = policy[policy.index("radius_admin_peap_postauth {"):policy.index("radius_admin_postauth {")]
+    assert '&Tmp-String-1 := "peap-ldap"' in post and "%{hex:control:Tmp-String-9[0]}" in post
+    ttls = policy[policy.index("# 802.1X with a username and password"):policy.index("# 802.1X EAP-TLS")]
+    assert '&session-state:Tmp-String-1 == "peap-ldap"' in ttls
+    assert '(&control:Tmp-String-1 == "ttls-ldap" || &control:Tmp-String-1 == "peap-ldap") && "%{control:Tmp-String-3}"' in ttls
+    assert "/^(ttls-pap|ttls-ldap|peap|peap-ldap)$/" in policy
+
+
+def test_peap_directory_freeradius_files():
+    import os
+    fr = os.path.join(os.path.dirname(__file__), "..", "..", "freeradius")
+    mschap = open(os.path.join(fr, "mods-available", "mschap")).read()
+    lines = [ln.strip() for ln in mschap.splitlines() if ln.strip().startswith("ntlm_auth =")]
+    assert lines == ['ntlm_auth = "/usr/bin/ntlm_auth --request-nt-key --allow-mschapv2 --username=%{%{mschap:User-Name}:-None}'
+                     ' --challenge=%{%{mschap:Challenge}:-00} --nt-response=%{%{mschap:NT-Response}:-00}"']
+    site = open(os.path.join(fr, "sites-available", "radius-admin-peap")).read()
+    assert '&Stripped-User-Name := "%{mschap:User-Name}"' in site and "ldap_user" in site
+    assert site.index("ldap_user") < site.index("radius_admin_inner_eap {")
+    ldap = open(os.path.join(fr, "mods-available", "ldap")).read()
+    assert "sAMAccountName=%{%{Stripped-User-Name}:-%{User-Name}}" in ldap
+
+
+def test_peap_directory_label(browser, superconn, logged_in):
+    q(superconn, "INSERT INTO radpostauth (username, reply, authmethod, vlan, authdate) VALUES"
+                 " ('jroe', 'Access-Accept', 'peap-ldap', '500', now())")
+    logged_in("viewer")
+    assert "jroe" in browser.text(browser.get("/auth-log?method=peap-ldap"))
+    t = browser.text(browser.get("/auth-log/1"))
+    assert "PEAP-MSCHAPv2, directory account" in t and "Directory groups seen" in t
 

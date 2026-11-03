@@ -8,8 +8,11 @@ SET ROLE radius_owner;
 --   SPEC section 19). A local user of the same name always wins.
 -- dot1x_peap: 'true' lets local 802.1X users that allow it sign in with PEAP-MSCHAPv2
 --   (SPEC section 20; standard mode only, the console refuses it with require_fips)
+-- dot1x_peap_directory: 'true' also accepts directory accounts over PEAP, checked by the
+--   domain controller through Samba's ntlm_auth (the server must be joined: deploy/ad-join.sh;
+--   SPEC section 21). A local user of the same name always wins.
 INSERT INTO ui.setting (key, value) VALUES ('dot1x_ttls', 'false'), ('dot1x_ttls_directory', 'false'),
-	('dot1x_peap', 'false')
+	('dot1x_peap', 'false'), ('dot1x_peap_directory', 'false')
 ON CONFLICT (key) DO NOTHING;
 
 -- Local 802.1X accounts. Separate from switch admins (radcheck/net-admins): a switch
@@ -87,7 +90,8 @@ $$;
 -- NT hash for PEAP-MSCHAPv2 inside the tunnel. p_user_hex = hex(User-Name inside PEAP).
 -- Returns '0x' + 32 hex digits for rlm_mschap (NT-Password), or why there is none:
 --   'off' (setting dot1x_peap), 'unknown', 'disabled', 'expired', 'nopeap' (the user does
---   not allow PEAP); NULL for malformed input.
+--   not allow PEAP), 'directory' (not a local user, and directory accounts are accepted over
+--   PEAP: rlm_mschap asks the domain controller through ntlm_auth); NULL for malformed input.
 CREATE OR REPLACE FUNCTION public.radius_admin_dot1x_nt_hex(p_user_hex text)
 RETURNS text
 LANGUAGE plpgsql STABLE SECURITY DEFINER
@@ -109,6 +113,9 @@ BEGIN
 	END IF;
 	SELECT nt_hash, enabled, expires_at INTO u FROM ui.dot1x_user WHERE lower(username) = lower(v_name);
 	IF NOT FOUND THEN
+		IF coalesce((SELECT value FROM ui.setting WHERE key = 'dot1x_peap_directory'), 'false') = 'true' THEN
+			RETURN 'directory';
+		END IF;
 		RETURN 'unknown';
 	END IF;
 	IF NOT u.enabled THEN
@@ -174,5 +181,5 @@ GRANT EXECUTE ON FUNCTION public.radius_admin_dot1x_nt_hex(text) TO radius_fr;
 -- covers EAP-TLS only; it is dropped one release after this one.
 CREATE INDEX IF NOT EXISTS radpostauth_dot1x_mac_idx
 	ON radpostauth ((upper(regexp_replace(callingstationid, '[^0-9A-Fa-f]', '', 'g'))))
-	WHERE reply = 'Access-Accept' AND authmethod IN ('eap-tls', 'ttls-pap', 'ttls-ldap', 'peap');
+	WHERE reply = 'Access-Accept' AND authmethod IN ('eap-tls', 'ttls-pap', 'ttls-ldap', 'peap', 'peap-ldap');
 RESET ROLE;

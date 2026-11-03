@@ -130,7 +130,11 @@ def nt_hash(password: str) -> str:
     Documented exception to the FIPS-safe rule (SECURITY.md): MSCHAPv2 can only check a
     password against this unsalted hash. OpenSSL 3 no longer offers MD4 to hashlib, so this
     is the RFC 1320 algorithm in Python; never use it for anything else."""
-    data = password.encode("utf-16-le")
+    return _md4(password.encode("utf-16-le")).hex()
+
+
+def _md4(data: bytes) -> bytes:
+    """RFC 1320 MD4. Only for nt_hash() (and the bench's MSCHAPv2 stand-in)."""
     msg = data + b"\x80" + b"\x00" * ((55 - len(data)) % 64) + struct.pack("<Q", len(data) * 8)
     mask = 0xFFFFFFFF
     rotl = lambda x, n: ((x << n) | (x >> (32 - n))) & mask  # noqa: E731
@@ -151,7 +155,7 @@ def nt_hash(password: str) -> str:
             a = rotl((a + (b ^ c ^ d) + x[k] + 0x6ED9EBA1) & mask, (3, 9, 11, 15)[i % 4])
             a, b, c, d = d, a, b, c
         h = [(v + w) & mask for v, w in zip(h, (a, b, c, d))]
-    return struct.pack("<4I", *h).hex()
+    return struct.pack("<4I", *h)
 
 
 def fr_pbkdf2_parse(value: str):

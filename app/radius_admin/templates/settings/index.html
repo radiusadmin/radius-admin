@@ -20,7 +20,9 @@
   <p id="dot1x_ttls_directory-hint" class="small muted">For a name that is not a local 802.1X user, FreeRADIUS logs in to the directory as that person; the access rules then match their directory groups, as for computers. A local 802.1X user of the same name always wins. Disabled, locked or expired directory accounts are refused by the directory.</p>
   {% if not fips_mode %}
   <label class="check"><input type="checkbox" name="dot1x_peap" value="1" aria-describedby="dot1x_peap-hint" {{ 'checked' if s.dot1x_peap else '' }}> Also allow PEAP with MSCHAPv2 for 802.1X users who allow it</label>
-  <p id="dot1x_peap-hint" class="small muted">The method most devices offer without a profile, but weaker: MSCHAPv2 relies on MD4 and DES, and the server must keep an NT hash that works like the password. Only users with <em>Allow PEAP</em> ticked can use it (local accounts only).</p>
+  <p id="dot1x_peap-hint" class="small muted">The method most devices offer without a profile, but weaker: MSCHAPv2 relies on MD4 and DES, and the server must keep an NT hash that works like the password. Only local users with <em>Allow PEAP</em> ticked can use it, unless the next box is ticked.</p>
+  <label class="check"><input type="checkbox" name="dot1x_peap_directory" value="1" aria-describedby="dot1x_peap_directory-hint" {{ 'checked' if s.dot1x_peap_directory else '' }}> Also accept directory accounts over PEAP (checked by a domain controller)</label>
+  <p id="dot1x_peap_directory-hint" class="small muted">This server must be joined to the domain first: on its console run <span class="mono">sudo deploy/ad-join.sh --realm &lt;your AD domain&gt;</span>, then restart FreeRADIUS (RUNBOOK §6.9). A local 802.1X user of the same name always wins; the directory groups select the VLAN, as for EAP-TTLS.</p>
   {% endif %}
   <p id="dot1x_ttls-hint" class="small muted">Takes effect at the next connection; no Apply needed. Certificates (EAP-TLS) keep working either way and remain the stronger choice. Devices must trust the RADIUS server certificate's CA and check its name, or a fake access point can collect passwords (RUNBOOK §6.9).</p>
   <h2>Sign-in notice</h2>

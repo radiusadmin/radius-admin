@@ -395,6 +395,33 @@ def _truthy(v):
     raise PolicyInputError("Invalid boolean setting value.")
 
 
+# The directory groups that the inner site copied to &control:Tmp-String-9, as the hex list
+# radius_admin_vlan_rule_hex() takes (attribute copy + %{hex:...} per item, like EAP-TLS);
+# "x" (no match) when a group name is too long for the hex xlat. Two tabs of indent.
+_DIRECTORY_GROUPS_HEX = (
+    "\t\tupdate control {\n"
+    '\t\t\t&Tmp-String-3 := ""\n'
+    "\t\t\t&Tmp-String-7 !* ANY\n"
+    "\t\t}\n"
+    "\t\tupdate control {\n"
+    "\t\t\t&Tmp-String-7 += &control:Tmp-String-9[*]\n"
+    "\t\t}\n"
+    "\t\tforeach &control:Tmp-String-7 {\n"
+    "\t\t\tupdate control {\n"
+    '\t\t\t\t&Tmp-String-3 := "%{control:Tmp-String-3},%{hex:control:Tmp-String-9[0]}"\n'
+    "\t\t\t}\n"
+    "\t\t\tupdate control {\n"
+    "\t\t\t\t&Tmp-String-9[0] !* ANY\n"
+    "\t\t\t}\n"
+    "\t\t}\n"
+    "\t\tif (\"%{control:Tmp-String-3}\" !~ /^(,[0-9a-f]+)*$/) {\n"
+    "\t\t\tupdate control {\n"
+    '\t\t\t\t&Tmp-String-3 := "x"\n'
+    "\t\t\t}\n"
+    "\t\t}\n"
+)
+
+
 def render_policy(custom=""):
     """Full text of /etc/freeradius/policy.d/radius-admin (deterministic).
 
@@ -587,26 +614,7 @@ def render_policy(custom=""):
         "#\n"
         "radius_admin_inner_postauth {\n"
         "\tif (&control:Tmp-String-0 && &control:Tmp-String-0 == \"directory\") {\n"
-        "\t\tupdate control {\n"
-        '\t\t\t&Tmp-String-3 := ""\n'
-        "\t\t\t&Tmp-String-7 !* ANY\n"
-        "\t\t}\n"
-        "\t\tupdate control {\n"
-        "\t\t\t&Tmp-String-7 += &control:Tmp-String-9[*]\n"
-        "\t\t}\n"
-        "\t\tforeach &control:Tmp-String-7 {\n"
-        "\t\t\tupdate control {\n"
-        '\t\t\t\t&Tmp-String-3 := "%{control:Tmp-String-3},%{hex:control:Tmp-String-9[0]}"\n'
-        "\t\t\t}\n"
-        "\t\t\tupdate control {\n"
-        "\t\t\t\t&Tmp-String-9[0] !* ANY\n"
-        "\t\t\t}\n"
-        "\t\t}\n"
-        "\t\tif (\"%{control:Tmp-String-3}\" !~ /^(,[0-9a-f]+)*$/) {\n"
-        "\t\t\tupdate control {\n"
-        '\t\t\t\t&Tmp-String-3 := "x"\n'
-        "\t\t\t}\n"
-        "\t\t}\n"
+        + _DIRECTORY_GROUPS_HEX +
         "\t\tupdate outer.session-state {\n"
         '\t\t\t&Tmp-String-1 := "ttls-ldap"\n'
         "\t\t\t&Stripped-User-Name := &User-Name\n"
@@ -628,7 +636,7 @@ def render_policy(custom=""):
         "#\n"
         "radius_admin_inner_reject {\n"
         "\tif (!&outer.request:Module-Failure-Message) {\n"
-        "\t\tif (&outer.control:Tmp-String-1 && &outer.control:Tmp-String-1 == \"ttls-ldap\") {\n"
+        "\t\tif (&outer.control:Tmp-String-1 && (&outer.control:Tmp-String-1 == \"ttls-ldap\" || &outer.control:Tmp-String-1 == \"peap-ldap\")) {\n"
         "\t\t\tupdate outer.request {\n"
         "\t\t\t\t&Module-Failure-Message := \"radius-admin: the directory refused the password (wrong password, or a disabled, locked or expired account)\"\n"
         "\t\t\t}\n"
@@ -651,7 +659,7 @@ def render_policy(custom=""):
         "#  gets that round's method, user and reason.\n"
         "#\n"
         "radius_admin_reject {\n"
-        "\tif (!&control:Tmp-String-1 && &session-state:Tmp-String-4 && &session-state:Tmp-String-4 =~ /^(ttls-pap|ttls-ldap|peap)$/) {\n"
+        "\tif (!&control:Tmp-String-1 && &session-state:Tmp-String-4 && &session-state:Tmp-String-4 =~ /^(ttls-pap|ttls-ldap|peap|peap-ldap)$/) {\n"
         "\t\tupdate control {\n"
         "\t\t\t&Tmp-String-1 := &session-state:Tmp-String-4\n"
         "\t\t\t&Stripped-User-Name := &session-state:Tmp-String-5\n"
@@ -692,8 +700,17 @@ def render_policy(custom=""):
         "\t\t&Tmp-String-0 := \"%{sql:SELECT radius_admin_dot1x_nt_hex('%{hex:User-Name}')}\"\n"
         "\t}\n"
         "\tif (&control:Tmp-String-0 && &control:Tmp-String-0 =~ /^0x[0-9a-f]{32}$/) {\n"
+        "\t\t# checked here against the NT hash, never by the domain controller\n"
         "\t\tupdate control {\n"
         "\t\t\t&NT-Password := \"%{control:Tmp-String-0}\"\n"
+        "\t\t\t&MS-CHAP-Use-NTLM-Auth := No\n"
+        "\t\t}\n"
+        "\t}\n"
+        "\telsif (&control:Tmp-String-0 && &control:Tmp-String-0 == \"directory\") {\n"
+        "\t\t# Not a local user: sites-available/radius-admin-peap finds the person in the\n"
+        "\t\t# directory; rlm_mschap asks the domain controller (ntlm_auth).\n"
+        "\t\tupdate outer.control {\n"
+        '\t\t\t&Tmp-String-1 := "peap-ldap"\n'
         "\t\t}\n"
         "\t}\n"
         "\telse {\n"
@@ -730,9 +747,19 @@ def render_policy(custom=""):
         "#  Access-Accept follows one round later, after the PEAP result exchange).\n"
         "#\n"
         "radius_admin_peap_postauth {\n"
-        "\tupdate outer.session-state {\n"
-        '\t\t&Tmp-String-1 := "peap"\n'
-        "\t\t&Stripped-User-Name := &User-Name\n"
+        "\tif (&control:Tmp-String-0 && &control:Tmp-String-0 == \"directory\") {\n"
+        + _DIRECTORY_GROUPS_HEX +
+        "\t\tupdate outer.session-state {\n"
+        '\t\t\t&Tmp-String-1 := "peap-ldap"\n'
+        "\t\t\t&Stripped-User-Name := &User-Name\n"
+        "\t\t\t&Tmp-String-3 := &control:Tmp-String-3\n"
+        "\t\t}\n"
+        "\t}\n"
+        "\telse {\n"
+        "\t\tupdate outer.session-state {\n"
+        '\t\t\t&Tmp-String-1 := "peap"\n'
+        "\t\t\t&Stripped-User-Name := &User-Name\n"
+        "\t\t}\n"
         "\t}\n"
         "}\n\n"
     )
@@ -812,18 +839,18 @@ def render_policy(custom=""):
         "\t\t}\n"
         "\t}\n"
         "\n"
-        "\t# 802.1X with a username and password (EAP-TTLS/PAP with local accounts or the\n"
-        "\t# directory; PEAP-MSCHAPv2 with local accounts). The session marker is set only\n"
+        "\t# 802.1X with a username and password (EAP-TTLS/PAP or PEAP-MSCHAPv2, local\n"
+        "\t# accounts or the directory). The session marker is set only\n"
         "\t# by radius_admin_inner_postauth / radius_admin_peap_postauth, after the password\n"
         "\t# was accepted inside the tunnel; the VLAN comes from the local user's groups, or\n"
         "\t# from the directory groups recorded with the marker.\n"
-        "\telsif (&EAP-Message && &session-state:Tmp-String-1 && (&session-state:Tmp-String-1 == \"ttls-pap\" || &session-state:Tmp-String-1 == \"ttls-ldap\" || &session-state:Tmp-String-1 == \"peap\") && &session-state:Stripped-User-Name) {\n"
+        "\telsif (&EAP-Message && &session-state:Tmp-String-1 && (&session-state:Tmp-String-1 == \"ttls-pap\" || &session-state:Tmp-String-1 == \"ttls-ldap\" || &session-state:Tmp-String-1 == \"peap\" || &session-state:Tmp-String-1 == \"peap-ldap\") && &session-state:Stripped-User-Name) {\n"
         "\t\tupdate control {\n"
         "\t\t\t&Tmp-String-1 := &session-state:Tmp-String-1\n"
         "\t\t\t&Stripped-User-Name := &session-state:Stripped-User-Name\n"
         '\t\t\t&Tmp-String-3 := ""\n'
         "\t\t}\n"
-        "\t\tif (&control:Tmp-String-1 == \"ttls-ldap\" && &session-state:Tmp-String-3) {\n"
+        "\t\tif ((&control:Tmp-String-1 == \"ttls-ldap\" || &control:Tmp-String-1 == \"peap-ldap\") && &session-state:Tmp-String-3) {\n"
         "\t\t\tupdate control {\n"
         "\t\t\t\t&Tmp-String-3 := &session-state:Tmp-String-3\n"
         "\t\t\t}\n"
@@ -845,7 +872,7 @@ def render_policy(custom=""):
         "\t\t\t\t&Tmp-String-8 := \"%{hex:Called-Station-Id}\"\n"
         "\t\t\t}\n"
         "\t\t}\n"
-        "\t\tif (&control:Tmp-String-1 == \"ttls-ldap\" && \"%{control:Tmp-String-3}\" =~ /^(,[0-9a-f]+)*$/ && \"%{control:Tmp-String-8}\" =~ /^([0-9a-f]{2})*$/) {\n"
+        "\t\tif ((&control:Tmp-String-1 == \"ttls-ldap\" || &control:Tmp-String-1 == \"peap-ldap\") && \"%{control:Tmp-String-3}\" =~ /^(,[0-9a-f]+)*$/ && \"%{control:Tmp-String-8}\" =~ /^([0-9a-f]{2})*$/) {\n"
         "\t\t\tupdate control {\n"
         "\t\t\t\t&Tmp-String-0 := \"%{sql:SELECT radius_admin_vlan_rule_hex(%{control:Tmp-String-7}, '%{control:Tmp-String-8}', '%{control:Tmp-String-3}')}\"\n"
         "\t\t\t}\n"

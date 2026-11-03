@@ -786,7 +786,9 @@ ldap ldap_user {
 
 	user {
 		base_dn = "${..base_dn}"
-		filter = "(&(objectClass=user)(!(objectClass=computer))(|(sAMAccountName=%{User-Name})(userPrincipalName=%{User-Name})))"
+		#  Stripped-User-Name: set by sites-available/radius-admin-peap from
+		#  %{mschap:User-Name} (DOMAIN\user -> user); EAP-TTLS uses User-Name as typed.
+		filter = "(&(objectClass=user)(!(objectClass=computer))(|(sAMAccountName=%{%{Stripped-User-Name}:-%{User-Name}})(userPrincipalName=%{%{Stripped-User-Name}:-%{User-Name}})))"
 	}
 
 	#  Group names are cached in &control:ldap_user-LDAP-Group during authorize.

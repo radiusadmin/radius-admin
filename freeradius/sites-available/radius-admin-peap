@@ -6,10 +6,14 @@
 #	802.1X with a username and password over PEAP: EAP-MSCHAPv2 inside
 #	the TLS tunnel, checked against the NT hash of a local 802.1X user
 #	who allows PEAP (ui.dot1x_user.nt_hash), through the policies in
-#	policy.d/radius-admin. Only EAP-MSCHAPv2 is offered inside the
-#	tunnel (radius_admin_inner_eap in mods-available/eap). It never reads
-#	radcheck, the users file or the directory. The VLAN is assigned by
-#	radius_admin_postauth in the outer server.
+#	policy.d/radius-admin, or, for a name that is not a local user and
+#	when directory accounts are accepted over PEAP, by the domain
+#	controller through ntlm_auth (mods-available/mschap; the server is
+#	joined with deploy/ad-join.sh, SPEC section 21). The directory
+#	groups come from ldap_user (mods-available/ldap). Only EAP-MSCHAPv2
+#	is offered inside the tunnel (radius_admin_inner_eap in
+#	mods-available/eap). It never reads radcheck or the users file. The
+#	VLAN is assigned by radius_admin_postauth in the outer server.
 #
 #	MSCHAPv2 uses MD4, DES and SHA-1: standard mode only (SECURITY.md).
 #
@@ -23,6 +27,35 @@ server radius-admin-peap {
 authorize {
 	filter_username
 	radius_admin_peap_authorize
+
+	#  Not a local user, directory accounts accepted over PEAP: find the person
+	#  (without a DOMAIN\ prefix) and cache their group names; the password is
+	#  checked by the domain controller (ntlm_auth) when the response arrives.
+	if (&control:Tmp-String-0 && &control:Tmp-String-0 == "directory") {
+		update request {
+			&Stripped-User-Name := "%{mschap:User-Name}"
+		}
+		ldap_user
+		if (notfound) {
+			update outer.request {
+				&Module-Failure-Message := "radius-admin: no such 802.1X user (not a local user, not found in the directory)"
+			}
+			reject
+		}
+		elsif (!ok && !updated) {
+			update outer.request {
+				&Module-Failure-Message := "radius-admin: the directory could not be searched for this user"
+			}
+			reject
+		}
+		update control {
+			&Tmp-String-9 !* ANY
+		}
+		update control {
+			&Tmp-String-9 += &control:ldap_user-LDAP-Group[*]
+		}
+	}
+
 	radius_admin_inner_eap {
 		ok = return
 	}
