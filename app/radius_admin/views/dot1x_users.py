@@ -77,8 +77,9 @@ def _form(errors):
 def index():
     users = db.query("SELECT *, (expires_at IS NOT NULL AND expires_at <= now()) AS expired"
                      " FROM ui.dot1x_user ORDER BY lower(username)")
+    s = get_settings()
     return render_template("dot1x_users/index.html", users=users, rule_groups=_rule_groups(),
-                           ttls_on=get_settings()["dot1x_ttls"])
+                           ttls_on=s["dot1x_ttls"], directory_on=s["dot1x_ttls_directory"])
 
 
 @bp.route("/new", methods=["GET", "POST"])

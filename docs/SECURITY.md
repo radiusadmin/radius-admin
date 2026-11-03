@@ -400,3 +400,20 @@ changing each other's accounts). The colour-theme cookie is a display hint only.
   User-Name.
 - No new cryptographic algorithm: everything above is FIPS-approved, so the method is available
   in both modes.
+
+**Directory passwords (EAP-TTLS, `ttls-ldap`).** Off by default (Settings, admin + step-up).
+- The password is checked by an LDAP simple bind as the user over the same LDAPS connection
+  settings as the computer lookup (TLS 1.2+, `require_cert = demand`, the site CA). It is never
+  stored, logged or audited; the outer TLS tunnel protects it on the wire, the LDAPS session on
+  the way to the domain controller. The LDAPS caveat of exception 5 (GnuTLS) applies to it too.
+- The second rlm_ldap section reuses the main one's server, bind account and TLS settings by
+  reference: no second copy of the bind password, one place to change it, and the installer's bind
+  test and kept live settings cover both.
+- User names reach the LDAP filter escaped by rlm_ldap; the bench sends wildcard and filter
+  injection names (`*`, `jroe)(objectClass=*`, …) and requires a reject. Computers are excluded
+  from the search, so a machine account cannot sign in this way.
+- A local 802.1X user of the same name takes precedence, so a local account cannot be bypassed
+  through the directory. Account state (disabled, locked out, expired, password expired) is the
+  directory's decision at bind time.
+- Groups come from the directory search (nested groups included), are passed to the rule matcher
+  hex-encoded and logged, as for EAP-TLS computers.

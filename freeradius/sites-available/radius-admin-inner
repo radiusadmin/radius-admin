@@ -5,10 +5,12 @@
 #
 #	802.1X with a username and password: PAP inside the TLS tunnel,
 #	checked against the local 802.1X accounts (ui.dot1x_user) through
-#	the policies in policy.d/radius-admin. It never reads radcheck, the
-#	users file or the directory, so a switch admin's password cannot
-#	open a network port. The VLAN is assigned by radius_admin_postauth
-#	in the outer server (sites-available/default).
+#	the policies in policy.d/radius-admin, or, for a name that is not a
+#	local user and when directory accounts are accepted, with an LDAP
+#	bind as that user (mods-available/ldap_user, SPEC section 19). It
+#	never reads radcheck or the users file, so a switch admin's password
+#	cannot open a network port. The VLAN is assigned by
+#	radius_admin_postauth in the outer server (sites-available/default).
 #
 #	It only receives requests from rlm_eap (virtual_server in the ttls
 #	section of mods-available/eap); it has no listen section.
@@ -20,12 +22,43 @@ server radius-admin-inner {
 authorize {
 	filter_username
 	radius_admin_inner_authorize
-	pap
+
+	#  Not a local user, directory accounts accepted: find the person in
+	#  the directory (this also caches their group names) and check the
+	#  password with a bind as them.
+	if (&control:Tmp-String-0 && &control:Tmp-String-0 == "directory") {
+		ldap_user
+		if (notfound) {
+			update outer.request {
+				&Module-Failure-Message := "radius-admin: no such 802.1X user (not a local user, not found in the directory)"
+			}
+			reject
+		}
+		elsif (!ok && !updated) {
+			update outer.request {
+				&Module-Failure-Message := "radius-admin: the directory could not be searched for this user"
+			}
+			reject
+		}
+		update control {
+			&Auth-Type := ldap_user
+			&Tmp-String-9 !* ANY
+		}
+		update control {
+			&Tmp-String-9 += &control:ldap_user-LDAP-Group[*]
+		}
+	}
+	else {
+		pap
+	}
 }
 
 authenticate {
 	Auth-Type PAP {
 		pap
+	}
+	Auth-Type ldap_user {
+		ldap_user
 	}
 }
 

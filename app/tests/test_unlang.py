@@ -56,7 +56,7 @@ def test_sql_arguments_are_hex_or_constant_only():
     attributes (FreeRADIUS un-escapes %{sql:} arguments after SQL escaping)."""
     p = render()
     calls = _sql_calls(p)
-    assert len(calls) == 6
+    assert len(calls) == 7
     allowed = {
         # %{hex:...} output is [0-9a-f] only; Tmp-String-5 is checked against hex below
         "SELECT radius_admin_mab_hex('%{control:Tmp-String-2}', '%{hex:NAS-IP-Address}', "

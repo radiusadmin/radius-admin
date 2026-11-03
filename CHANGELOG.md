@@ -9,9 +9,10 @@ release, so previews sort after it.
 
 ### Added
 - 802.1X with a username and password: EAP-TTLS with PAP inside, for local 802.1X users
-  (new 802.1X users page, off by default in Settings). The access rules assign the VLAN by
-  each user's groups; the auth log shows the name typed inside the tunnel. Needs the
-  freeradius install phase and a FreeRADIUS restart.
+  (new 802.1X users page) and, optionally, directory accounts checked with an LDAP bind as
+  the user. Both are off by default in Settings. The access rules assign the VLAN by the
+  user's groups (local, or directory groups including nested ones); the auth log shows the
+  name typed inside the tunnel. Needs the freeradius install phase and a FreeRADIUS restart.
 - Updates page: current and latest version, changelog, update channel (main, testing,
   dev) and automatic updates. Builds are signed in CI and verified by the root helper
   before anything is installed.

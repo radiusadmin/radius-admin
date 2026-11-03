@@ -20,7 +20,8 @@ The reference build targets (example names; every site sets its own):
 - Clients: `clients.conf` keeps `client localhost`; switches and access points are managed
   in the UI and rendered to a clients file.
 - 802.1X: EAP-TLS (machine certificates from an internal PKI, e.g. `pki.example.net`,
-  with OCSP); optionally EAP-TTLS/PAP for local 802.1X users (section 18). LDAPS to Active Directory (e.g. `dc01.example.net`); the user filter matches
+  with OCSP); optionally EAP-TTLS/PAP for local 802.1X users (section 18) and directory
+  accounts (section 19). LDAPS to Active Directory (e.g. `dc01.example.net`); the user filter matches
   the computer object by `dNSHostName = TLS-Client-Cert-Subject-Alt-Name-Dns`;
   `LDAP-Group` checks select the VLAN.
 - Switch admin logins: PAP from the management subnet (example 192.0.2.0/24); the user
@@ -159,7 +160,7 @@ CREATE TABLE radpostauth (
   id bigserial PRIMARY KEY,
   username text NOT NULL,
   reply text,                         -- Access-Accept / Access-Reject
-  authmethod text,                    -- 'eap-tls' | 'ttls-pap' | 'pap-admin' | 'mab' | 'other'
+  authmethod text,                    -- 'eap-tls' | 'ttls-pap' | 'ttls-ldap' | 'pap-admin' | 'mab' | 'other'
   nasipaddress inet,
   calledstationid text,
   callingstationid text,
@@ -861,3 +862,39 @@ local accounts. Directory passwords and PEAP-MSCHAPv2 follow in later steps.
 - **Upgrade.** `--phase postgres` (table, functions), `--phase app`, then `--phase freeradius`
   (eap, the inner site and its symlink, re-rendered policy) and a FreeRADIUS restart. Without the
   freeradius phase nothing changes for clients: the new policies are defined but unused.
+
+## 19. Change (2026-11-03): EAP-TTLS with directory passwords
+
+Step 2 of username/password 802.1X: a name that is not a local 802.1X user can sign in with its
+directory account; the password is checked with an LDAP bind as that person.
+
+- **Setting** `dot1x_ttls_directory` (`'false'` by default; Settings, admin + step-up, audited).
+  Only effective while `dot1x_ttls` is on. A local 802.1X user of the same name always wins
+  (its own password, groups, disabled/expired state).
+- **SQL.** `radius_admin_dot1x_user_hex` returns `'directory'` instead of `'unknown'` when the
+  name is not a local user and the setting is on.
+- **FreeRADIUS.** `mods-available/ldap` gains a second section, `ldap ldap_user`, after the main
+  one. It takes `server`, `port`, `identity`, `password`, `base_dn`, the group lookup and the TLS
+  settings from the main section by reference (`${modules.ldap.…}`; FreeRADIUS resolves references
+  while reading and reads `mods-enabled/` in no fixed order, hence the same file). User filter:
+  `(&(objectClass=user)(!(objectClass=computer))(|(sAMAccountName=%{User-Name})(userPrincipalName=%{User-Name})))`,
+  values escaped by rlm_ldap. No `update` section (nothing is read from the entry besides groups);
+  pool `start = 0`. The installer's live-setting carry-over (first match for identity, base DN,
+  password; bind test) is unaffected; its server-line handling ignores reference lines.
+- **Inner site.** When the policy left `control:Tmp-String-0 = "directory"`: `ldap_user`
+  (authorize: user DN, group names cached in `control:ldap_user-LDAP-Group`); `notfound` → reject
+  "no such 802.1X user (not a local user, not found in the directory)"; any other failure → reject
+  "the directory could not be searched for this user"; else `Auth-Type := ldap_user` (authenticate:
+  LDAP bind as the user) and the group names are copied to `control:Tmp-String-9`. Otherwise `pap`.
+- **Policy.** `radius_admin_inner_authorize` marks `outer.control:Tmp-String-1 = "ttls-ldap"` for
+  directory names. `radius_admin_inner_postauth` hex-encodes the groups (same pattern as EAP-TLS:
+  attribute copy, `%{hex:…}` per item) into `outer.session-state:Tmp-String-3` with the marker
+  `ttls-ldap`. `radius_admin_inner_reject` gives "the directory refused the password (wrong password,
+  or a disabled, locked or expired account)". The outer branch accepts either marker; for
+  `ttls-ldap` it validates the group list (`^(,[0-9a-f]+)*$`) and calls `radius_admin_vlan_rule_hex`
+  (the EAP-TLS matcher), and the groups are logged in `radpostauth.ad_groups_hex`.
+- **Log/UI.** `authmethod = 'ttls-ldap'`; filter and labels; the auth log record shows the
+  directory groups seen and the matching rule; hints for the three directory reasons; the 802.1X
+  users page says when directory accounts are accepted. MAB treats `ttls-ldap` like the other
+  802.1X methods.
+- **Upgrade.** As section 18 (`--phase postgres`, `app`, `freeradius` and a restart).

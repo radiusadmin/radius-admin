@@ -9,6 +9,8 @@
 </header>
 {% if not ttls_on %}
 <p class="flash flash-info" role="status">Username and password sign-in is turned off, so these accounts cannot connect yet.{% if has_role('admin') %} Turn it on in <a href="{{ url_for('settings.index') }}">Settings</a>.{% else %} An administrator can turn it on in Settings.{% endif %}</p>
+{% elif directory_on %}
+<p class="flash flash-info" role="status">Directory accounts are accepted too: people who are not listed here can connect with their directory user name and password, and their directory groups select the VLAN. A user listed here takes precedence over a directory account of the same name.</p>
 {% endif %}
 <section class="panel flush">
 {% if users %}

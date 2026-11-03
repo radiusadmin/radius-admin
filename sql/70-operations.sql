@@ -85,7 +85,7 @@ BEGIN
 	-- A device that authenticates with a certificate is not a MAB candidate (the switch
 	-- tried MAB first or fell back to it): never queue it, and drop an earlier queue row.
 	IF EXISTS (SELECT 1 FROM radpostauth
-		   WHERE reply = 'Access-Accept' AND authmethod IN ('eap-tls', 'ttls-pap')
+		   WHERE reply = 'Access-Accept' AND authmethod IN ('eap-tls', 'ttls-pap', 'ttls-ldap')
 		     AND upper(regexp_replace(callingstationid, '[^0-9A-Fa-f]', '', 'g')) = replace(p_mac, '-', '')) THEN
 		BEGIN
 			DELETE FROM mab_pending WHERE mac = p_mac;
@@ -189,7 +189,7 @@ GRANT SELECT, UPDATE, DELETE ON mab_pending TO radius_admin;
 CREATE OR REPLACE VIEW public.mab_pending_open AS
 	SELECT p.* FROM mab_pending p
 	WHERE NOT EXISTS (SELECT 1 FROM radpostauth a
-			  WHERE a.reply = 'Access-Accept' AND a.authmethod IN ('eap-tls', 'ttls-pap')
+			  WHERE a.reply = 'Access-Accept' AND a.authmethod IN ('eap-tls', 'ttls-pap', 'ttls-ldap')
 			    AND upper(regexp_replace(a.callingstationid, '[^0-9A-Fa-f]', '', 'g')) = replace(p.mac, '-', ''));
 REVOKE ALL ON public.mab_pending_open FROM PUBLIC;
 GRANT SELECT ON public.mab_pending_open TO radius_admin;

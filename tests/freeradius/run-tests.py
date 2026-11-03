@@ -31,6 +31,7 @@ LEGACY_PW = "Legacy-Crypt-Pass-1"
 TEST_USERS = ("t-admin1", "t-admin2", "t-notgroup", "t-legacy")
 MACS = {"AA-BB-CC-00-00-01": (120, True), "AA-BB-CC-00-00-02": (130, False)}
 DOT1X_PW = "Dot1x-User-Pass-2026"   # local 802.1X users (EAP-TTLS/PAP)
+DIR_PW = "Directory-User-Pass-2026"  # people in the emulated directory (start-slapd.sh)
 
 results = []
 
@@ -109,14 +110,14 @@ def seed_db():
          " ('k.smith', %s, '{Lab-Only}', true, NULL),"
          " ('d.off', %s, '{Wired-Office}', false, NULL),"
          " ('e.old', %s, '{Wired-Office}', true, now() - interval '1 hour');"
-         "INSERT INTO ui.setting (key, value) VALUES ('dot1x_ttls', 'true')"
-         " ON CONFLICT (key) DO UPDATE SET value = 'true';"
+         "INSERT INTO ui.setting (key, value) VALUES ('dot1x_ttls', 'true'), ('dot1x_ttls_directory', 'false')"
+         " ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;"
          "COMMIT;" % (q(dot1x), q(dot1x), q(dot1x), q(dot1x)))
     seed_live_policy()
 
 
-def set_dot1x_ttls(on):
-    psql("UPDATE ui.setting SET value = %s WHERE key = 'dot1x_ttls'" % q("true" if on else "false"))
+def set_dot1x_ttls(on, key="dot1x_ttls"):
+    psql("UPDATE ui.setting SET value = %s WHERE key = %s" % (q("true" if on else "false"), q(key)))
 
 
 def seed_live_policy(priv15=False):
@@ -489,7 +490,51 @@ def ttls_cases(eapol_test, bench, prefix, logname):
     record("radpostauth: the outer anonymous identity is never the logged user",
            psql("SELECT count(*) FROM radpostauth WHERE authmethod='ttls-pap' AND username='anonymous'") == "0")
 
-    # inner User-Name payloads reach SQL only as hex and match nothing
+    # ---- directory accounts (ldap_user: LDAP bind as the user, groups from the directory)
+    code, out = ttls("jroe", DIR_PW)
+    record("EAP-TTLS directory user while directory accounts are off -> Reject (local only)",
+           code == "reject" and last_reason().endswith("no such 802.1X user"), "%s %r" % (code, last_reason()))
+    set_dot1x_ttls(True, "dot1x_ttls_directory")   # live setting, no restart
+    for name, user, pw, extra, want, want_vlan, why in (
+        ("EAP-TTLS directory jroe wired (Wired-Office) -> VLAN 500", "jroe", DIR_PW, wired, "accept", "500", ""),
+        ("EAP-TTLS directory jroe by userPrincipalName -> VLAN 500", "jroe@example.net", DIR_PW, wired, "accept",
+         "500", ""),
+        ("EAP-TTLS directory labtech NESTED group (R&D Lab in Wired-Utility) -> VLAN 520", "labtech", DIR_PW, wired,
+         "accept", "520", ""),
+        ("EAP-TTLS directory jroe SSID Example_Main (not in WIRELESS-OFFICE) -> Reject", "jroe", DIR_PW,
+         ssid("Example_Main"), "reject", None, "no enabled access rule matches the user's groups"),
+        ("EAP-TTLS directory nogroup -> Reject", "nogroup", DIR_PW, wired, "reject", None,
+         "no enabled access rule matches the user's groups"),
+        ("EAP-TTLS directory jroe wrong password -> Reject", "jroe", "wrong-password", wired, "reject", None,
+         "the directory refused the password"),
+        ("EAP-TTLS directory unknown user -> Reject", "nosuch", DIR_PW, wired, "reject", None,
+         "not found in the directory"),
+        ("EAP-TTLS j.doe exists locally and in the directory: the directory password fails", "j.doe", DIR_PW, wired,
+         "reject", None, "wrong password for 802.1X user"),
+        ("EAP-TTLS j.doe exists locally and in the directory: the local password works -> VLAN 500", "j.doe",
+         DOT1X_PW, wired, "accept", "500", ""),
+        ("EAP-TTLS a switch admin is not a directory user either -> Reject", "t-admin1", ADMIN_PW, wired, "reject",
+         None, "not found in the directory"),
+    ):
+        code, out = ttls(user, pw, extra)
+        reason = last_reason()
+        ok = code == want and (want_vlan is None or vlan_of(out) == want_vlan) and why in reason
+        record(name, ok, "got %s vlan=%s reason=%r" % (code, vlan_of(out), reason))
+    row = psql("SELECT username||'|'||authmethod||'|'||coalesce(vlan,'')||'|'||coalesce(ad_groups_hex,'') FROM radpostauth"
+               " WHERE reply='Access-Accept' AND authmethod='ttls-ldap' ORDER BY id LIMIT 1").split("|")
+    groups = [bytes.fromhex(h).decode() for h in row[3].split(",")[1:]] if len(row) == 4 else []
+    record("radpostauth: directory EAP-TTLS Accept logs the inner user, ttls-ldap, VLAN and the directory groups",
+           row[:3] == ["jroe", "ttls-ldap", "500"] and "Wired-Office" in groups, str(row[:3] + groups))
+    row = psql("SELECT username||'|'||authmethod FROM radpostauth WHERE reply='Access-Reject'"
+               " AND reason LIKE '%%directory refused%%' ORDER BY id LIMIT 1")
+    record("radpostauth: directory wrong password logs the inner user and ttls-ldap", row == "jroe|ttls-ldap", row)
+    for pl in ("*", "j*", "jroe)(objectClass=*", "*)(|(sAMAccountName=*", "jroe\\2a", "jroe)(userPassword=*"):
+        code, out = ttls(pl, DIR_PW)
+        record("LDAP INJECTION %r in the EAP-TTLS user name -> Reject (escaped, matches nothing)" % pl,
+               code == "reject" and "not found in the directory" in last_reason(), "%s %r" % (code, last_reason()))
+
+    # inner User-Name payloads reach SQL only as hex and match nothing (directory accounts on:
+    # they also reach the LDAP filter, escaped)
     before = tables_fingerprint()
     for i, pl in enumerate(INJECTION_PAYLOADS + ["j.doe' OR '1'='1", "j.doe\\047 OR 1=1 --"]):
         code, out = ttls(pl)
@@ -813,10 +858,11 @@ def sql_args_audit(logname):
 
 
 def postauth_checks():
-    rows = psql("SELECT username||'|'||coalesce(reply,'')||'|'||coalesce(authmethod,'')||'|'||"
-                "coalesce(vlan,'')||'|'||coalesce(certsan,'')||'|'||coalesce(host(nasipaddress),'')||'|'||"
-                "coalesce(nasporttype,'') FROM radpostauth ORDER BY id")
-    rows = [r.split("|") for r in rows.splitlines() if r]
+    # unit separator (0x1f) between columns: user names from injection cases contain '|'
+    rows = psql("SELECT concat_ws(chr(31), username, coalesce(reply,''), coalesce(authmethod,''), "
+                "coalesce(vlan,''), coalesce(certsan,''), coalesce(host(nasipaddress),''), "
+                "coalesce(nasporttype,'')) FROM radpostauth ORDER BY id")
+    rows = [r.split(chr(31)) for r in rows.splitlines() if r]
     record("radpostauth has rows", len(rows) > 10, str(len(rows)))
     cols = psql("SELECT string_agg(column_name, ',') FROM information_schema.columns "
                 "WHERE table_name='radpostauth'")

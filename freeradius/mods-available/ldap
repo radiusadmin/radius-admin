@@ -750,3 +750,84 @@ ldap {
 		max_retries = 5
 	}
 }
+
+######################################################################
+#
+#	radius-admin: a second rlm_ldap instance for 802.1X *user* logins
+#	(EAP-TTLS with a directory password, SPEC section 19).
+#
+#	The main "ldap" module finds computers by their certificate's DNS
+#	name (EAP-TLS). This instance finds people by sAMAccountName or
+#	userPrincipalName and checks their password with an LDAP bind as
+#	that user. It takes the server, bind account, base DN, group lookup
+#	and TLS settings from the main module by reference, so there is one
+#	place to change them and the installer's checks of that module
+#	(bind test, kept live settings) cover this one too.
+#
+#	Only sites-available/radius-admin-inner calls it, and only when the
+#	policy found no local 802.1X user of that name and the setting
+#	dot1x_ttls_directory is on. User names are escaped by rlm_ldap
+#	before they reach the filter.
+#
+#	It must stay in this file, after the main ldap section: FreeRADIUS
+#	resolves the references while reading, and reads mods-enabled/ in
+#	no fixed order.
+#
+######################################################################
+
+ldap ldap_user {
+	server = ${modules.ldap.server}
+	port = ${modules.ldap.port}
+	identity = ${modules.ldap.identity}
+	password = ${modules.ldap.password}
+	base_dn = ${modules.ldap.base_dn}
+
+	user_dn = "LDAP-UserDn"
+
+	user {
+		base_dn = "${..base_dn}"
+		filter = "(&(objectClass=user)(!(objectClass=computer))(|(sAMAccountName=%{User-Name})(userPrincipalName=%{User-Name})))"
+	}
+
+	#  Group names are cached in &control:ldap_user-LDAP-Group during authorize.
+	group {
+		base_dn = "${..base_dn}"
+		filter = "${modules.ldap.group.filter}"
+		name_attribute = ${modules.ldap.group.name_attribute}
+		membership_filter = "${modules.ldap.group.membership_filter}"
+		membership_attribute = ${modules.ldap.group.membership_attribute}
+		cacheable_name = 'yes'
+		cacheable_dn = 'no'
+	}
+
+	options {
+		chase_referrals = no
+		rebind = no
+		res_timeout = 10
+		srv_timelimit = 3
+		net_timeout = 1
+		idle = 60
+		probes = 3
+		interval = 3
+		ldap_debug = 0x0000
+	}
+
+	tls {
+		ca_file = ${modules.ldap.tls.ca_file}
+		require_cert = ${modules.ldap.tls.require_cert}
+		tls_min_version = ${modules.ldap.tls.tls_min_version}
+	}
+
+	#  No connections until the first directory login.
+	pool {
+		start = 0
+		min = 0
+		max = ${thread[pool].max_servers}
+		spare = 1
+		uses = 0
+		retry_delay = 30
+		lifetime = 0
+		idle_timeout = 60
+		max_retries = 5
+	}
+}

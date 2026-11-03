@@ -9,7 +9,7 @@
   <div><label for="nas">NAS address</label><input id="nas" name="nas" value="{{ f.nas }}" class="mono"></div>
   <div><label for="mac">Station MAC</label><input id="mac" name="mac" value="{{ f.mac }}" class="mono"></div>
   <div><label for="reply">Result</label><select id="reply" name="reply"><option value="">Any</option>{% for v in ['Access-Accept', 'Access-Reject'] %}<option {{ 'selected' if f.reply == v else '' }}>{{ v }}</option>{% endfor %}</select></div>
-  <div><label for="method">Method</label><select id="method" name="method"><option value="">Any</option>{% for v in ['eap-tls', 'ttls-pap', 'pap-admin', 'mab', 'other'] %}<option {{ 'selected' if f.method == v else '' }}>{{ v }}</option>{% endfor %}</select></div>
+  <div><label for="method">Method</label><select id="method" name="method"><option value="">Any</option>{% for v in ['eap-tls', 'ttls-pap', 'ttls-ldap', 'pap-admin', 'mab', 'other'] %}<option {{ 'selected' if f.method == v else '' }}>{{ v }}</option>{% endfor %}</select></div>
   <div><label for="since">From</label><input id="since" name="since" type="date" value="{{ since or '' }}"></div>
   <div><label for="until">To</label><input id="until" name="until" type="date" value="{{ until or '' }}"></div>
   <div class="filter-go"><button class="btn" type="submit">Filter</button> <a href="{{ url_for('logs.auth_log') }}" class="btn btn-quiet">Clear</a></div>

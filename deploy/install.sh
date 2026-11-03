@@ -533,7 +533,8 @@ def keep_ldap_settings():
         if lm and sm and lm.group(0) != sm.group(0):
             text = text[:sm.start()] + lm.group(0) + text[sm.end():]
             print("  [INFO] kept the live %s in %s" % (key, rel))
-    srx = r"^[ \t]*server[ \t]*=.*$"
+    # (the ldap_user section's "server = ${modules.ldap.server}" is a reference, not a server)
+    srx = r"^[ \t]*server[ \t]*=(?![ \t]*\$\{).*$"
     live_servers = re.findall(srx, ltext, re.M)
     staged_servers = list(re.finditer(srx, text, re.M))
     if live_servers and staged_servers and live_servers != [m.group(0) for m in staged_servers]:

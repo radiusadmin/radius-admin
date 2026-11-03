@@ -29,16 +29,26 @@ REASON_HINTS = (
     (r"802\.1X user is disabled", "The local 802.1X user is disabled. Enable it under 802.1X users."),
     (r"802\.1X user has expired", "The local 802.1X user has expired. Set a new expiry date (or clear it) under "
                                   "802.1X users."),
+    (r"not found in the directory",
+     "This name is neither a local 802.1X user nor a directory account. Users type their directory user name "
+     "(sAMAccountName) or user@domain (userPrincipalName); check the name the device sends inside the tunnel."),
     (r"no such 802\.1X user", "No local 802.1X user has this name (the name inside the tunnel, not the outer "
                               "anonymous identity). Add the user under 802.1X users, or check the device's "
                               "settings."),
+    (r"the directory refused the password",
+     "The directory refused the login: a wrong password, or the account is disabled, locked out or expired. "
+     "Check the account in Active Directory."),
+    (r"directory could not be searched",
+     "FreeRADIUS could not search the directory for this user. Check that the domain controllers are "
+     "reachable and the LDAP bind account works (FreeRADIUS log)."),
     (r"wrong password for 802\.1X user", "Wrong password for this 802.1X user. Set a new one under 802.1X users "
                                          "if the user has forgotten it."),
     (r"only PAP is accepted inside EAP-TTLS", "Set the device's EAP-TTLS inner authentication to PAP (the "
                                              "password is protected by the TLS tunnel)."),
     (r"no enabled access rule matches the user's groups",
-     "None of the 802.1X user's groups has an enabled access rule for this kind of connection (wired, or this "
-     "SSID). Add a rule or change the user's groups."),
+     "None of the user's groups (a local 802.1X user's groups, or a directory account's groups shown below) has "
+     "an enabled access rule for this kind of connection (wired, or this SSID). Add a rule or change the "
+     "user's groups."),
     (r"no enabled access rule", "None of the computer's AD groups (below) has an enabled access rule for this "
                                 "kind of connection (wired, or this SSID). Add a rule or change the computer's "
                                 "group membership."),

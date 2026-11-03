@@ -680,9 +680,17 @@ stronger choice and keep working alongside.
    * Android: *EAP method* TTLS, *Phase 2* PAP, *CA certificate* the installed CA, *Domain* the
      server name.
    * Linux (NetworkManager): *Tunneled TLS*, inner *PAP*, the CA certificate.
-4. **Check.** UI → **Auth log**, method `ttls-pap`. Rejects give the reason in plain words:
-   turned off, no such 802.1X user, disabled, expired, wrong password, not PAP inside the tunnel,
-   or no access rule for the user's groups (§6.7).
+4. **Directory accounts (optional).** Settings → *Also accept directory accounts*. People who are
+   not local 802.1X users then sign in with their directory user name (`jroe`) or user@domain
+   (`jroe@example.net`) and directory password; FreeRADIUS checks it with an LDAP bind as that
+   person, using the same domain controllers, bind account and CA as for computers
+   (`mods-available/ldap`). Their directory groups, nested groups included, select the VLAN
+   through the access rules, exactly as for a computer. A local 802.1X user of the same name
+   always wins. Disabled, locked or expired directory accounts are refused by the directory.
+5. **Check.** UI → **Auth log**, method `ttls-pap` (local) or `ttls-ldap` (directory). Rejects give
+   the reason in plain words: turned off, no such user, disabled, expired, wrong password (or, for
+   the directory, a refused account), not PAP inside the tunnel, or no access rule for the user's
+   groups (§6.7). A directory record lists the groups the rule matcher saw.
 
 Switch admins and 802.1X users are separate: a switch admin's password never opens a network
 port, and an 802.1X user cannot sign in to a switch. A MAC that has connected with a password is
@@ -690,7 +698,8 @@ never offered for MAB approval, as for certificates.
 
 Upgrade to this release: `sudo ./deploy/install.sh --phase postgres` (table and functions),
 `--phase app`, then `--phase freeradius --restart-freeradius` in a maintenance window (enables
-EAP-TTLS and `sites-enabled/radius-admin-inner`). EAP-TLS, MAB and switch logins behave as before.
+EAP-TTLS, `sites-enabled/radius-admin-inner` and the `ldap_user` section of
+`mods-available/ldap`; your directory settings are kept as before). EAP-TLS, MAB and switch logins behave as before.
 
 ## 7. Backup and restore
 
