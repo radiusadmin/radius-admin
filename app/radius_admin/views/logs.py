@@ -53,7 +53,7 @@ def auth_log():
     if f["reply"] in ("Access-Accept", "Access-Reject"):
         where.append("reply = %s")
         params.append(f["reply"])
-    if f["method"] in ("eap-tls", "pap-admin", "mab", "other"):
+    if f["method"] in ("eap-tls", "ttls-pap", "ttls-ldap", "peap", "peap-ldap", "pap-admin", "mab", "other"):
         where.append("authmethod = %s")
         params.append(f["method"])
     if since:

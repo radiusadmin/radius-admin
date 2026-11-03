@@ -862,7 +862,7 @@ eap {
 	#
 	#  Surprisingly, it works quite well.
 	#
-	#  radius-admin: EAP-TTLS disabled (EAP-TLS only)
+	#  radius-admin: the stock EAP-TTLS example stays commented; the active block follows it
 #	ttls {
 #		#  Which tls-config section the TLS negotiation parameters
 #		#  are in - see EAP-TLS above for an explanation.
@@ -955,6 +955,17 @@ eap {
 #	#	require_client_cert = yes
 #	}
 
+	#  radius-admin: EAP-TTLS with PAP inside, for local 802.1X users (SPEC section 18).
+	#  Inner requests go to sites-available/radius-admin-inner, which accepts only PAP
+	#  against ui.dot1x_user (never radcheck). The dot1x_ttls setting turns it on; while
+	#  it is off the inner tunnel rejects every login.
+	ttls {
+		tls = tls-common
+		copy_request_to_tunnel = no
+		use_tunneled_reply = no
+		virtual_server = "radius-admin-inner"
+	}
+
 
 	#  EAP-PEAP
 	#
@@ -993,7 +1004,7 @@ eap {
 	#  EAP module.  Inside of the TLS/PEAP tunnel, we
 	#  recommend using EAP-MS-CHAPv2.
 	#
-	#  radius-admin: EAP-PEAP disabled (EAP-TLS only)
+	#  radius-admin: the stock EAP-PEAP example stays commented; the active block follows it
 #	peap {
 #		#  Which tls-config section the TLS negotiation parameters
 #		#  are in - see EAP-TLS above for an explanation.
@@ -1075,6 +1086,19 @@ eap {
 #		#
 #	#	require_client_cert = yes
 #	}
+
+	#  radius-admin: PEAP with EAP-MSCHAPv2 inside, for local 802.1X users that allow it
+	#  (SPEC section 20; standard mode only). Inner requests go to
+	#  sites-available/radius-admin-peap, which offers only EAP-MSCHAPv2
+	#  (radius_admin_inner_eap below) against the NT hashes in ui.dot1x_user. The
+	#  dot1x_peap setting turns it on; while it is off the inner tunnel rejects every login.
+	peap {
+		tls = tls-common
+		default_eap_type = mschapv2
+		copy_request_to_tunnel = no
+		use_tunneled_reply = no
+		virtual_server = "radius-admin-peap"
+	}
 
 
 	#  EAP-MSCHAPv2
@@ -1483,4 +1507,17 @@ eap {
 		#
 	#	virtual_server = inner-tunnel
 	#}
+}
+
+#  radius-admin: the EAP methods allowed INSIDE the PEAP tunnel (SPEC section 20): only
+#  EAP-MSCHAPv2. Used by sites-available/radius-admin-peap; the outer "eap" module above
+#  is never called inside a tunnel, so EAP-TLS, PEAP or TTLS cannot be nested.
+eap radius_admin_inner_eap {
+	default_eap_type = mschapv2
+	timer_expire = 60
+	ignore_unknown_eap_types = no
+	max_sessions = ${max_requests}
+	mschapv2 {
+		send_error = no
+	}
 }

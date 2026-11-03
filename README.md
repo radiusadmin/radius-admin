@@ -30,6 +30,10 @@ automatically if FreeRADIUS does not come back up.
 
 - **Wired and wireless 802.1X with EAP-TLS.** Computers authenticate with certificates; their
   Active Directory group decides the VLAN (per wired port or per SSID). Nested groups work.
+- **802.1X with a username and password** (EAP-TTLS with PAP inside) for people and devices
+  without a certificate: local accounts with groups and expiry, or Active Directory accounts
+  and their groups, with the same access rules. PEAP-MSCHAPv2 where devices need it, for
+  local users or, with the server joined to the domain, directory accounts.
 - **Devices without 802.1X** (printers, cameras, IoT). MAC Authentication Bypass with a VLAN per
   device, optional expiry, vendor names, and an approval queue: unknown devices that try to
   connect show up for one-click approval.
@@ -192,9 +196,6 @@ Being a young project, some parts are still to come:
 - The bundled FreeRADIUS package is built for Ubuntu 24.04 (amd64); Debian 12 follows.
 - The nginx phase expects the site CA bundle and an OCSP responder for client-certificate MFA.
 - Vendor profiles: Cisco Catalyst 1200/1300 is the tested switch family today.
-- Updates from the portal need the project's signing key to be set up once
-  ([RUNBOOK §9.3](docs/RUNBOOK.md#93-updates-from-the-portal-signed-builds)); until then,
-  updates use `deploy/update.sh` or the Windows push script.
 
 ## Licence
 

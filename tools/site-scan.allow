@@ -9,6 +9,8 @@ mods-config/files/authorize:[0-9]+:#
 mods-available/sql:[0-9]+:\s*#
 mods-available/sql:[0-9]+:\s*certificate_password = "password"
 mods-available/ldap:[0-9]+:\s*secret\s*= 'radiusClientSecret'
+# the ldap_user section takes the bind account from the main ldap section by reference (no value)
+mods-available/ldap:[0-9]+:\s*(identity|password) = \$\{modules\.ldap\.(identity|password)\}$
 # the copyright holder named in the licence notices and the CLA (maintainer, 2026-11-03)
 CLA\.md:[0-9]+:.*Collin Linde(,| transfers)
 README\.md:[0-9]+:Copyright © 2026 Collin Linde\.$

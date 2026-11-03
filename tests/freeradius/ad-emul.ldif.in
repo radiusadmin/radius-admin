@@ -106,6 +106,7 @@ dn: CN=R&D Lab (Bldg-2),OU=Groups,DC=example,DC=net
 objectClass: group
 cn: R&D Lab (Bldg-2)
 member: CN=PC6,OU=Computers,DC=example,DC=net
+member: CN=Lab Tech,OU=Users,DC=example,DC=net
 
 dn: CN=Guests\,Wired-Support,OU=Groups,DC=example,DC=net
 objectClass: group
@@ -121,6 +122,8 @@ dn: CN=Wired-Office,OU=Groups,DC=example,DC=net
 objectClass: group
 cn: Wired-Office
 member: CN=PC1,OU=Computers,DC=example,DC=net
+member: CN=Jane Roe,OU=Users,DC=example,DC=net
+member: CN=J Doe Directory,OU=Users,DC=example,DC=net
 member: CN=PC2,OU=Computers,DC=example,DC=net
 member: CN=PC5,OU=Computers,DC=example,DC=net
 
@@ -144,3 +147,38 @@ dn: CN=WIRELESS-OFFICE,OU=Groups,DC=example,DC=net
 objectClass: group
 cn: WIRELESS-OFFICE
 member: CN=PC1,OU=Computers,DC=example,DC=net
+
+# People (EAP-TTLS with a directory password). Password for all: @USERPW@
+dn: OU=Users,DC=example,DC=net
+objectClass: organizationalUnit
+ou: Users
+
+# jroe: Wired-Office (VLAN 500); signs in as jroe or jroe@example.net
+dn: CN=Jane Roe,OU=Users,DC=example,DC=net
+objectClass: user
+cn: Jane Roe
+sAMAccountName: jroe
+userPrincipalName: jroe@example.net
+userPassword: @USERPW@
+
+# labtech: R&D Lab (Bldg-2), nested in Wired-Utility (VLAN 520)
+dn: CN=Lab Tech,OU=Users,DC=example,DC=net
+objectClass: user
+cn: Lab Tech
+sAMAccountName: labtech
+userPassword: @USERPW@
+
+# nogroup: in no group with a rule
+dn: CN=No Group,OU=Users,DC=example,DC=net
+objectClass: user
+cn: No Group
+sAMAccountName: nogroup
+userPassword: @USERPW@
+
+# j.doe also exists as a local 802.1X user: the local account (and password) wins
+dn: CN=J Doe Directory,OU=Users,DC=example,DC=net
+objectClass: user
+cn: J Doe Directory
+sAMAccountName: j.doe
+userPassword: @USERPW@
+
