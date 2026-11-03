@@ -16,6 +16,8 @@ release, so previews sort after it.
   it (it needs an NT hash of their password, so it is weaker; never with FIPS mode) and for
   directory accounts once the server has joined the domain (`deploy/ad-join.sh`). Needs
   the freeradius install phase and a FreeRADIUS restart.
+- Licence: GNU AGPL version 3 or later (copyright Collin Linde), with a Contributor License
+  Agreement for outside contributions (`CLA.md`, `CONTRIBUTING.md`, pull request template).
 - Updates page: current and latest version, changelog, update channel (main, testing,
   dev) and automatic updates. Builds are signed in CI and verified by the root helper
   before anything is installed.
