@@ -5,7 +5,7 @@ Each release has a section here. `main` builds are the stable releases (`0.2.0`)
 show the "Unreleased" section plus their commits. Bump `VERSION` on `dev` right after a
 release, so previews sort after it.
 
-## Unreleased
+## 0.2.2 — 2026-11-04
 
 ### Changed
 - Pages that wait for something no longer reload every few seconds: Check now and Install on
