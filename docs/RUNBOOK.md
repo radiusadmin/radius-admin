@@ -244,7 +244,12 @@ sudo ./deploy/install.sh --phase app,nginx,firewall
   falling back to `/etc/resolv.conf`; override with `--resolver "10.x.x.x 10.y.y.y"`),
   copies `/etc/freeradius/certs/site/ca.pem` → `/etc/radius-admin/tls/client-ca.pem`,
   checks key/cert match and SAN, `nginx -t`, reload. The Debian default site (port
-  80) is disabled; nothing listens on port 80.
+  80) is disabled; nothing listens on port 80. Also installs the drop-in
+  `/etc/systemd/system/nginx.service.d/radius-admin.conf`: nginx resolves the OCSP
+  responder when it starts and refuses to start if that lookup fails, so the drop-in
+  starts it after `network-online.target` and restarts it every 30 seconds after a failure
+  (no start limit). A short DNS outage at boot or while `unattended-upgrades` restarts
+  nginx then no longer leaves the portal down. Check with `systemctl cat nginx`.
 * **firewall**: detects ufw / nftables / iptables. Always loads the self-contained
   nftables table `inet radius_admin` (TCP 443 to the management address accepted only from
   192.0.2.0/24, everything else to 443 dropped; RADIUS, SSH and all other ports are
@@ -591,6 +596,11 @@ UI → **Alerts**. The monitoring service checks every minute and raises:
   (default 2). Needs switch monitoring enabled.
 * **FreeRADIUS down**: the service is stopped or not listening on its RADIUS port in two
   checks in a row (so the brief restart of Review and apply never alerts).
+* **Portal down**: nginx is stopped or not listening on TCP 443 in two checks in a row
+  (only on servers where the portal's nginx site is enabled). While nginx is down the
+  Alerts page cannot be reached, so this one is useful only with syslog forwarding or
+  email (the Alerts pages warn while email is off); afterwards it stays in the alert history. nginx restarts itself every 30 seconds after a failure (nginx phase drop-in), so
+  an alert means it has stayed down; check `systemctl status nginx` and `nginx -t`.
 
 Each alert is sent once when it opens and once when it clears, and recorded in the audit
 log. The dashboard and the side menu show open alerts; the dashboard and Alerts page also
@@ -1006,7 +1016,8 @@ channel, what changed in between, and whether the update restarts FreeRADIUS.
   to install is never retried automatically.
 - **Install** asks for step-up. The helper verifies the signature and the bundle's SHA-384, then
   `radius-admin-update-install@<version>` backs up the database, installs, checks the portal
-  and FreeRADIUS, and rolls back if they do not come up. The page refreshes while it runs.
+  (the app, and nginx active and listening on 443) and FreeRADIUS, and rolls back if they do
+  not come up. The page refreshes while it runs.
 
 Outbound access: the check service needs HTTPS to `api.github.com`, `github.com` and
 `objects.githubusercontent.com`. Behind a proxy, put `HTTPS_PROXY=http://proxy.example.net:3128`

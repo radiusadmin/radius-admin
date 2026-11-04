@@ -1,5 +1,5 @@
-"""Alerts (SPEC section 13): reject spikes, switches that stop answering SNMP, and
-FreeRADIUS down. Evaluated by the monitor service once a minute; each condition opens
+"""Alerts (SPEC section 13): reject spikes, switches that stop answering SNMP,
+FreeRADIUS down and the web portal (nginx) down. Evaluated by the monitor service once a minute; each condition opens
 one ui.alert row (one open row per kind+subject) and notifies once when it opens and
 once when it resolves.
 
@@ -21,7 +21,7 @@ from . import audit, db
 
 ACTOR = "system:monitor"
 LABELS = {"reject_spike": "Reject spike", "switch_down": "Switch not responding",
-          "radius_down": "FreeRADIUS down", "monitor_down": "Monitoring stopped", "test": "Test alert"}
+          "radius_down": "FreeRADIUS down", "portal_down": "Portal down", "monitor_down": "Monitoring stopped", "test": "Test alert"}
 
 
 def load_settings(conn):
@@ -199,6 +199,39 @@ def check_radius(conn, settings, status, state, smtp_password=None):
         state["down_checks"] = state.get("down_checks", 0) + 1
         if state["down_checks"] >= 2:
             open_alert(conn, settings, "radius_down", "", msg, {"helper": status.get("message", "")}, smtp_password)
+
+
+def check_portal(conn, settings, status, state, smtp_password=None):
+    """The web portal (nginx), from the same helper 'status' response as check_radius.
+    state: dict kept by the caller across checks ({'down_checks': int}). A helper error is
+    left to the FreeRADIUS check; a helper without portal_* fields, or a server whose nginx
+    site is not enabled, never alerts."""
+    if not status.get("ok"):
+        return
+    if status.get("portal_configured") is not True:
+        state["down_checks"] = 0
+        resolve_alert(conn, settings, "portal_down", "", "The portal's nginx site is not enabled on this server.",
+                      smtp_password)
+        return
+    ok = bool(status.get("portal_active")) and bool(status.get("portal_listening"))
+    if ok:
+        msg = "nginx active and listening on TCP 443."
+    elif not status.get("portal_active"):
+        msg = "nginx (the web portal) is not active."
+    else:
+        msg = "nginx is running but not listening on TCP 443."
+    # no "last check" is kept: whenever someone can read it in the portal, nginx is up
+    if not settings["portal_enabled"]:
+        resolve_alert(conn, settings, "portal_down", "", "Portal alerting was switched off.", smtp_password)
+        return
+    if ok:
+        state["down_checks"] = 0
+        resolve_alert(conn, settings, "portal_down", "", "The portal is back: " + msg, smtp_password)
+    else:
+        # two checks in a row (about two minutes): an nginx reload or one retry never alerts
+        state["down_checks"] = state.get("down_checks", 0) + 1
+        if state["down_checks"] >= 2:
+            open_alert(conn, settings, "portal_down", "", msg, None, smtp_password)
 
 
 def send_test(conn, settings, by, smtp_password=None):

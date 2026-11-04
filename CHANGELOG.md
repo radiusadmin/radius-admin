@@ -23,8 +23,16 @@ release, so previews sort after it.
   before anything is installed.
 - Switch networks (`switch_nets` in the installer answers, `--switch-nets`): the monitor may
   reach switches in several networks for SNMP and CoA, not only the management subnet.
+- "Portal down" alert: the monitor alerts (syslog, email) when nginx is not active or not
+  listening on port 443 for two checks in a row, on servers where the portal's nginx site is
+  enabled. On by default; switch it off in Alert settings. Updates also check that nginx
+  serves the portal and roll back if it does not.
 
 ### Fixed
+- The portal no longer stays down when nginx fails to start because DNS was briefly
+  unavailable (nginx looks up the OCSP responder when it starts, for example when
+  unattended-upgrades restarts it). nginx now starts after the network is up and retries
+  every 30 seconds; the drop-in is installed by the nginx phase.
 - `install.sh --phase app` without answers (and updates) no longer resets the monitor's
   allowed network to the `192.0.2.0/24` example; it keeps the installed list.
 - A MAC that connected with 802.1X is reported as such when the switch tries MAB ("authenticates

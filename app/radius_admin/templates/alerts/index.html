@@ -23,6 +23,8 @@
     <dt>Switch not responding</dt><dd>{% if s.switch_enabled %}{{ s.switch_failed_polls }} failed SNMP poll{{ '' if s.switch_failed_polls == 1 else 's' }} in a row (switches marked for monitoring){% else %}<span class="muted">Off</span>{% endif %}</dd>
     <dt>FreeRADIUS down</dt><dd>{% if s.radius_enabled %}checked every minute; alerts after 2 failed checks{% else %}<span class="muted">Off</span>{% endif %}
       {% if mon and mon.radius_checked_at %}<span class="cell-sub">Last check {{ mon.radius_checked_at|ago }}: {{ mon.radius_message }}</span>{% endif %}</dd>
+    <dt>Portal down</dt><dd>{% if s.portal_enabled %}nginx checked every minute; alerts after 2 failed checks by syslog{{ ' and email' if s.email_enabled }}{% else %}<span class="muted">Off</span>{% endif %}
+      {% if s.portal_enabled and not s.email_enabled %}<span class="cell-sub warn-text">Email is off: these alerts go only to the local syslog. Forward it or turn on email.</span>{% endif %}</dd>
   </dl>
 </section>
 

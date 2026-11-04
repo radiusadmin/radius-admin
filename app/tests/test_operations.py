@@ -471,6 +471,65 @@ def test_radius_down_needs_two_checks(app, superconn, mon_conn, syslog_lines):
     assert any("ALERT OPEN radius_down" in ln for ln in syslog_lines)
 
 
+PORTAL_UP = {"ok": True, "service_active": True, "listening": True,
+             "portal_configured": True, "portal_active": True, "portal_listening": True}
+
+
+def test_portal_down_needs_two_checks(app, superconn, mon_conn, syslog_lines):
+    from radius_admin import alerts
+    s = alerts.load_settings(mon_conn)
+    assert s["portal_enabled"] is True                              # on by default
+    state = {}
+    down = dict(PORTAL_UP, portal_active=False, portal_listening=False)
+    alerts.check_portal(mon_conn, s, down, state)
+    mon_conn.commit()
+    assert q(superconn, "SELECT count(*) FROM ui.alert")[0][0] == 0      # one failed check: nginx retrying
+    alerts.check_portal(mon_conn, s, dict(PORTAL_UP, portal_listening=False), state)
+    mon_conn.commit()
+    rows = q(superconn, "SELECT kind, state, message FROM ui.alert")
+    assert rows == [("portal_down", "open", "nginx is running but not listening on TCP 443.")]
+    alerts.check_portal(mon_conn, s, down, state)                   # still one open alert
+    mon_conn.commit()
+    assert q(superconn, "SELECT count(*) FROM ui.alert")[0][0] == 1
+    alerts.check_portal(mon_conn, s, PORTAL_UP, state)
+    mon_conn.commit()
+    assert q(superconn, "SELECT state FROM ui.alert")[0][0] == "resolved"
+    assert any("ALERT OPEN portal_down" in ln for ln in syslog_lines)
+    assert any("ALERT RESOLVED portal_down" in ln for ln in syslog_lines)
+
+
+def test_portal_down_not_raised_without_portal_status(app, superconn, mon_conn, syslog_lines):
+    from radius_admin import alerts
+    s = alerts.load_settings(mon_conn)
+    state = {}
+    old_helper = {"ok": True, "service_active": True, "listening": True}  # helper without portal_* fields
+    no_site = dict(PORTAL_UP, portal_configured=False, portal_active=False, portal_listening=False)
+    for st in (old_helper, no_site, {"ok": False, "message": "helper socket missing"}) * 3:
+        alerts.check_portal(mon_conn, s, st, state)
+    mon_conn.commit()
+    assert q(superconn, "SELECT count(*) FROM ui.alert")[0][0] == 0
+    # switched off: never opens, and an open alert is resolved
+    q(superconn, "UPDATE ui.alert_settings SET portal_enabled = false")
+    s = alerts.load_settings(mon_conn)
+    down = dict(PORTAL_UP, portal_active=False)
+    for _ in range(3):
+        alerts.check_portal(mon_conn, s, down, state)
+    mon_conn.commit()
+    assert q(superconn, "SELECT count(*) FROM ui.alert")[0][0] == 0
+
+
+def test_run_alerts_checks_portal(app, superconn, mon_conn, monkeypatch, syslog_lines):
+    from radius_admin import snmp_poller
+    calls = []
+    monkeypatch.setattr(snmp_poller, "helper_status",
+                        lambda cfg: calls.append(1) or dict(PORTAL_UP, portal_active=False))
+    radius_state, portal_state = {}, {}
+    for _ in range(2):
+        snmp_poller.run_alerts(mon_conn, {}, app.config["RA_DATA_KEY"], None, radius_state, portal_state)
+    assert len(calls) == 2                                          # one helper call per round
+    assert q(superconn, "SELECT kind, state FROM ui.alert") == [("portal_down", "open")]
+
+
 class _FakeSMTP:
     """Just enough SMTP (no TLS) to receive one message."""
 
@@ -538,6 +597,8 @@ def test_alert_pages_and_settings(app, browser, superconn, logged_in):
     logged_in("viewer")
     t = browser.text(browser.get("/alerts/"))
     assert "FreeRADIUS down" in t and "not active" in t and "monitoring service has not reported" in t
+    assert "Portal down" in t and "nginx checked every minute" in t
+    assert "Email is off: these alerts go only to the local syslog" in t       # email off by default
     assert "Alert settings" not in t
     assert 'class="badge badge-danger"' in browser.text(browser.get("/dashboard"))
     assert "1 open alert" in browser.text(browser.get("/dashboard"))
@@ -571,6 +632,18 @@ def test_alert_settings_admin(app, browser, superconn, logged_in):
     finally:
         conn.close()
     assert DataKey
+    # the portal alert has its own switch (left out of the form above: off)
+    assert q(superconn, "SELECT portal_enabled FROM ui.alert_settings")[0][0] is False
+    assert "portal_enabled" in q(superconn, "SELECT detail FROM ui.audit_log WHERE action='alert.settings'")[0][0]["changed"]
+    assert 'name="portal_enabled" value="1" >' in browser.text(browser.get("/alerts/settings"))
+    r = browser.post("/alerts/settings", dict(data, portal_enabled="1"), csrf_page="/alerts/settings")
+    assert r.status_code == 302 and q(superconn, "SELECT portal_enabled FROM ui.alert_settings")[0][0] is True
+    # email is on here: no "syslog only" warning
+    assert "portal down alerts go only to the local syslog" not in browser.text(browser.get("/alerts/settings"))
+    assert "only to the local syslog" not in browser.text(browser.get("/alerts/"))
+    r = browser.post("/alerts/settings", dict(data, portal_enabled="1", email_enabled=""), csrf_page="/alerts/settings")
+    assert r.status_code == 302
+    assert "portal down alerts go only to the local syslog" in browser.text(browser.get("/alerts/settings"))
     r = browser.post("/alerts/test", {}, csrf_page="/alerts/")
     assert r.status_code == 302
     assert q(superconn, "SELECT test_requested_by FROM ui.alert_settings")[0][0] == "admin1"

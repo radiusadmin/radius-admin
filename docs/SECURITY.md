@@ -318,7 +318,7 @@ component or fully organisational.
 | 3.13.10 | Establish and manage cryptographic keys | UI TLS key generated on host (make-csr.sh), cert from internal PKI; data key 0400 radius-admin; RADIUS secrets generated from DRBG | Key/cert lifecycle, backup of data.key, secret rotation schedule |
 | 3.13.11 | FIPS-validated cryptography for CUI | All app/nginx/EAP crypto via the OpenSSL FIPS provider (validated only on the `fips` stream's certified packages — see F-1); app refuses non-FIPS start | Exceptions §1.1 (RADIUS MD5; LDAPS via GnuTLS); F-1 stream choice |
 | 3.13.15 | Protect authenticity of communications sessions | TLS; server-side sessions with 256-bit random tokens, rotated at login and MFA, `__Host-` Secure HttpOnly SameSite=Strict cookie; CSRF token + Origin/Referer checks; HSTS, CSP, frame-ancestors none | — |
-| 3.14.6 / 3.14.7 | Monitor systems / identify unauthorized use | Auth log (radpostauth) with reject reasons and per-record detail, live sessions (accounting), unknown-device queue, alerts (reject spikes, unresponsive switches, FreeRADIUS down) to syslog/email, audit log, failed-login records | Forward alerts to the SIEM and define response procedures |
+| 3.14.6 / 3.14.7 | Monitor systems / identify unauthorized use | Auth log (radpostauth) with reject reasons and per-record detail, live sessions (accounting), unknown-device queue, alerts (reject spikes, unresponsive switches, FreeRADIUS down, portal down) to syslog/email, audit log, failed-login records | Forward alerts to the SIEM and define response procedures |
 
 ## 4. Hardening checklist when taking over an existing FreeRADIUS server
 

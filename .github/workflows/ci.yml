@@ -78,6 +78,8 @@ jobs:
         run: cd "$REPO" && bash tests/installer/test_ad_join.sh | tee "$LOGS/ad-join.log"
       - name: Update install checks
         run: cd "$REPO" && sudo bash tests/installer/test_update_install.sh | tee "$LOGS/update-install.log"
+      - name: nginx.service drop-in
+        run: cd "$REPO" && bash tests/installer/test_nginx_dropin.sh | tee "$LOGS/nginx-dropin.log"
       - name: Release tooling tests
         run: cd "$REPO" && sudo bash tests/release/test_release.sh | tee "$LOGS/release.log"
       - name: Count tests
@@ -85,7 +87,7 @@ jobs:
         if: always()
         run: |
           tools/ci/test-counts.py "$LOGS/helper.log" "$LOGS/installer.log" "$LOGS/live-settings.log" "$LOGS/ad-join.log" \
-              "$LOGS/update-install.log" "$LOGS/release.log" | tee -a "$GITHUB_OUTPUT"
+              "$LOGS/update-install.log" "$LOGS/nginx-dropin.log" "$LOGS/release.log" | tee -a "$GITHUB_OUTPUT"
 
   package:
     name: FreeRADIUS package

@@ -932,6 +932,13 @@ phase_nginx() {
     fi
     getent hosts "$RA_OCSP_HOST" >/dev/null || die "$RA_OCSP_HOST does not resolve; nginx would refuse ssl_ocsp_responder"
 
+    # nginx resolves the OCSP responder when it starts; start after the network and retry
+    # on failure, so a short DNS outage at boot or during an apt upgrade does not leave it down
+    install -d -m 0755 /etc/systemd/system/nginx.service.d
+    if put "$HERE/systemd/nginx.service.d/radius-admin.conf" /etc/systemd/system/nginx.service.d/radius-admin.conf root:root 0644; then
+        systemctl daemon-reload
+    fi
+
     local tmp; tmp=$(mktemp)
     sed -e "s#@LISTEN_IP@#$ip#g" -e "s#@SERVER_NAME@#$RA_SERVER_NAME#g" -e "s#@ADMIN_NET@#$RA_ADMIN_NET#g" \
         -e "s#@RESOLVER@#$res#g" -e "s#@OCSP_URL@#$RA_OCSP_URL#g" "$HERE/nginx/radius-admin.conf" > "$tmp"

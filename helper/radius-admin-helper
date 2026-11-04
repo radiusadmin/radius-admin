@@ -91,6 +91,10 @@ CONFIG_DEFAULTS = {
     "ss": "/usr/bin/ss",
     "fips_file": "/proc/sys/crypto/fips_enabled",
     "radius_port": "1812",
+    # the web portal (nginx), reported by status when its site is enabled
+    "portal_service": "nginx.service",
+    "portal_site": "/etc/nginx/sites-enabled/radius-admin",
+    "portal_port": "443",
     "restart_wait": "15",
     "restart_timeout": "20",
     "validate_timeout": "30",
@@ -151,17 +155,19 @@ def load_config(path):
             raise HelperError("helper config %s must be a regular file owned by root "
                               "and not group/world writable" % path)
     for key in ("radiusd", "raddb", "staging_dir", "work_dir", "systemctl", "runuser",
-                "ss", "fips_file", "update_dir", "update_pubkey", "openssl", "build_file"):
+                "ss", "fips_file", "update_dir", "update_pubkey", "openssl", "build_file", "portal_site"):
         cfg[key] = _abs(cfg, key)
     if not re.match(r"^[A-Za-z0-9@_.:-]{1,128}$", cfg["service"]):
         raise HelperError("helper.conf: invalid service name")
+    if not re.match(r"^[A-Za-z0-9@_.:-]{1,128}$", cfg["portal_service"]):
+        raise HelperError("helper.conf: invalid portal_service")
     if not re.match(r"^[A-Za-z0-9_-]{1,64}$", cfg["config_name"]):
         raise HelperError("helper.conf: invalid config_name")
     if not re.match(r"^[A-Za-z0-9_.-]{1,100}\.service$", cfg["update_check_unit"]):
         raise HelperError("helper.conf: invalid update_check_unit")
     if not re.match(r"^[A-Za-z0-9_-]{1,100}$", cfg["update_install_unit"]):
         raise HelperError("helper.conf: invalid update_install_unit")
-    for key in ("radius_port", "restart_wait", "restart_timeout", "validate_timeout",
+    for key in ("radius_port", "portal_port", "restart_wait", "restart_timeout", "validate_timeout",
                 "lock_timeout", "keep_backups", "update_max_mib"):
         try:
             cfg[key] = int(cfg[key])
@@ -855,6 +861,27 @@ def udp_listening(cfg):
     return False
 
 
+def portal_status(cfg):
+    """The web portal: nginx active and listening on TCP portal_port (when its site is enabled)."""
+    if not os.path.lexists(cfg["portal_site"]):
+        return {"portal_configured": False, "portal_active": False, "portal_listening": False}
+    rc, out = run([cfg["systemctl"], "is-active", "--quiet", cfg["portal_service"]], 15)
+    active = rc == 0
+    listening = False
+    if active:
+        rc, out = run([cfg["ss"], "-H", "-ltnp"], 10)
+        port = ":%d" % cfg["portal_port"]
+        for line in (out.splitlines() if rc == 0 else []):
+            cols = line.split()
+            # State Recv-Q Send-Q Local:Port Peer:Port [Process]; nginx when ss names the process
+            if len(cols) >= 5 and cols[3].endswith(port):
+                procs = " ".join(cols[5:])
+                if not procs or '"nginx"' in procs:
+                    listening = True
+                    break
+    return {"portal_configured": True, "portal_active": active, "portal_listening": listening}
+
+
 def restart_and_wait(cfg):
     rc, out = run([cfg["systemctl"], "restart", cfg["service"]], cfg["restart_timeout"])
     deadline = time.monotonic() + cfg["restart_wait"]
@@ -994,10 +1021,12 @@ def act_status(cfg, req):
             break
     st = read_state(cfg)
     active = service_active(cfg)
-    return {"ok": True, "message": "ok", "service_active": active,
-            "listening": bool(active and udp_listening(cfg)),
-            "fips_enabled": fips, "radiusd_version": version,
-            "last_apply": st.get("last_apply"), "backups": list_backups(bdir)[:20]}
+    r = {"ok": True, "message": "ok", "service_active": active,
+         "listening": bool(active and udp_listening(cfg)),
+         "fips_enabled": fips, "radiusd_version": version,
+         "last_apply": st.get("last_apply"), "backups": list_backups(bdir)[:20]}
+    r.update(portal_status(cfg))
+    return r
 
 
 def act_validate(cfg, req):
