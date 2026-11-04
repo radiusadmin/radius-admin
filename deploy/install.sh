@@ -527,8 +527,8 @@ def keep_ldap_settings():
     if not (os.path.exists(s_path) and os.path.exists(l_path)):
         return
     text, ltext = open(s_path).read(), open(l_path).read()
-    for key in ("identity", "base_dn"):
-        rx = r"^[ \t]*%s[ \t]*=.*$" % key
+    for key in ("identity", "base_dn", "port"):
+        rx = r"^[ \t]*%s[ \t]*=(?![ \t]*\$\{).*$" % key
         lm, sm = re.search(rx, ltext, re.M), re.search(rx, text, re.M)
         if lm and sm and lm.group(0) != sm.group(0):
             text = text[:sm.start()] + lm.group(0) + text[sm.end():]
@@ -548,7 +548,59 @@ def keep_ldap_settings():
         out.append(text[pos:])
         text = "".join(out)
         print("  [INFO] kept the live server line(s) in %s" % rel)
+    text = keep_ldap_tls(text, ltext, rel)
     open(s_path, "w").write(text)
+
+# How this server trusts the directory is a site setting as well: the CA file or directory,
+# a client certificate, STARTTLS. A template path that does not exist here (the package
+# ships ${certdir}/site/ca.pem) makes radiusd -XC fail with "Unable to check file". The
+# staged tls { } of the ldap module (the first one; ldap_user only references it) gets
+# exactly the live values: changed, added, or commented out where the live file has none.
+# tls_min_version and the cipher list stay as shipped (FIPS-safe minimum).
+TLS_KEYS = ("start_tls", "ca_file", "ca_path", "certificate_file", "private_key_file",
+            "require_cert", "check_crl")
+TLS_BLOCK = re.compile(r"^[ \t]*tls[ \t]*\{[^\n]*\n(.*?)^[ \t]*\}", re.M | re.S)
+def keep_ldap_tls(text, ltext, rel):
+    sb = TLS_BLOCK.search(text)
+    if not sb:
+        return text
+    lb = TLS_BLOCK.search(ltext)
+    live = lb.group(1) if lb else ""
+    body, kept = sb.group(1), []
+    for key in TLS_KEYS:
+        rx = re.compile(r"^([ \t]*)%s[ \t]*=.*$" % key, re.M)
+        lm, sm = rx.search(live), rx.search(body)
+        if lm and sm and lm.group(0).strip() != sm.group(0).strip():
+            body = body[:sm.start()] + sm.group(1) + lm.group(0).strip() + body[sm.end():]
+        elif lm and not sm:
+            body = "\t\t" + lm.group(0).strip() + "\n" + body
+        elif sm and not lm:
+            body = (body[:sm.start()] + sm.group(1) + "# " + sm.group(0).strip()
+                    + "    # not set on this server" + body[sm.end():])
+        else:
+            continue
+        kept.append(key)
+    if not kept:
+        return text
+    print("  [INFO] kept the live LDAP TLS setting(s) %s in %s" % (", ".join(kept), rel))
+    head, tail = text[:sb.start(1)] + body, text[sb.end(1):]
+    # Other modules (ldap_user) take these from the ldap module by reference: drop a reference
+    # to a value that is gone, add one for a value that is new.
+    for key in kept:
+        ref = "${modules.ldap.tls.%s}" % key
+        live_has = re.search(r"^[ \t]*%s[ \t]*=" % key, live, re.M)
+        if not live_has:
+            tail = re.sub(r"^([ \t]*)(%s[ \t]*=[ \t]*%s.*)$" % (key, re.escape(ref)),
+                          r"\1# \2    # not set on this server", tail, flags=re.M)
+            continue
+        def add_ref(m):
+            blk = m.group(0)
+            if "${modules.ldap.tls." not in blk or re.search(r"^[ \t]*%s[ \t]*=" % key, blk, re.M):
+                return blk
+            nl = blk.index("\n") + 1
+            return blk[:nl] + "\t\t%s = %s\n" % (key, ref) + blk[nl:]
+        tail = TLS_BLOCK.sub(add_ref, tail)
+    return head + tail
 keep_ldap_settings()
 # clients.conf: the secret inside `client localhost { ... }`
 s_path = os.path.join(staged, "clients.conf")
@@ -596,7 +648,9 @@ if ca:
 uri = server if "://" in server else "ldaps://" + server
 fd, pf = tempfile.mkstemp(); os.write(fd, pw.encode()); os.close(fd)
 env = dict(os.environ, LDAPTLS_REQCERT="demand")
-if ca and os.path.exists(ca):
+if ca and not os.path.exists(ca):
+    print("FAIL ca_file %s does not exist" % ca); sys.exit(0)
+if ca:
     env["LDAPTLS_CACERT"] = ca
 try:
     r = subprocess.run(["ldapwhoami", "-x", "-H", uri, "-D", ident, "-y", pf], capture_output=True, text=True,

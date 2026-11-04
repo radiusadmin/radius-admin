@@ -27,7 +27,7 @@ jobs:
     name: Shellcheck and site-data scan
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: shellcheck
         run: |
           sudo apt-get install -y -q shellcheck >/dev/null
@@ -61,7 +61,7 @@ jobs:
       passed: ${{ steps.counts.outputs.passed }}
       failed: ${{ steps.counts.outputs.failed }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Prepare sandbox
         run: |
           sudo mkdir -p "$REPO" && sudo cp -a "$GITHUB_WORKSPACE/." "$REPO/"
@@ -74,6 +74,8 @@ jobs:
         run: cd "$REPO" && sudo bash tests/installer/test_answers.sh | tee "$LOGS/installer.log"
       - name: Installer live settings
         run: cd "$REPO" && sudo bash tests/installer/test_live_settings.sh | tee "$LOGS/live-settings.log"
+      - name: LDAP settings kept on upgrade
+        run: cd "$REPO" && bash tests/installer/test_ldap_carry_over.sh | tee "$LOGS/ldap-carry-over.log"
       - name: Domain join script
         run: cd "$REPO" && bash tests/installer/test_ad_join.sh | tee "$LOGS/ad-join.log"
       - name: Update install checks
@@ -87,7 +89,7 @@ jobs:
         if: always()
         run: |
           tools/ci/test-counts.py "$LOGS/helper.log" "$LOGS/installer.log" "$LOGS/live-settings.log" "$LOGS/ad-join.log" \
-              "$LOGS/update-install.log" "$LOGS/nginx-dropin.log" "$LOGS/release.log" | tee -a "$GITHUB_OUTPUT"
+              "$LOGS/ldap-carry-over.log" "$LOGS/update-install.log" "$LOGS/nginx-dropin.log" "$LOGS/release.log" | tee -a "$GITHUB_OUTPUT"
 
   package:
     name: FreeRADIUS package
@@ -101,7 +103,7 @@ jobs:
       passed: ${{ steps.counts.outputs.passed }}
       failed: ${{ steps.counts.outputs.failed }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Build radius-admin-freeradius
         run: |
           sudo apt-get update -q
@@ -116,7 +118,7 @@ jobs:
         id: counts
         if: always()
         run: tools/ci/test-counts.py "$LOGS/package.log" | tee -a "$GITHUB_OUTPUT"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: radius-admin-freeradius
           path: packages/
@@ -136,7 +138,7 @@ jobs:
       bench_passed: ${{ steps.counts.outputs.bench_passed }}
       bench_failed: ${{ steps.counts.outputs.bench_failed }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Prepare sandbox
         run: |
           sudo mkdir -p "$REPO" && sudo cp -a "$GITHUB_WORKSPACE/." "$REPO/"
@@ -171,7 +173,7 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/logs"
           sudo sh -c 'cp /var/tmp/ra-bench/*.log /opt/ci-src/*.log /var/log/postgresql/*.log "$0" 2>/dev/null; chmod -R a+r "$0"' "$RUNNER_TEMP/logs" || true
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: failure()
         with:
           name: bench-logs
@@ -188,7 +190,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Write badge data
         env:
           NEEDS: ${{ toJSON(needs) }}
