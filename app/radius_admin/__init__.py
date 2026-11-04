@@ -21,7 +21,7 @@ SECURITY_HEADERS = {
 
 
 def create_app(config_path=None, overrides=None):
-    from . import audit, db, security
+    from . import audit, db, security, versions
     from .config import load_config
     from .crypto import DataKey, require_fips_or_die, fips_status
 
@@ -125,9 +125,12 @@ def create_app(config_path=None, overrides=None):
             except Exception:
                 nav = None
             if nav is not None and user["role"] == "admin":   # ui.update_check: sql/90-updates.sql
+                # only while the check's base is still the installed build: once the offered
+                # build is installed (BUILD.json changed), the badge goes until the next check
                 up = db.query_one_optional(
                     "SELECT latest_version FROM ui.update_check WHERE id = 1 AND ok AND downloaded"
-                    " AND NOT downgrade AND latest_version <> ''")
+                    " AND NOT downgrade AND latest_version <> '' AND installed_version = %s",
+                    (versions.installed(cfg["build_file"])["version"],))
                 nav = dict(nav, update_version=up["latest_version"] if up else "")
         return {
             "current_user": user if full else None,

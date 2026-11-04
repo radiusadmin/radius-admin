@@ -1,14 +1,17 @@
 {% extends "base.html" %}
 {% import "_macros.html" as m %}
 {% block title %}Alerts{% endblock %}
+{% block head %}{% if testing %}{{ m.noscript_refresh(3) }}{% endif %}{% endblock %}
 {% block content %}
 <header class="page-head">
   <div><h1>Alerts</h1>
   <p class="lede">Raised by the monitoring service: reject spikes, switches that stop answering, and FreeRADIUS going down. Each alert is sent once when it opens and once when it clears.</p></div>
   {% if has_role('admin') %}<div class="head-actions">
-    {{ m.post_button(url_for('alerts.test'), 'Send test alert', 'btn btn-quiet') }}
+    {% if testing %}{{ m.busy_button('Sending…', 'btn btn-quiet') }}{% else %}{{ m.post_button(url_for('alerts.test'), 'Send test alert', 'btn btn-quiet', busy='Sending…') }}{% endif %}
     <a class="btn btn-primary" href="{{ url_for('alerts.settings') }}">Alert settings</a></div>{% endif %}
 </header>
+{% if testing %}{{ m.live_status(url_for('alerts.test_status'), 'Sending the test alert… When it is sent it appears below; check syslog (and your inbox if email is on).', interval=2, limit=120,
+                                 timeout='The test alert has not been sent yet. Reload this page to check again.') }}{% endif %}
 
 {% if not mon or not mon.alive %}
 <p class="flash flash-error" role="alert">The monitoring service has not reported in the last 3 minutes{% if mon and mon.heartbeat_at %} (last seen {{ mon.heartbeat_at|ago }}){% endif %}, so no alerts are being raised. Check <span class="mono">systemctl status radius-admin-snmp</span> on the server.</p>

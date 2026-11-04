@@ -28,10 +28,64 @@
       });
     }
 
-    // Confirmation for destructive / high-impact forms.
+    // Confirmation dialog (replaces window.confirm). One <dialog> for the page, built on first
+    // use: the question as its title, the rest of the message below, Cancel and an action button
+    // named after the button that was pressed. Destructive actions get a red button and start
+    // with Cancel focused. Escape, Cancel and a click on the backdrop all cancel.
+    var confirmDlg = null, confirmDone = null;
+    function buildConfirm() {
+      var d = document.createElement("dialog");
+      d.className = "confirm-dialog";
+      d.setAttribute("aria-labelledby", "confirm-dialog-title");
+      d.setAttribute("aria-describedby", "confirm-dialog-body");
+      d.innerHTML = '<form method="dialog"><h2 id="confirm-dialog-title"></h2><p id="confirm-dialog-body"></p>' +
+        '<div class="confirm-actions"><button type="submit" value="cancel" class="btn btn-quiet" data-cancel>Cancel</button>' +
+        '<button type="submit" value="ok" class="btn btn-primary" data-ok>OK</button></div></form>';
+      document.body.appendChild(d);
+      d.addEventListener("click", function (e) { if (e.target === d) d.close("cancel"); });   // backdrop
+      d.addEventListener("close", function () {
+        var fn = confirmDone;
+        confirmDone = null;
+        if (fn) fn(d.returnValue === "ok");
+      });
+      return d;
+    }
+    function askConfirm(message, okLabel, danger, done) {
+      if (typeof HTMLDialogElement !== "function") { done(window.confirm(message)); return; }  // very old browsers
+      confirmDlg = confirmDlg || buildConfirm();
+      var m = /^([^?]*\?)\s+([\s\S]+)$/.exec(message.trim());
+      confirmDlg.querySelector("h2").textContent = m ? m[1] : message;
+      var body = confirmDlg.querySelector("p");
+      body.textContent = m ? m[2] : "";
+      body.hidden = !m;
+      var ok = confirmDlg.querySelector("[data-ok]"), cancel = confirmDlg.querySelector("[data-cancel]");
+      ok.textContent = okLabel || "Confirm";
+      ok.className = "btn " + (danger ? "btn-danger" : "btn-primary");
+      confirmDlg.returnValue = "";
+      confirmDone = done;
+      confirmDlg.showModal();
+      (danger ? cancel : ok).focus();
+    }
+    function actionLabel(btn) {
+      var t = btn ? (btn.textContent || btn.value || "").trim() : "";
+      return t && t.length <= 32 ? t : "Confirm";
+    }
+
+    // Forms with data-confirm ask first; on OK the form is submitted again (with the same
+    // button), so the busy spinner and the browser's own checks run as usual.
     document.querySelectorAll("form[data-confirm]").forEach(function (form) {
       form.addEventListener("submit", function (e) {
-        if (!window.confirm(form.getAttribute("data-confirm"))) e.preventDefault();
+        if (form.getAttribute("data-confirmed") === "1") { form.removeAttribute("data-confirmed"); return; }
+        e.preventDefault();
+        var btn = e.submitter || form.querySelector('button[type="submit"], button:not([type])');
+        var msg = form.getAttribute("data-confirm");
+        var danger = /danger/.test((btn && btn.className) || "") || /^(Delete|Remove|Disable)\b/.test(msg);
+        askConfirm(msg, actionLabel(btn), danger, function (ok) {
+          if (!ok) { if (btn) btn.focus(); return; }
+          form.setAttribute("data-confirmed", "1");
+          if (typeof form.requestSubmit === "function") form.requestSubmit(btn && btn.form === form ? btn : undefined);
+          else form.submit();
+        });
       });
     });
 
@@ -39,11 +93,10 @@
     document.querySelectorAll("form[data-autosubmit] select").forEach(function (sel) {
       var initial = sel.value;
       sel.addEventListener("change", function () {
-        if (window.confirm("Change role to " + sel.value + "? Their current sessions end.")) {
-          sel.form.submit();
-        } else {
-          sel.value = initial;
-        }
+        askConfirm("Change role to " + sel.value + "? Their current sessions end.", "Change role", false, function (ok) {
+          if (ok) sel.form.submit();
+          else { sel.value = initial; sel.focus(); }
+        });
       });
     });
 
@@ -150,6 +203,132 @@
         }
         escaped = false;
       });
+    }
+
+    // Busy buttons: a form with data-busy shows a spinner on the button that sent it (and,
+    // if the attribute has text, that label) until the next page loads. Runs after the
+    // data-confirm handler, so a cancelled confirmation leaves the button alone.
+    function busy(btn, label) {
+      btn.classList.add("is-busy");
+      btn.setAttribute("aria-busy", "true");
+      if (label) {
+        if (!btn.hasAttribute("data-label")) btn.setAttribute("data-label", btn.textContent);
+        btn.textContent = label;
+      }
+      setTimeout(function () { btn.disabled = true; }, 0);   // after the browser read its name/value
+    }
+    document.querySelectorAll("form[data-busy]").forEach(function (form) {
+      form.addEventListener("submit", function (e) {
+        if (e.defaultPrevented) return;
+        var btn = e.submitter || form.querySelector('button[type="submit"], button:not([type])');
+        if (btn) busy(btn, form.getAttribute("data-busy"));
+      });
+    });
+    window.addEventListener("pageshow", function (e) {         // back button: page from the cache
+      if (!e.persisted) return;
+      document.querySelectorAll("form[data-busy] .is-busy").forEach(function (btn) {
+        btn.classList.remove("is-busy");
+        btn.removeAttribute("aria-busy");
+        btn.disabled = false;
+        if (btn.hasAttribute("data-label")) btn.textContent = btn.getAttribute("data-label");
+      });
+    });
+
+    function getJSON(url) {
+      return fetch(url, {credentials: "same-origin", cache: "no-store", headers: {Accept: "application/json"}})
+        .then(function (r) {
+          if (!r.ok) throw new Error("HTTP " + r.status);
+          if ((r.headers.get("Content-Type") || "").indexOf("application/json") !== 0) {
+            window.location.reload();      // signed out: the sign-in page came back instead
+            return null;
+          }
+          return r.json();
+        });
+    }
+
+    // Live status: [data-live] asks its JSON URL every data-live-interval seconds whether the
+    // work is done ({"done": bool, "message": "..."}); the page reloads to show the result.
+    // Without JavaScript a <noscript> meta refresh reloads the page instead.
+    document.querySelectorAll("[data-live]").forEach(function (el) {
+      var url = el.getAttribute("data-live");
+      var every = Math.max(1, Number(el.getAttribute("data-live-interval")) || 2) * 1000;
+      var limit = (Number(el.getAttribute("data-live-limit")) || 300) * 1000;
+      var msg = el.querySelector("[data-live-message]");
+      var offline = el.querySelector("[data-live-offline]");
+      var started = Date.now(), misses = 0;
+      function next() {
+        if (Date.now() - started < limit) { setTimeout(tick, every); return; }
+        el.classList.add("live-stopped");
+        document.querySelectorAll("[data-live-busy]").forEach(function (b) {
+          b.classList.remove("is-busy");
+          b.removeAttribute("aria-busy");
+        });
+        if (msg) msg.textContent = el.getAttribute("data-live-timeout") || "Still waiting. Reload this page to check again.";
+        if (offline) offline.hidden = true;
+      }
+      function tick() {
+        getJSON(url).then(function (d) {
+          if (!d) return;
+          misses = 0;
+          if (offline) offline.hidden = true;
+          if (d.done) { window.location.reload(); return; }
+          if (msg && typeof d.message === "string" && d.message) msg.textContent = d.message;
+          next();
+        }).catch(function () {
+          misses += 1;
+          if (offline && misses >= 2) offline.hidden = false;
+          next();
+        });
+      }
+      setTimeout(tick, every);
+    });
+
+    // Install log (Updates page): the Details drop-down fetches the log as it grows and keeps
+    // the view at the bottom unless the reader scrolled up. Stays open across the reload
+    // that shows the result.
+    var logBox = document.querySelector("details[data-update-log]");
+    if (logBox) {
+      var term = logBox.querySelector("[data-log-text]");
+      var note = logBox.querySelector("[data-log-note]");
+      var bar = logBox.querySelector(".terminal-bar");
+      var nameEl = logBox.querySelector("[data-log-name]");
+      var logUrl = logBox.getAttribute("data-update-log");
+      var offset = 0, logName = null, timer = null, inflight = false, MAX_CHARS = 400000;
+      var live = logBox.hasAttribute("data-live-log");
+      if (bar && live) bar.classList.add("is-live");
+      var say = function (text) { if (note) { note.textContent = text; note.hidden = !text; } };
+      var fetchLog = function () {
+        timer = null;
+        if (!logBox.open || inflight) return;
+        inflight = true;
+        getJSON(logUrl + (logUrl.indexOf("?") < 0 ? "?" : "&") + "offset=" + offset).then(function (d) {
+          inflight = false;
+          if (!d) return;
+          if (!d.available) { say(d.message || "The install log is not available."); return; }
+          if (d.name !== logName) { term.textContent = ""; logName = d.name; offset = 0; }
+          if (nameEl && d.name) nameEl.textContent = d.name;
+          var atEnd = term.scrollHeight - term.scrollTop - term.clientHeight < 24;
+          if (d.skipped) term.appendChild(document.createTextNode("[… " + d.skipped + " earlier bytes not shown …]\n"));
+          if (d.text) term.appendChild(document.createTextNode(d.text));
+          if (term.textContent.length > MAX_CHARS) term.textContent = term.textContent.slice(-MAX_CHARS / 2);
+          offset = d.offset;
+          say(term.textContent ? "" : (d.message && d.message !== "ok" ? d.message : "The log is empty so far."));
+          if (atEnd) term.scrollTop = term.scrollHeight;
+          live = !!d.running;
+          if (bar) bar.classList.toggle("is-live", live);
+          if (live) timer = setTimeout(fetchLog, 2000);
+        }).catch(function () {
+          inflight = false;
+          say("Lost contact with the console (it restarts during the install); retrying…");
+          if (live) timer = setTimeout(fetchLog, 3000);
+        });
+      };
+      logBox.addEventListener("toggle", function () {
+        try { window.sessionStorage.setItem("ra-update-log-open", logBox.open ? "1" : "0"); } catch (e) { /* private mode */ }
+        if (logBox.open && !timer) fetchLog();
+      });
+      try { if (window.sessionStorage.getItem("ra-update-log-open") === "1") logBox.open = true; } catch (e) { /* private mode */ }
+      if (logBox.open) fetchLog();
     }
   });
 })();

@@ -635,3 +635,67 @@ table.rules-table td { overflow-wrap: anywhere; }
 .update-notes ul { margin: .25rem 0 .5rem; padding-left: 1.25rem; }
 .update-notes p { margin: .25rem 0 .5rem; }
 @media (max-width: 480px) { .update-arrow { display: none; } .update-versions { gap: .75rem; } }
+
+/* -------------------------------------------------------------- progress (spinners, live status, log) */
+.spinner, .is-busy::before {
+  display: inline-block; flex: none; width: 1em; height: 1em; vertical-align: -.15em;
+  border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%;
+  animation: ra-spin .8s linear infinite;
+}
+.is-busy::before { content: ""; }
+.btn.is-busy, .btn.is-busy[disabled] { opacity: .85; cursor: progress; }
+@keyframes ra-spin { to { transform: rotate(360deg); } }
+.live-status { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; margin: 0 0 .6rem; }
+.live-status > .spinner { color: var(--teal); }
+.live-status.live-stopped > .spinner, .live-quiet > .spinner { display: none; }
+.update-check .live-status { margin: 0; }
+.live-offline { color: var(--amber); }
+.update-progress { display: flex; flex-direction: column; gap: .5rem; margin-top: 1rem; }
+.update-progress .live-status { margin: 0; }
+.update-progress > p { margin: 0; }
+.update-running { display: flex; align-items: center; gap: .4rem 1rem; flex-wrap: wrap; }
+.update-step { color: var(--ink-soft); font-size: .9rem; }
+.update-log { margin-top: .75rem; }
+.update-log > summary {
+  display: inline-flex; align-items: center; gap: .35rem; cursor: pointer; list-style: none;
+  font-weight: 600; font-size: .9rem; color: var(--ink-soft); padding: .2rem 0;
+}
+.update-log > summary::-webkit-details-marker { display: none; }
+.update-log > summary::after { content: "\25BE"; transition: transform .15s; }
+.update-log[open] > summary::after { transform: rotate(180deg); }
+.update-log > summary:hover { color: var(--ink); }
+.terminal {
+  margin: .5rem 0 0; padding: .75rem 1rem; max-height: 26rem; min-height: 6rem; overflow: auto;
+  background: #0b1117; color: #cfd8e1; border: 1px solid #22303d; border-radius: var(--radius-m);
+  font: .8rem/1.5 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; tab-size: 4;
+}
+.terminal-bar {
+  display: flex; align-items: center; gap: .4rem; margin: .5rem 0 0; padding: .4rem .75rem;
+  background: #16202a; border: 1px solid #22303d; border-bottom: 0; border-radius: var(--radius-m) var(--radius-m) 0 0;
+  color: #8fa1b2; font: .75rem/1.2 var(--mono);
+}
+.terminal-bar + .terminal { margin-top: 0; border-radius: 0 0 var(--radius-m) var(--radius-m); }
+.terminal-dot { width: .6rem; height: .6rem; border-radius: 50%; background: #3a4a59; }
+.terminal-bar .terminal-name { margin-left: .4rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.terminal-bar .spinner { margin-left: auto; color: #4fc7b6; width: .8rem; height: .8rem; }
+.terminal-bar:not(.is-live) .spinner { display: none; }
+.terminal:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) {
+  /* a slow turn still says "working"; everything else stays still */
+  .spinner, .is-busy::before { animation: ra-spin 2s linear infinite !important; }
+}
+
+/* -------------------------------------------------------------- confirmation dialog (app.js) */
+.confirm-dialog {
+  border: 1px solid var(--line); border-radius: var(--radius-m); padding: 0;
+  width: min(28rem, calc(100vw - 2rem)); background: var(--surface); color: var(--ink);
+  box-shadow: 0 18px 48px rgba(10, 16, 22, .28);
+}
+.confirm-dialog[open] { animation: ra-dialog-in .14s ease-out; }
+.confirm-dialog::backdrop { background: rgba(10, 16, 22, .45); }
+.confirm-dialog form { padding: 1.25rem 1.25rem 1rem; }
+.confirm-dialog h2 { font-size: 1.05rem; line-height: 1.35; margin: 0; overflow-wrap: anywhere; }
+.confirm-dialog p { margin: .5rem 0 0; color: var(--ink-soft); overflow-wrap: anywhere; }
+.confirm-actions { display: flex; justify-content: flex-end; gap: .5rem; margin-top: 1.25rem; flex-wrap: wrap; }
+@keyframes ra-dialog-in { from { opacity: 0; transform: translateY(6px) scale(.98); } }
+@media (max-width: 480px) { .confirm-actions .btn { flex: 1 1 auto; } }

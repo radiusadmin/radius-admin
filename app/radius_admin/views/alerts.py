@@ -1,8 +1,9 @@
 """Alerts (SPEC section 13): open alerts and history for everyone; thresholds and
 delivery settings for admins (step-up). The monitor service evaluates and sends."""
+import datetime
 import re
 
-from flask import Blueprint, current_app, g, redirect, render_template, request, url_for
+from flask import Blueprint, current_app, g, jsonify, redirect, render_template, request, url_for
 
 from .. import db
 from ..alerts import LABELS
@@ -28,7 +29,27 @@ def index():
     where = " WHERE kind <> 'test'" if show != "all" else ""
     rows = db.query("SELECT * FROM ui.alert" + where + " ORDER BY (state = 'open') DESC, opened_at DESC LIMIT 200")
     s = db.query_one("SELECT * FROM ui.alert_settings WHERE id = 1")
-    return render_template("alerts/index.html", rows=rows, s=s, show=show, labels=LABELS, mon=monitor_state())
+    return render_template("alerts/index.html", rows=rows, s=s, show=show, labels=LABELS, mon=monitor_state(),
+                           testing=test_pending(s))
+
+
+TEST_WAIT = datetime.timedelta(minutes=2)       # a test alert not sent by then has stalled
+
+
+def test_pending(s):
+    """True while a requested test alert has not been sent (for TEST_WAIT)."""
+    req = s and s["test_requested_at"]
+    if not req:
+        return False
+    r = db.query_one("SELECT now() - %s < %s AS recent, EXISTS (SELECT 1 FROM ui.alert"
+                     " WHERE kind = 'test' AND opened_at >= %s) AS sent", (req, TEST_WAIT, req))
+    return bool(r["recent"] and not r["sent"])
+
+
+@bp.route("/test/status")
+@role_required("admin")
+def test_status():
+    return jsonify(done=not test_pending(db.query_one("SELECT test_requested_at FROM ui.alert_settings WHERE id = 1")))
 
 
 @bp.route("/settings", methods=["GET", "POST"])
@@ -105,6 +126,4 @@ def test():
     db.execute("UPDATE ui.alert_settings SET test_requested_at = now(), test_requested_by = %s WHERE id = 1",
                (g.user["username"],))
     ev("alert.test", object_type="alert_settings", object_id=1)
-    flash("Test alert requested. The monitoring service sends it within a few seconds; check syslog"
-          " (and your inbox if email is on). The result appears below.", "success")
     return redirect(url_for("alerts.index", show="all"))

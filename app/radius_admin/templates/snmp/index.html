@@ -1,17 +1,20 @@
 {% extends "base.html" %}
 {% import "_macros.html" as m %}
 {% block title %}Switch monitoring{% endblock %}
+{% block head %}{% if refreshing %}{{ m.noscript_refresh(5) }}{% endif %}{% endblock %}
 {% block content %}
 <header class="page-head"><div><h1>Switch monitoring</h1>
 <p class="lede">Read-only SNMPv3 polling of the RADIUS clients marked as switches: reachability, model, 802.1X ports and their live state (authorized, user or MAC, VLAN) and RADIUS counters. The monitoring service is the only part of this console that talks to the switches; the user needs read-only access only.</p></div>
-{% if p.enabled %}<div class="head-actions">{{ m.post_button(url_for('snmp.refresh'), 'Refresh now', 'btn btn-quiet') }}</div>{% endif %}</header>
+{% if p.enabled %}<div class="head-actions">{% if refreshing %}{{ m.busy_button('Refreshing…', 'btn btn-quiet') }}{% else %}{{ m.post_button(url_for('snmp.refresh'), 'Refresh now', 'btn btn-quiet', busy='Refreshing…') }}{% endif %}</div>{% endif %}</header>
 
 <section class="panel">
   <h2>Status</h2>
   <p>{% if not p.enabled %}<span class="tag tag-muted">Disabled</span> Monitoring is off.
   {% elif not ov.polled %}<span class="tag tag-warn">Waiting</span> No poll has completed yet.
   {% else %}<span class="tag tag-ok">On</span> {{ ov.reachable }} of {{ ov.total }} switches answered; last poll {{ ov.last_poll|dt }}.{% endif %}
-  {% if p.refresh_requested_at %}<span class="small muted">Last refresh requested {{ p.refresh_requested_at|dt }}.</span>{% endif %}</p>
+  {% if p.refresh_requested_at and not refreshing %}<span class="small muted">Last refresh requested {{ p.refresh_requested_at|dt }}.</span>{% endif %}</p>
+  {% if refreshing %}{{ m.live_status(url_for('snmp.refresh_status'), 'Polling the switches…', interval=3, limit=180,
+                                      timeout='The refresh has not finished. Reload this page to see the latest results.', cls='small') }}{% endif %}
 </section>
 
 <section class="panel narrow">
@@ -74,7 +77,7 @@
 <section class="panel">
   <h2>Test one switch</h2>
   {% if clients %}
-  <form method="post" action="{{ url_for('snmp.test') }}" class="filters">
+  <form method="post" action="{{ url_for('snmp.test') }}" class="filters" data-busy="">
     {{ m.csrf() }}
     <label for="client_id" class="sr-only">Client</label>
     <select id="client_id" name="client_id" class="select-auto">{% for c in clients %}<option value="{{ c.id }}">{{ c.name }} ({{ c.ipaddr }})</option>{% endfor %}</select>
