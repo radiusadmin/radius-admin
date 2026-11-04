@@ -15,11 +15,16 @@ release, so previews sort after it.
 - Confirmations (delete, apply, roll back, role changes, …) open in the console's own dialog
   instead of the browser's pop-up box, with the action named on the button.
 - The Updates page has a **Details** drop-down with the install log, live while an update runs.
-  After updating from 0.2.0 it works from the next update on (it needs the new root helper).
+  During the update to 0.2.2 itself the page shows the steps only (the log needs the new root
+  helper); it works from the next update on.
 
 ### Fixed
 - The "1" next to Updates in the menu goes away as soon as the update is installed; it used to
   stay until the next update check.
+
+## 0.2.1 — 2026-11-04
+
+### Fixed
 - Updates keep how the server trusts the directory: the TLS settings of the LDAP module
   (`ca_file`, `ca_path`, client certificate, `start_tls`, `require_cert`, `check_crl`) and
   its `port` come from the installed `mods-available/ldap`, like the bind account, search
