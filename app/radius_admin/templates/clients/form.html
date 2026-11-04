@@ -135,7 +135,7 @@
   <p class="small muted">Per-port 802.1X state appears after the next poll.</p>
   {% endif %}
   {% endif %}
-  {% if has_role('operator') %}<div class="actions">{{ m.post_button(url_for('snmp.test'), 'Test SNMP now', 'btn btn-quiet', fields={'client_id': c.id}) }}</div>{% endif %}
+  {% if has_role('operator') %}<div class="actions">{{ m.post_button(url_for('snmp.test'), 'Test SNMP now', 'btn btn-quiet', fields={'client_id': c.id}, busy='') }}</div>{% endif %}
 </section>
 {% endif %}
 {% endblock %}

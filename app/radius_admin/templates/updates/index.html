@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% import "_macros.html" as m %}
 {% block title %}Updates{% endblock %}
-{% block head %}{% if running %}<meta http-equiv="refresh" content="10">{% endif %}{% endblock %}
+{% block head %}{% if running %}{{ m.noscript_refresh(10) }}{% elif checking == 'running' %}{{ m.noscript_refresh(5) }}{% endif %}{% endblock %}
 {% block content %}
 <header class="page-head">
   <div><h1>Updates</h1>
@@ -30,14 +30,33 @@
   </div>
 
   {% if running %}
-  <p class="flash flash-info" role="status"><strong>Installing {{ state.version }}:</strong> {{ state.message }}. This page refreshes by itself; the console restarts once during the install.</p>
+  <div class="update-progress">
+    {% set step = (state.message or 'queued') %}
+    <div class="update-running">
+      {{ m.busy_button('Installing ' ~ state.version ~ '…', 'btn btn-primary') }}
+      {{ m.live_status(url_for('updates.status', wait='install'), step[:1]|upper ~ step[1:] ~ '…', interval=3, limit=1800,
+                       timeout='Taking longer than expected. Reload this page, or open Details for the log.',
+                       cls='live-quiet update-step') }}
+    </div>
+    <p class="small muted">The console restarts once during the install; this page shows the result when it is done.</p>
+  </div>
   {% elif state.state in ('done', 'failed', 'rolled_back') %}
   <p class="flash {{ 'flash-success' if state.state == 'done' else 'flash-error' }}" role="status">
     Last install{% if state.finished %} ({{ state.finished[:16]|replace('T', ' ') }} UTC){% endif %}: {{ state.message }}.</p>
   {% endif %}
+  {% if running or state.log %}
+  <details class="update-log" data-update-log="{{ url_for('updates.install_log') }}"{% if running %} data-live-log{% endif %}>
+    <summary>Details</summary>
+    <div class="terminal-bar" aria-hidden="true"><span class="terminal-dot"></span><span class="terminal-dot"></span><span class="terminal-dot"></span>
+      <span class="terminal-name" data-log-name>{{ (state.log or '')|replace('/var/log/radius-admin/', '') or 'install log' }}</span><span class="spinner"></span></div>
+    <pre class="terminal" tabindex="0" aria-label="Install log{% if state.version %} for {{ state.version }}{% endif %}" data-log-text></pre>
+    <p class="small muted" data-log-note>Loading the install log…</p>
+    <noscript><p class="small muted">Showing the log here needs JavaScript. On the server it is {% if state.log %}<span class="mono">{{ state.log }}</span>{% else %}in <span class="mono">/var/log/radius-admin/</span>{% endif %}.</p></noscript>
+  </details>
+  {% endif %}
 
   {% if available and not running and status.ok and not key_missing %}
-  <form method="post" action="{{ url_for('updates.install') }}" class="stack update-install"
+  <form method="post" action="{{ url_for('updates.install') }}" class="stack update-install" data-busy="Starting the install…"
         data-confirm="Install {{ check.latest_version }} now?{% if check.restarts_freeradius %} FreeRADIUS restarts, so RADIUS is unavailable for a few seconds.{% endif %}">
     {{ m.csrf() }}
     <input type="hidden" name="version" value="{{ check.latest_version }}">
@@ -52,9 +71,18 @@
   {% endif %}
 
   <div class="actions update-check">
+    {% if checking == 'running' and not running %}
+    {{ m.live_status(url_for('updates.status', wait='check'), 'Checking GitHub for new builds…', interval=2, limit=300,
+                     timeout='The check has not finished. Reload this page to see whether it has.', cls='small live-quiet') }}
+    {{ m.busy_button('Checking…') }}
+    {% else %}
     {% if check %}<p class="small muted">Last checked {{ check.checked_at|dt }}{% if not check.ok %}: <span class="update-error">{{ check.error }}</span>{% endif %}.</p>{% endif %}
-    {% if s.mode != 'off' %}{{ m.post_button(url_for('updates.check_now'), 'Check now') }}{% endif %}
+    {% if s.mode != 'off' %}{{ m.post_button(url_for('updates.check_now'), 'Check now', busy='Checking…') }}{% endif %}
+    {% endif %}
   </div>
+  {% if checking == 'stalled' %}
+  <p class="small warn-text" role="status">The last check did not finish within five minutes. Try again, or look at <span class="mono">journalctl -u radius-admin-update-check</span> on the server.</p>
+  {% endif %}
 </section>
 
 <section class="panel" aria-labelledby="notes-h">

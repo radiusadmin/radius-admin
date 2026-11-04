@@ -9,7 +9,7 @@ import datetime
 import json
 import re
 
-from flask import Blueprint, current_app, g, redirect, render_template, request, url_for
+from flask import Blueprint, current_app, g, jsonify, redirect, render_template, request, url_for
 from markupsafe import Markup, escape
 
 from .. import helper_client, versions
@@ -28,6 +28,13 @@ MODE_LABELS = {"off": "Off: never contact GitHub",
                "auto": "Automatic: install new builds by themselves"}
 
 
+CHECK_WAIT = datetime.timedelta(minutes=5)       # a requested check that takes longer has stalled
+CHECK_STALE = datetime.timedelta(hours=1)       # after that the request is forgotten
+INSTALL_STATES = ("queued", "installing")
+_ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b[@-Z\\-_]")
+_CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
+
+
 def _cfg():
     return current_app.config["RA"]
 
@@ -37,6 +44,28 @@ def _helper(action, timeout=30, **params):
         return helper_client.call(_cfg()["helper_socket"], action, timeout=timeout, **params)
     except helper_client.HelperError as e:
         return {"ok": False, "message": str(e)}
+
+
+def check_progress(s, check, now=None):
+    """'running' while a requested check has not recorded its result (for CHECK_WAIT),
+    'stalled' when it did not within that time (for CHECK_STALE), otherwise ''."""
+    if s.get("mode") == "off":
+        return ""
+    try:
+        req = datetime.datetime.fromisoformat(s.get("requested") or "")
+    except ValueError:
+        return ""
+    if req.tzinfo is None or (check is not None and check["checked_at"] >= req):
+        return ""
+    age = (now or datetime.datetime.now(datetime.timezone.utc)) - req
+    return "running" if age < CHECK_WAIT else ("stalled" if age < CHECK_STALE else "")
+
+
+def clean_log(text):
+    """Install log text for the page: no terminal escape sequences or control characters
+    other than tab and newline (a lone carriage return becomes a newline)."""
+    text = _ANSI.sub("", text or "").replace("\r\n", "\n").replace("\r", "\n")
+    return _CONTROL.sub("", text)
 
 
 def notes_html(text):
@@ -93,15 +122,64 @@ def index():
         except ValueError:
             releases = []
     state = status.get("state") or {}
-    running = state.get("state") in ("queued", "installing")
+    running = state.get("state") in INSTALL_STATES
+    checking = check_progress(s, check)
     available = bool(check and check["ok"] and check["latest_version"] and check["channel"] == s["channel"]
                      and check["installed_version"] == installed["version"] and check["downloaded"])
     return render_template(
         "updates/index.html", s=s, installed=installed, status=status, check=check, releases=releases,
-        state=state, running=running, available=available, notes_html=notes_html,
+        state=state, running=running, checking=checking, available=available, notes_html=notes_html,
         channels=[(c, versions.CHANNEL_LABELS[c]) for c in versions.CHANNELS],
         modes=[(m, MODE_LABELS[m]) for m in MODES], days=[(d, DAY_LABELS[d]) for d in DAYS],
         hours=range(24), key_missing=status.get("ok") and not status.get("key_present"))
+
+
+@bp.route("/updates/status")
+@role_required("admin")
+def status():
+    """For the page's progress indicators. `wait=install`: done once no install runs (the
+    step as message); `wait=check`: done once the requested check has recorded its result
+    (needs no helper); neither: done once both are."""
+    wait = request.args.get("wait", "")
+    s = get_settings()["update"]
+    checking = check_progress(s, last_check()) == "running"
+    if wait == "check":
+        return jsonify(done=not checking, checking=checking,
+                       message="Checking GitHub for new builds…" if checking else "")
+    st = _helper("update_status")
+    if not st.get("ok"):          # the helper restarts during an install: not done, keep asking
+        return jsonify(done=False, helper=False, message="Waiting for the helper (%s)…" % st.get("message", ""))
+    state = st.get("state") or {}
+    running = state.get("state") in INSTALL_STATES
+    msg = ""
+    if running:
+        msg = "%s…" % (state.get("message") or "installing")
+        msg = msg[:1].upper() + msg[1:]
+    elif checking and wait != "install":
+        msg = "Checking GitHub for new builds…"
+    done = not running if wait == "install" else not (running or checking)
+    return jsonify(done=done, helper=True, installing=running, checking=checking,
+                   state=state.get("state", ""), version=state.get("version", ""), message=msg)
+
+
+@bp.route("/updates/log")
+@role_required("admin")
+def install_log():
+    """The install log from byte `offset` (helper update_log), for the Details drop-down."""
+    raw = request.args.get("offset", "0")
+    offset = int(raw) if raw.isdigit() and len(raw) <= 15 else 0
+    r = _helper("update_log", offset=offset)
+    if not r.get("ok"):
+        if r.get("message") == "unknown action":
+            msg = ("The running helper cannot show the install log yet; it can after this update. "
+                   "The step above still shows the progress.")
+        else:
+            msg = "The install log is not available: %s" % r.get("message", "")
+        return jsonify(available=False, running=False, message=msg)
+    state = r.get("state") or {}
+    return jsonify(available=True, running=state.get("state") in INSTALL_STATES, name=r.get("log", ""),
+                   offset=int(r.get("offset") or 0), skipped=int(r.get("skipped") or 0),
+                   text=clean_log(r.get("text", "")), message=r.get("message", ""))
 
 
 @bp.route("/updates/settings", methods=["POST"])
@@ -141,9 +219,7 @@ def check_now():
         return redirect(url_for("updates.index"))
     r = _request_check()
     ev("update.check", success=bool(r.get("ok")), object_type="update", detail={"message": r.get("message", "")})
-    if r.get("ok"):
-        flash("Checking for updates. Reload this page in a minute.", "success")
-    else:
+    if not r.get("ok"):
         flash("Could not start the update check: %s" % r.get("message"), "error")
     return redirect(url_for("updates.index"))
 
@@ -166,9 +242,6 @@ def install():
     ev("update.install_requested", success=bool(r.get("ok")), object_type="update", object_id=version,
        detail={"from": versions.installed(_cfg()["build_file"])["version"], "to": version,
                "downgrade": downgrade, "message": r.get("message", "")})
-    if r.get("ok"):
-        flash("Installing %s. The console restarts during the install; this page shows the result." % version,
-              "success")
-    else:
+    if not r.get("ok"):
         flash("The update was not started: %s" % r.get("message"), "error")
     return redirect(url_for("updates.index"))
