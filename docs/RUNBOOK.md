@@ -493,7 +493,7 @@ On every switch, create one SNMPv3 user, security level **authPriv**, authentica
 | `1.3.6.1.2.1.67.1.2` | RADIUS client counters |
 | `1.3.6.1.2.1.2.2.1.8` | interface link state (ifOperStatus) — per-port view |
 | `1.3.6.1.2.1.17.1.4.1.2` | bridge port to interface map — per-port view |
-| `1.3.6.1.2.1.17.7.1.4.5.1.1` | port VLAN (dot1qPvid) — per-port view |
+| `1.3.6.1.2.1.17.7.1.4.5.1.1` | native port VLAN (dot1qPvid) — per-port view; the VLAN in use comes from RADIUS accounting |
 
 (`1.0.8802.1.1.1` already covers the per-port 802.1X state and session user. Without the
 three per-port rows the port table still shows the 802.1X state but no link or VLAN.)
