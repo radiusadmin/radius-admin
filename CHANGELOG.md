@@ -18,29 +18,39 @@ release, so previews sort after it.
   the freeradius install phase and a FreeRADIUS restart.
 - Licence: GNU AGPL version 3 or later (copyright Collin Linde), with a Contributor License
   Agreement for outside contributions (`CLA.md`, `CONTRIBUTING.md`, pull request template).
-- Updates page: current and latest version, changelog, update channel (main, testing,
-  dev) and automatic updates. Builds are signed in CI and verified by the root helper
-  before anything is installed.
-- Switch networks (`switch_nets` in the installer answers, `--switch-nets`): the monitor may
-  reach switches in several networks for SNMP and CoA, not only the management subnet.
 - "Portal down" alert: the monitor alerts (syslog, email) when nginx is not active or not
   listening on port 443 for two checks in a row, on servers where the portal's nginx site is
   enabled. On by default; switch it off in Alert settings. Updates also check that nginx
   serves the portal and roll back if it does not.
+- Auth log, audit log and sessions: numbered pages ("51–100 of 1,234", Previous 1 … 4 5 6 …
+  Next) instead of Newer/Older; sessions show 50 per page.
 
 ### Fixed
 - The portal no longer stays down when nginx fails to start because DNS was briefly
   unavailable (nginx looks up the OCSP responder when it starts, for example when
   unattended-upgrades restarts it). nginx now starts after the network is up and retries
   every 30 seconds; the drop-in is installed by the nginx phase.
-- `install.sh --phase app` without answers (and updates) no longer resets the monitor's
-  allowed network to the `192.0.2.0/24` example; it keeps the installed list.
 - A MAC that connected with 802.1X is reported as such when the switch tries MAB ("authenticates
   with 802.1X"), for passwords as for certificates.
-- A switch outside the allowed networks is reported as such, instead of Net-SNMP's
-  "Unknown engine ID (Operation not permitted)" with advice about the switch.
+- Switch page, 802.1X ports: the VLAN column shows the VLAN RADIUS assigned to the connected
+  device (it showed the port's native VLAN, usually 1); "native" marks the fallback and "—" a
+  port without a device. 802.1X user names longer than 16 characters are shown in full
+  instead of as raw hexadecimal.
+
+## 0.1.1 — 2026-11-03
+
+### Added
+- Updates page: current and latest version, changelog, update channel (main, testing,
+  dev) and automatic updates. Builds are signed in CI and verified by the root helper
+  before anything is installed.
+- Switch networks (`switch_nets` in the installer answers, `--switch-nets`): the monitor may
+  reach switches in several networks for SNMP and CoA, not only the management subnet.
 
 ### Fixed
+- `install.sh --phase app` without answers (and updates) no longer resets the monitor's
+  allowed network to the `192.0.2.0/24` example; it keeps the installed list.
+- A switch outside the allowed networks is reported as such, instead of Net-SNMP's
+  "Unknown engine ID (Operation not permitted)" with advice about the switch.
 - Updates that change the nginx site or firewall template keep the server's management
   subnet, portal address, server name, resolvers and OCSP responder (from `site.yaml`, else
   the installed nginx site or firewall table) instead of the example defaults, which could
