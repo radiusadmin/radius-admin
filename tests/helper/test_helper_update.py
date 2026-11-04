@@ -235,3 +235,96 @@ def test_failed_unit_start_is_recorded(uenv):
     r = uenv.call({"action": "update_install", "version": "0.2.0"})
     assert r["ok"] is False and "could not start" in r["message"]
     assert state(uenv)["state"] == "failed"
+
+
+# ----------------------------------------------------------------------------- install log
+
+LOGNAME = "update-0.2.0-20261104T120000Z.log"
+
+
+@pytest.fixture
+def lenv(uenv):
+    uenv.logs = os.path.join(uenv.root, "logs")
+    os.makedirs(uenv.logs)
+    with open(uenv.conf, "a") as fh:
+        fh.write("update_log_dir = %s\n" % uenv.logs)
+    return uenv
+
+
+def _log_state(e, name=LOGNAME, directory=None, text=None, state_="installing"):
+    os.makedirs(e.work, mode=0o700, exist_ok=True)
+    path = os.path.join(directory or e.logs, name)
+    _write(os.path.join(e.work, "update-state.json"),
+           json.dumps({"state": state_, "version": "0.2.0", "log": path, "message": "installing"}), 0o600)
+    if text is not None:
+        with open(path, "wb") as fh:
+            fh.write(text)
+        os.chmod(path, 0o600)
+    return path
+
+
+def test_update_log_before_any_install(lenv):
+    r = lenv.call({"action": "update_log"})
+    assert r["ok"] and r["text"] == "" and r["log"] == "" and r["state"] == {}
+
+
+def test_update_log_reads_from_an_offset_in_whole_lines(lenv):
+    _write(os.path.join(lenv.root, "unitstate"), "active\n", 0o644)
+    _log_state(lenv, text=b"one\ntwo\nthr")
+    r = lenv.call({"action": "update_log"})
+    assert r["ok"], r
+    assert r["text"] == "one\ntwo\n" and r["offset"] == 8 and r["size"] == 11 and r["skipped"] == 0
+    assert r["log"] == LOGNAME and r["state"]["state"] == "installing"
+    with open(os.path.join(lenv.logs, LOGNAME), "ab") as fh:
+        fh.write(b"ee\n\xff\n")
+    r = lenv.call({"action": "update_log", "offset": 8})
+    assert r["text"] == "three\n�\n" and r["offset"] == 16
+    assert lenv.call({"action": "update_log", "offset": 16})["text"] == ""
+    r = lenv.call({"action": "update_log", "offset": 999})       # another file: from the start
+    assert r["text"].startswith("one\n") and r["offset"] == 16
+
+
+def test_update_log_sends_only_the_tail_of_a_long_log(lenv):
+    _log_state(lenv, text=b"".join(b"line %06d\n" % i for i in range(20000)), state_="done")
+    r = lenv.call({"action": "update_log"})
+    assert r["ok"] and r["skipped"] > 0 and len(r["text"].encode()) <= 64 * 1024
+    assert r["text"].endswith("line 019999\n") and r["offset"] == r["size"]
+
+
+def test_update_log_marks_a_vanished_install_as_failed(lenv):
+    _log_state(lenv, text=b"x\n")                         # unit inactive, state installing
+    r = lenv.call({"action": "update_log"})
+    assert r["ok"] and r["state"]["state"] == "failed"
+
+
+@pytest.mark.parametrize("offset", [-1, "5", True, 1.5, 2 ** 60])
+def test_update_log_refuses_a_bad_offset(lenv, offset):
+    _log_state(lenv, text=b"x\n")
+    r = lenv.call({"action": "update_log", "offset": offset})
+    assert r["ok"] is False and "offset" in r["message"]
+
+
+def test_update_log_refuses_other_files(lenv):
+    secret = os.path.join(lenv.root, LOGNAME)
+    _log_state(lenv, directory=lenv.root, text=b"not a log\n")     # outside update_log_dir
+    r = lenv.call({"action": "update_log"})
+    assert r["ok"] is False and "not an install log" in r["message"]
+    _log_state(lenv, name="helper.conf", text=b"x\n")             # not an install log name
+    assert lenv.call({"action": "update_log"})["ok"] is False
+    _log_state(lenv, name="../" + LOGNAME)
+    assert lenv.call({"action": "update_log"})["ok"] is False
+    link = _log_state(lenv)
+    os.symlink(secret, link)                                      # symlink: not followed
+    r = lenv.call({"action": "update_log"})
+    assert r["ok"] is False and "not a log" not in r.get("text", "")
+    os.unlink(link)
+    _log_state(lenv, text=b"x\n")
+    os.chown(link, lenv.stager.pw_uid, lenv.stager.pw_gid)         # not owned by root
+    r = lenv.call({"action": "update_log"})
+    assert r["ok"] is False and "owned by root" in r["message"]
+
+
+def test_update_log_of_a_removed_file(lenv):
+    _log_state(lenv)
+    r = lenv.call({"action": "update_log"})
+    assert r["ok"] and r["text"] == "" and "gone" in r["message"]

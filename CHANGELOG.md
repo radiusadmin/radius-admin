@@ -7,7 +7,19 @@ release, so previews sort after it.
 
 ## Unreleased
 
+### Changed
+- Pages that wait for something no longer reload every few seconds: Check now and Install on
+  the Updates page, SNMP tests, session actions (CoA), Refresh now on the switch monitoring
+  page and the test alert show a spinner and update once, when the result is there. Buttons
+  for slow actions (Validate, Apply, Roll back) show a spinner while the server works.
+- Confirmations (delete, apply, roll back, role changes, …) open in the console's own dialog
+  instead of the browser's pop-up box, with the action named on the button.
+- The Updates page has a **Details** drop-down with the install log, live while an update runs.
+  After updating from 0.2.0 it works from the next update on (it needs the new root helper).
+
 ### Fixed
+- The "1" next to Updates in the menu goes away as soon as the update is installed; it used to
+  stay until the next update check.
 - Updates keep how the server trusts the directory: the TLS settings of the LDAP module
   (`ca_file`, `ca_path`, client certificate, `start_tls`, `require_cert`, `check_crl`) and
   its `port` come from the installed `mods-available/ldap`, like the bind account, search

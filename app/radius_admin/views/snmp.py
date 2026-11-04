@@ -6,7 +6,9 @@ an immediate refresh or test one switch. The web app never sends SNMP itself: it
 queues the work and radius-admin-snmp.service (the only component allowed onto the
 network) carries it out.
 """
-from flask import Blueprint, abort, current_app, g, redirect, render_template, request, url_for
+import datetime
+
+from flask import Blueprint, abort, current_app, g, jsonify, redirect, render_template, request, url_for
 
 from .. import db
 from ..flashing import flash
@@ -25,6 +27,21 @@ def profile():
                         " auto_update_ports, refresh_requested_at, updated_at, updated_by, coa_port,"
                         " auth_pass_enc IS NOT NULL AS auth_set, priv_pass_enc IS NOT NULL AS priv_set"
                         " FROM ui.snmp_profile WHERE id = 1")
+
+
+REFRESH_WAIT = datetime.timedelta(minutes=3)    # a requested refresh that takes longer has stalled
+
+
+def refresh_pending(p):
+    """True while a requested refresh has not yet polled every switch (for REFRESH_WAIT)."""
+    req = p and p["enabled"] and p["refresh_requested_at"]
+    if not req:
+        return False
+    r = db.query_one("SELECT now() - %s < %s AS recent, EXISTS (SELECT 1 FROM ui.radius_client c"
+                     " LEFT JOIN ui.switch_status s ON s.client_id = c.id"
+                     " WHERE c.is_switch AND (s.polled_at IS NULL OR s.polled_at < %s)) AS waiting",
+                     (req, REFRESH_WAIT, req))
+    return bool(r["recent"] and r["waiting"])
 
 
 def overview():
@@ -105,7 +122,8 @@ def index():
                      " ORDER BY t.id DESC LIMIT 10")
     clients = db.query("SELECT id, name, ipaddr, is_switch, description FROM ui.radius_client ORDER BY name")
     return render_template("snmp/index.html", p=form, errors=errors, ov=overview(), tests=tests,
-                           clients=clients, protocols=AUTH_PROTOCOLS), (400 if errors else 200)
+                           clients=clients, protocols=AUTH_PROTOCOLS, refreshing=refresh_pending(p)), \
+        (400 if errors else 200)
 
 
 @bp.route("/devices", methods=["POST"])
@@ -144,8 +162,15 @@ def refresh():
     else:
         db.execute("UPDATE ui.snmp_profile SET refresh_requested_at = now() WHERE id = 1")
         ev("snmp.refresh", object_type="snmp_profile", object_id=1)
-        flash("Refresh requested. Results appear within a minute.", "success")
+        if request.form.get("next_page") == "clients":
+            flash("Refresh requested. Results appear within a minute.", "success")
     return redirect(request.form.get("next_page") == "clients" and url_for("clients.index") or url_for("snmp.index"))
+
+
+@bp.route("/refresh/status")
+@role_required("operator")
+def refresh_status():
+    return jsonify(done=not refresh_pending(profile()))
 
 
 @bp.route("/test", methods=["POST"])
@@ -173,3 +198,12 @@ def test_result(tid):
         abort(404)
     p = profile()
     return render_template("snmp/test.html", t=t, p=p, blocked=is_blocked(t["message"]))
+
+
+@bp.route("/test/<int:tid>/status")
+@login_required
+def test_status(tid):
+    t = db.query_one("SELECT done_at FROM ui.snmp_test WHERE id = %s", (tid,))
+    if t is None:
+        abort(404)
+    return jsonify(done=t["done_at"] is not None)

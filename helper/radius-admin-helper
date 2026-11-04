@@ -9,8 +9,10 @@
 #   * Settings come only from a root-owned config file (default
 #     /etc/radius-admin/helper.conf, overridable only on the command line, i.e. by
 #     the root-owned systemd unit). Nothing in the request selects paths or programs.
-#   * The only request inputs are "action" (fixed set), "backup_id" (strict regex) and,
-#     for update_install, "version" (strict regex), "allow_downgrade" and "actor".
+#   * The only request inputs are "action" (fixed set), "backup_id" (strict regex),
+#     for update_install, "version" (strict regex), "allow_downgrade" and "actor", and
+#     for update_log, "offset" (a non-negative integer; the log is the one named in the
+#     helper's own update-state.json, re-checked against update_log_dir).
 #   * Updates (SPEC section 16): the downloaded manifest is copied into the helper's own
 #     directory and its ECDSA P-384 signature verified there with the pinned public key
 #     from helper.conf, then the bundle's SHA-384 against the manifest; only then is the
@@ -55,9 +57,11 @@ OUTPUT_LINES = 200
 BACKUP_ID_RE = re.compile(r"^\d{8}T\d{6}Z$")
 SAFE_ENV = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C", "LC_ALL": "C"}
 ACTIONS = ("status", "validate", "apply", "rollback", "update_status", "update_check",
-           "update_install")
+           "update_install", "update_log")
 UPDATE_VERSION_RE = re.compile(r"^(\d{1,4})\.(\d{1,4})\.(\d{1,4})(?:-(dev|rc)\.(\d{1,6}))?\Z")
 UPDATE_CHANNELS = ("main", "testing", "dev")
+UPDATE_LOG_RE = re.compile(r"^update-\d{1,4}\.\d{1,4}\.\d{1,4}(?:-(?:dev|rc)\.\d{1,6})?-\d{8}T\d{6}Z\.log\Z")
+UPDATE_LOG_CHUNK = 64 * 1024
 ACTOR_RE = re.compile(r"^[a-z0-9._-]{1,64}\Z")
 MAX_MANIFEST = 256 * 1024
 MAX_SIGNATURE = 1024
@@ -111,6 +115,7 @@ CONFIG_DEFAULTS = {
     "update_check_unit": "radius-admin-update-check.service",
     "update_install_unit": "radius-admin-update-install",
     "update_max_mib": "256",
+    "update_log_dir": "/var/log/radius-admin",
 }
 # Worst case for apply with defaults: lock 10 + validate 30 + (restart 20 + wait 15)
 # + rollback (restart 20 + wait 15) = 110 s, inside the app's helper_timeout (120 s).
@@ -155,7 +160,8 @@ def load_config(path):
             raise HelperError("helper config %s must be a regular file owned by root "
                               "and not group/world writable" % path)
     for key in ("radiusd", "raddb", "staging_dir", "work_dir", "systemctl", "runuser",
-                "ss", "fips_file", "update_dir", "update_pubkey", "openssl", "build_file", "portal_site"):
+                "ss", "fips_file", "update_dir", "update_pubkey", "openssl", "build_file", "portal_site",
+                "update_log_dir"):
         cfg[key] = _abs(cfg, key)
     if not re.match(r"^[A-Za-z0-9@_.:-]{1,128}$", cfg["service"]):
         raise HelperError("helper.conf: invalid service name")
@@ -1213,7 +1219,8 @@ def _copy_out(fd, dst, limit, digest=None):
     return total
 
 
-def act_update_status(cfg, req):
+def current_update_state(cfg):
+    """update-state.json; a queued/installing state whose unit ended is marked failed."""
     st = read_update_state(cfg)
     if st.get("state") in UPDATE_ACTIVE and UPDATE_VERSION_RE.match(st.get("version", "")):
         unit = install_unit(cfg, st["version"])
@@ -1224,9 +1231,71 @@ def act_update_status(cfg, req):
                 st.update(state="failed", finished=utc_now(),
                           message="the install stopped without a result (journalctl -u %s)" % unit)
                 write_update_state(cfg, st)
+    return st
+
+
+def act_update_status(cfg, req):
+    st = current_update_state(cfg)
     fp = pubkey_fingerprint(cfg)
     return {"ok": True, "message": "ok", "installed": installed_build(cfg),
             "key_present": fp is not None, "key_fingerprint": fp or "", "state": st}
+
+
+def act_update_log(cfg, req):
+    """Part of the install log named in update-state.json, from byte `offset`: at most
+    UPDATE_LOG_CHUNK bytes, ending at a line break when there is one (only the newest
+    UPDATE_LOG_CHUNK bytes when the caller is further behind; `skipped` counts the rest)."""
+    offset = req.get("offset", 0)
+    if isinstance(offset, bool) or not isinstance(offset, int) or not 0 <= offset < 2 ** 53:
+        raise HelperError("invalid offset (expected a non-negative integer)")
+    st = current_update_state(cfg)
+    resp = {"ok": True, "message": "ok", "state": st, "log": "", "offset": 0, "size": 0,
+            "skipped": 0, "text": ""}
+    path = st.get("log") if isinstance(st.get("log"), str) else ""
+    if not path:
+        resp["message"] = "no install log yet"
+        return resp
+    d, name = os.path.split(path)
+    if os.path.normpath(d) != cfg["update_log_dir"] or not UPDATE_LOG_RE.match(name):
+        raise HelperError("the update state names a file that is not an install log")
+    try:
+        dirfd = os.open(cfg["update_log_dir"], os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    except OSError as e:
+        raise HelperError("cannot open %s: %s" % (cfg["update_log_dir"], e.strerror))
+    try:
+        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK, dir_fd=dirfd)
+    except FileNotFoundError:
+        resp["message"] = "the install log %s is gone" % name
+        return resp
+    except OSError as e:
+        raise HelperError("cannot open the install log: %s" % e.strerror)
+    finally:
+        os.close(dirfd)
+    try:
+        fst = os.fstat(fd)
+        if not stat.S_ISREG(fst.st_mode) or fst.st_uid != 0:
+            raise HelperError("the install log must be a regular file owned by root")
+        size = fst.st_size
+        if offset > size:                       # another file than the caller read: start again
+            offset = 0
+        skipped = 0
+        if size - offset > UPDATE_LOG_CHUNK:
+            skipped = size - UPDATE_LOG_CHUNK - offset
+            offset = size - UPDATE_LOG_CHUNK
+        os.lseek(fd, offset, os.SEEK_SET)
+        data = b""
+        while len(data) < UPDATE_LOG_CHUNK:
+            chunk = os.read(fd, UPDATE_LOG_CHUNK - len(data))
+            if not chunk:
+                break
+            data += chunk
+    finally:
+        os.close(fd)
+    if data and not data.endswith(b"\n") and b"\n" in data:
+        data = data[:data.rindex(b"\n") + 1]   # whole lines; the rest comes next time
+    resp.update(log=name, offset=offset + len(data), size=size, skipped=skipped,
+                text=data.decode("utf-8", "replace"))
+    return resp
 
 
 def act_update_check(cfg, req):
@@ -1327,7 +1396,8 @@ def utc_now():
 
 HANDLERS = {"status": act_status, "validate": act_validate, "apply": act_apply,
             "rollback": act_rollback, "update_status": act_update_status,
-            "update_check": act_update_check, "update_install": act_update_install}
+            "update_check": act_update_check, "update_install": act_update_install,
+            "update_log": act_update_log}
 
 
 # --------------------------------------------------------------------------- request I/O

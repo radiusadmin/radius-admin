@@ -370,6 +370,15 @@ Actions:
   SHA-384, refuses a version not newer than the installed one unless `allow_downgrade` is
   JSON `true`, refuses while another install runs, writes the state and starts
   `<update_install_unit>@<version>.service`. Only `allow_downgrade: true` (the boolean) counts.
+- `update_log` `{"offset": <int ≥ 0>|absent}` → `{"ok":true, "state": {as update_status},
+  "log": "<file name>"|"", "offset": int, "size": int, "skipped": int, "text": str}`: the
+  install log named by the state's `log`, from byte `offset`. Read-only. The name must be
+  `update-<version>-<YYYYmmddTHHMMSSZ>.log` directly in `update_log_dir` (helper.conf,
+  default `/var/log/radius-admin`), opened O_NOFOLLOW, a regular file owned by root. At most
+  64 KiB per answer, cut after the last newline when there is one; when the caller is
+  further behind, only the newest 64 KiB (`skipped` = bytes left out). An `offset` past the
+  end starts again at 0. Invalid UTF-8 is replaced. No log yet, or the file gone: ok with
+  empty `text` and a message (section 23).
 Staging path is fixed in helper.conf, never taken from the request. Helper safety
 checks: files ≤ 1 MiB, UTF-8, no NUL; clients file must consist only of `client <name> {`
 blocks containing whitelisted keys (ipaddr, ipv4addr, ipv6addr, secret, shortname,
@@ -812,8 +821,10 @@ CSV columns (header row required, exact names, any order tolerated by name):
 - **Updates page** (`/updates`, admin; settings and install need step-up): installed →
   latest version, the notes of every newer build (a safe Markdown subset), "restarts
   FreeRADIUS" marks, install (only the build the last check downloaded; a downgrade needs an
-  explicit confirmation), install progress (refreshes every 10 s) and the last result,
-  "Check now" (not in off mode), and the settings. A nav badge shows an available update.
+  explicit confirmation), install progress (section 23) and the last result,
+  "Check now" (not in off mode), and the settings. A nav badge shows an available update
+  while the check's `installed_version` is the installed build (it goes once that build is
+  installed, without waiting for the next check).
   Audited `update.settings`, `update.check`, `update.install_requested`.
 
 ## 17. Change (2026-11-02): display time zone
@@ -1006,3 +1017,52 @@ Step 4 of username/password 802.1X. Same exception and FIPS rule as section 20.
   capped at `MAX_PAGE` (10,000) pages (`count(*)` over a `LIMIT` subquery); a capped count shows
   as "500,000+". A page number past the end shows the last page; anything unparsable is page 1.
 - **Links** keep the active filters and leave out empty ones.
+
+## 23. Change (2026-11-04): progress indicators instead of page refreshes
+
+Pages that wait for work done elsewhere (the monitor service, the update check, the install
+unit) show a spinner and ask a JSON status URL; they reload once, when the work is done. The
+meta refresh stays only inside `<noscript>`, so every page still works without JavaScript.
+
+- **Contract.** `GET <status URL>` → `{"done": bool, "message": str?}` (`application/json`).
+  `_macros.html`: `live_status(url, message, interval, limit, timeout)` renders the spinner
+  and `data-live`; `noscript_refresh(s)` the fallback; `busy_button(label)` a disabled button
+  with a spinner for work already running. `app.js` polls every `interval` seconds, shows
+  "Lost contact with the console; retrying…" after two failed requests (the console restarts
+  during an install), reloads when `done`, reloads at once when the answer is not JSON (signed
+  out), and stops after `limit` seconds with the `timeout` text.
+- **Busy buttons.** A form with `data-busy="<label>"` shows a spinner on the button that
+  submitted it (and the label, if not empty) until the next page; a cancelled `data-confirm`
+  leaves it alone. Used by Check now, Install, Validate, Apply, Roll back, SNMP Refresh now and
+  Test, and Send test alert.
+- **Status URLs.**
+
+  | Page | URL (role) | Done when |
+  | --- | --- | --- |
+  | Updates, Check now | `/updates/status?wait=check` (admin; no helper call) | `ui.update_check.checked_at` ≥ `update_check_requested`, or 5 min passed (the page then says the check did not finish; forgotten after 1 h) |
+  | Updates, install | `/updates/status?wait=install` (admin) | the helper's state is not queued/installing; a helper that does not answer is "not done" |
+  | SNMP test | `/switch-monitoring/test/<id>/status` (signed in) | `ui.snmp_test.done_at` set |
+  | Session action (CoA) | `/sessions/coa/<id>/status` (signed in) | `ui.coa_request.done_at` set |
+  | Switch monitoring, Refresh now | `/switch-monitoring/refresh/status` (operator) | every switch has `ui.switch_status.polled_at` ≥ `refresh_requested_at`, or 3 min passed |
+  | Alerts, Send test alert | `/alerts/test/status` (admin) | a `test` alert opened at or after `test_requested_at`, or 2 min passed |
+
+  "Results appear within a minute" and "This page refreshes by itself" are gone from these
+  pages (Refresh now from the clients page keeps its message).
+- **Install log.** During an install, and after it for the last one, the Updates page has a
+  Details drop-down with the install log in a terminal-style box. It asks `GET /updates/log?
+  offset=N` (admin) every 2 s while open and the install runs (helper `update_log`, section
+  6), appends the text, keeps the view at the bottom unless the reader scrolled up, and keeps
+  at most 400,000 characters. The app removes terminal escape sequences and control
+  characters other than tab and newline; a lone carriage return becomes a newline. A helper
+  from an older release answers "unknown action": the box then says the log arrives with the
+  update, and the step messages above still show the progress. The drop-down stays open
+  across the reload that shows the result (sessionStorage, per tab).
+- **Confirmations.** `data-confirm` forms and the role select ask in a modal `<dialog>` built by
+  `app.js` (no `window.confirm`, except in browsers without `<dialog>`): the text up to the first
+  "?" is the title, the rest the explanation; the action button is named after the pressed
+  button ("Confirm" when that is longer than 32 characters) and is red for buttons with a
+  `danger` class or messages starting Delete/Remove/Disable, which open with Cancel focused.
+  Escape, Cancel and the backdrop cancel. On OK the form is submitted again with the same
+  button (`requestSubmit`), so validation and the busy spinner still apply.
+- Polling counts as activity for the idle session timeout while it runs (bounded by `limit`:
+  30 min for an install, at most 5 min elsewhere).

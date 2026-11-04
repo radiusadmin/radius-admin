@@ -1019,7 +1019,9 @@ channel, what changed in between, and whether the update restarts FreeRADIUS.
 - **Install** asks for step-up. The helper verifies the signature and the bundle's SHA-384, then
   `radius-admin-update-install@<version>` backs up the database, installs, checks the portal
   (the app, and nginx active and listening on 443) and FreeRADIUS, and rolls back if they do
-  not come up. The page refreshes while it runs.
+  not come up. While it runs the page shows the current step with a spinner; **Details** opens
+  the install log as it is written (the same file as below). The console restarts once during
+  the install, so the page may say it lost contact for a few seconds.
 
 Outbound access: the check service needs HTTPS to `api.github.com`, `github.com` and
 `objects.githubusercontent.com`. Behind a proxy, put `HTTPS_PROXY=http://proxy.example.net:3128`

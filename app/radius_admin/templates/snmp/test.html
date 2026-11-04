@@ -1,6 +1,7 @@
 {% extends "base.html" %}
+{% import "_macros.html" as m %}
 {% block title %}SNMP test{% endblock %}
-{% block head %}{% if not t.done_at %}<meta http-equiv="refresh" content="3">{% endif %}{% endblock %}
+{% block head %}{% if not t.done_at %}{{ m.noscript_refresh(3) }}{% endif %}{% endblock %}
 {% block content %}
 <header class="page-head"><div><h1>SNMP test · <span class="mono">{{ t.name }}</span></h1>
 <p class="lede mono">{{ t.ipaddr }}</p></div>
@@ -8,7 +9,8 @@
 <section class="panel narrow">
 {% if not t.done_at %}
   {% if not p.enabled %}<p class="flash flash-info" role="status">Switch monitoring is disabled, but the test still runs if credentials are set.</p>{% endif %}
-  <p role="status"><span class="tag tag-muted">Running</span> Waiting for the monitoring service… this page refreshes every few seconds.</p>
+  {{ m.live_status(url_for('snmp.test_status', tid=t.id), 'Testing ' ~ t.name ~ ' over SNMPv3…', interval=2, limit=180,
+                   timeout='No result yet: the monitoring service may not be running (systemctl status radius-admin-snmp). Reload this page to check again.') }}
 {% elif t.ok %}
   <p role="status"><span class="tag tag-ok">OK</span> {{ t.message }}</p>
 {% else %}
