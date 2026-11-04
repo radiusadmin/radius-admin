@@ -5,7 +5,7 @@ Each release has a section here. `main` builds are the stable releases (`0.2.0`)
 show the "Unreleased" section plus their commits. Bump `VERSION` on `dev` right after a
 release, so previews sort after it.
 
-## Unreleased
+## 0.2.0 — 2026-11-04
 
 ### Added
 - 802.1X with a username and password: EAP-TTLS with PAP inside, for local 802.1X users
