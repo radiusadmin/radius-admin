@@ -14,8 +14,8 @@
 {%- if errors and errors.get(name) %} aria-invalid="true" aria-describedby="{{ name }}-error{% if hint %} {{ name }}-hint{% endif %}"{% elif hint %} aria-describedby="{{ name }}-hint"{% endif -%}
 {%- endmacro %}
 
-{% macro post_button(action, label, cls='btn', confirm=None, fields=None) %}
-<form method="post" action="{{ action }}" class="inline"{% if confirm %} data-confirm="{{ confirm }}"{% endif %}>
+{% macro post_button(action, label, cls='btn', confirm=None, fields=None, busy=None) %}
+<form method="post" action="{{ action }}" class="inline"{% if confirm %} data-confirm="{{ confirm }}"{% endif %}{% if busy is not none %} data-busy="{{ busy }}"{% endif %}>
   {{ csrf() }}
   {% if fields %}{% for k, v in fields.items() %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endfor %}{% endif %}
   <button type="submit" class="{{ cls }}">{{ label }}</button>
@@ -82,3 +82,22 @@
 {% macro mac(value, show_vendor=True) -%}
 <span class="mono">{{ value|mac }}</span>{% if show_vendor %}{% set v = value|vendor %}{% if v %}<span class="cell-sub">{{ v }}</span>{% endif %}{% endif %}
 {%- endmacro %}
+
+{# Work that finishes in the background (SPEC section 23). live_status shows a spinner and
+   the message, and app.js asks `url` ({"done": bool, "message": str}) every `interval`
+   seconds, reloading the page when done; it gives up after `limit` seconds. Put
+   noscript_refresh(seconds) in the head block for browsers without JavaScript. #}
+{% macro live_status(url, message, interval=2, limit=300, timeout=None, cls='') %}
+<p class="live-status {{ cls }}" role="status" data-live="{{ url }}" data-live-interval="{{ interval }}" data-live-limit="{{ limit }}"{% if timeout %} data-live-timeout="{{ timeout }}"{% endif %}>
+  <span class="spinner" aria-hidden="true"></span>
+  <span data-live-message>{{ message }}</span>
+  <span class="small live-offline" data-live-offline hidden>Lost contact with the console; retrying…</span>
+  <noscript><span class="small muted">This page refreshes by itself.</span></noscript>
+</p>
+{% endmacro %}
+
+{% macro noscript_refresh(seconds) %}<noscript><meta http-equiv="refresh" content="{{ seconds }}"></noscript>{% endmacro %}
+
+{# A disabled button with a spinner, for work already running; app.js stops the spinner
+   when the live_status on the page gives up waiting. #}
+{% macro busy_button(label, cls='btn') %}<button type="button" class="{{ cls }} is-busy" disabled aria-busy="true" data-live-busy>{{ label }}</button>{% endmacro %}

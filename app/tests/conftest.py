@@ -181,6 +181,7 @@ class FakeHelper:
         self.backups = []
         self.update_state = {}          # what update_status reports as "state"
         self.key_present = True
+        self.update_log = ""             # what update_log reads from (the install log)
         self._sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self._sock.bind(path)
         self._sock.listen(8)
@@ -252,6 +253,13 @@ class FakeHelper:
             self.update_state = {"state": "queued", "version": req.get("version"), "message": "queued"}
             return {"ok": True, "action": a, "message": "update to %s started" % req.get("version"),
                     "version": req.get("version"), "restarts_freeradius": False}
+        if a == "update_log":
+            data = self.update_log.encode()
+            off = req.get("offset", 0)
+            off = 0 if off > len(data) else off
+            return {"ok": True, "action": a, "message": "ok", "state": self.update_state,
+                    "log": "update-0.2.0-20261104T120000Z.log" if data else "", "offset": len(data),
+                    "size": len(data), "skipped": 0, "text": data[off:].decode()}
         return {"ok": False, "action": a or "", "message": "unknown action"}
 
     def close(self):

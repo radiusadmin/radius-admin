@@ -1,14 +1,15 @@
 {% extends "base.html" %}
 {% import "_macros.html" as m %}
 {% block title %}{{ actions[r.action][0] }}{% endblock %}
-{% block head %}{% if r.done_at is none %}<meta http-equiv="refresh" content="2">{% endif %}{% endblock %}
+{% block head %}{% if r.done_at is none %}{{ m.noscript_refresh(2) }}{% endif %}{% endblock %}
 {% block content %}
 <header class="page-head"><div><h1>{{ actions[r.action][0] }}</h1>
 <p class="lede">{{ r.switch_name }} <span class="mono">{{ r.nas }}</span>{% if r.nas_port_id %} port <span class="mono">{{ r.nas_port_id }}</span>{% endif %} · <span class="mono">{{ r.username or r.calling_station_id }}</span></p></div>
 <div class="head-actions"><a class="btn btn-quiet" href="{{ url_for('sessions.index') }}">Back to sessions</a></div></header>
 <section class="panel narrow">
 {% if r.done_at is none %}
-  <p><span class="tag tag-muted">Sending</span> The monitoring service sends the request within a few seconds. This page refreshes by itself.</p>
+  {{ m.live_status(url_for('sessions.coa_status', rid=r.id), 'Sending the request to ' ~ r.switch_name ~ '…', interval=2, limit=120,
+                   timeout='No answer yet. Reload this page to check again.') }}
   {% if mon and mon.radclient.startswith('unavailable') %}<p class="warn-text">Session actions cannot be sent: {{ mon.radclient[13:] }}</p>{% endif %}
   {% if not mon or not mon.heartbeat_at %}<p class="warn-text">The monitoring service has not reported in. Check <span class="mono">systemctl status radius-admin-snmp</span>.</p>{% endif %}
 {% elif r.ok %}

@@ -254,7 +254,7 @@ def test_rbac(app, browser, superconn, logged_in, make_user):
     r = browser.post("/switch-monitoring/test", {"client_id": "1"}, csrf_page="/clients/")
     assert r.status_code == 302 and q(superconn, "SELECT count(*) FROM ui.snmp_test")[0][0] == 1
     t = browser.text(browser.get(r.headers["Location"]))
-    assert "Waiting for the monitoring service" in t and 'http-equiv="refresh"' in t
+    assert "Testing sw1 over SNMPv3" in t and "data-live=" in t
     from conftest import Browser, login
     v = Browser(app, ip="192.0.2.51")
     login(v, superconn, make_user(username="viewer1", role="viewer"))

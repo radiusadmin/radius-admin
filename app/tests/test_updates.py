@@ -1,4 +1,5 @@
 """Updates (SPEC section 16): versions, the update check service, the Updates page."""
+import datetime
 import hashlib
 import json
 import os
@@ -317,7 +318,7 @@ def test_install_asks_the_helper_for_the_offered_build_only(browser, superconn, 
     row = q(superconn, "SELECT success, detail FROM ui.audit_log WHERE action='update.install_requested'")[0]
     assert row[0] is True and row[1]["to"] == "0.2.0-dev.5" and row[1]["from"] == "0.1.0"
     t = browser.text(browser.get("/updates"))
-    assert "Installing 0.2.0-dev.5" in t and 'http-equiv="refresh"' in t
+    assert "Installing 0.2.0-dev.5…" in t and "http-equiv=\"refresh\"" in t
 
 
 def test_downgrade_needs_confirmation(browser, superconn, logged_in, page, app):
@@ -338,3 +339,148 @@ def test_last_result_is_shown(browser, logged_in, page, app):
     logged_in("admin")
     t = browser.text(browser.get("/updates"))
     assert "rolled back" in t and "2026-11-02 10:00 UTC" in t
+
+
+# ----------------------------------------------------------------------------- progress
+
+def test_check_now_shows_a_spinner_until_the_check_is_recorded(browser, superconn, logged_in, page, app):
+    logged_in("admin")
+    t = browser.text(browser.get("/updates"))
+    assert 'data-busy="Checking…"' in t and "data-live=" not in t
+    r = browser.post("/updates/check", {}, csrf_page="/updates")
+    assert r.status_code == 302
+    t = browser.text(browser.get("/updates"))
+    assert "Checking GitHub for new builds" in t and 'data-live="/updates/status?wait=check"' in t
+    assert 'class="btn is-busy" disabled' in t and "Reload this page in a minute" not in t
+    assert '<noscript><meta http-equiv="refresh" content="5"></noscript>' in t
+    d = browser.get("/updates/status").get_json()
+    assert d["done"] is False and d["checking"] is True and "Checking GitHub" in d["message"]
+    offer(superconn)                                   # the check service records its result
+    q(superconn, "UPDATE ui.update_check SET checked_at = now() + interval '1 second'")
+    assert browser.get("/updates/status").get_json()["done"] is True
+    t = browser.text(browser.get("/updates"))
+    assert "data-live=" not in t and "Install 0.2.0-dev.5" in t and "noscript" not in t.split("</head>")[0]
+
+
+def test_a_check_that_never_reports_stops_spinning(browser, superconn, logged_in, page):
+    logged_in("admin")
+    q(superconn, "INSERT INTO ui.setting (key, value) VALUES ('update_check_requested', %s)"
+                 " ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+      ((datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(minutes=10)).isoformat(),))
+    t = browser.text(browser.get("/updates"))
+    assert "did not finish within five minutes" in t and "data-live=" not in t
+    assert browser.get("/updates/status").get_json()["done"] is True
+
+
+def test_check_progress():
+    from radius_admin.views.updates import check_progress
+    now = datetime.datetime(2026, 11, 4, 12, 0, tzinfo=datetime.timezone.utc)
+    req = lambda m: {"mode": "notify", "requested": (now - datetime.timedelta(minutes=m)).isoformat()}  # noqa: E731
+    assert check_progress(req(1), None, now) == "running"
+    assert check_progress(req(1), {"checked_at": now}, now) == ""
+    assert check_progress(req(1), {"checked_at": now - datetime.timedelta(minutes=2)}, now) == "running"
+    assert check_progress(req(6), None, now) == "stalled"
+    assert check_progress(req(90), None, now) == ""
+    assert check_progress(dict(req(1), mode="off"), None, now) == ""
+    assert check_progress({"mode": "notify", "requested": ""}, None, now) == ""
+    assert check_progress({"mode": "notify", "requested": "2026-11-04T12:00:00"}, None, now) == ""   # naive
+
+
+def test_install_shows_a_busy_button_and_live_status(browser, superconn, logged_in, page, app):
+    logged_in("admin")
+    offer(superconn)
+    t = browser.text(browser.get("/updates"))
+    assert 'data-busy="Starting the install…"' in t and "data-update-log" not in t
+    browser.post("/updates/install", {"version": "0.2.0-dev.5"}, csrf_page="/updates")
+    app.fake_helper.update_state = {"state": "installing", "version": "0.2.0-dev.5", "message": "backing up the database",
+                                    "log": "/var/log/radius-admin/update-0.2.0-dev.5-20261104T120000Z.log"}
+    t = browser.text(browser.get("/updates"))
+    assert "Installing 0.2.0-dev.5…" in t and 'class="btn btn-primary is-busy" disabled' in t
+    assert "Backing up the database…" in t and 'data-live="/updates/status?wait=install"' in t
+    assert '<noscript><meta http-equiv="refresh" content="10"></noscript>' in t
+    assert 'data-update-log="/updates/log" data-live-log' in t and "<summary>Details</summary>" in t
+    d = browser.get("/updates/status").get_json()
+    assert d == {"done": False, "helper": True, "installing": True, "checking": False, "state": "installing",
+                 "version": "0.2.0-dev.5", "message": "Backing up the database…"}
+    app.fake_helper.fail_next["update_status"] = {"message": "helper unavailable (Connection refused)"}
+    d = browser.get("/updates/status").get_json()                 # helper restarting: keep waiting
+    assert d["done"] is False and d["helper"] is False
+    app.fake_helper.update_state = dict(app.fake_helper.update_state, state="done", message="0.2.0-dev.5 installed")
+    assert browser.get("/updates/status").get_json()["done"] is True
+    t = browser.text(browser.get("/updates"))
+    assert "data-live=" not in t and "is-busy" not in t
+    assert 'data-update-log="/updates/log">' in t                  # the last log stays readable
+
+
+def test_install_log_streams_from_an_offset(browser, logged_in, page, app):
+    logged_in("admin")
+    app.fake_helper.update_state = {"state": "installing", "version": "0.2.0", "log": "/var/log/radius-admin/x"}
+    app.fake_helper.update_log = "== start\n\x1b[1;32mok\x1b[0m\rprogress 50%\r\nbell\x07\tdone\n"
+    d = browser.get("/updates/log").get_json()
+    assert d["available"] and d["running"] and d["name"] == "update-0.2.0-20261104T120000Z.log"
+    assert d["text"] == "== start\nok\nprogress 50%\nbell\tdone\n"            # escapes and controls removed
+    assert d["offset"] == len(app.fake_helper.update_log.encode())
+    req = [r for r in app.fake_helper.requests if r["action"] == "update_log"]
+    assert req[-1] == {"action": "update_log", "offset": 0}
+    browser.get("/updates/log?offset=9")
+    assert app.fake_helper.requests[-1]["offset"] == 9
+    for bad in ("-1", "x", "1" * 20):
+        browser.get("/updates/log?offset=" + bad)
+        assert app.fake_helper.requests[-1]["offset"] == 0
+    app.fake_helper.fail_next["update_log"] = {"message": "unknown action"}     # helper of the old release
+    d = browser.get("/updates/log").get_json()
+    assert d["available"] is False and "after this update" in d["message"]
+
+
+def test_install_log_is_for_admins_only(browser, logged_in, page):
+    logged_in("operator")
+    for url in ("/updates/log", "/updates/status"):
+        r = browser.get(url)
+        assert r.status_code in (302, 403) and not r.is_json
+
+
+def test_nav_badge_goes_away_once_the_offered_build_is_installed(browser, superconn, logged_in, page, app):
+    logged_in("admin")
+    offer(superconn)                                          # check ran on 0.1.0, offers 0.2.0-dev.5
+    badge = 'title="Update available: 0.2.0-dev.5"'
+    assert badge in browser.text(browser.get("/dashboard"))
+    app.fake_helper.update_state = {"state": "installing", "version": "0.2.0-dev.5", "message": "installing"}
+    assert badge in browser.text(browser.get("/updates"))     # still on offer while it installs
+    # the install replaced BUILD.json and finished; the check row still names the old build
+    page.write_text(json.dumps({"version": "0.2.0-dev.5", "channel": "dev", "commit": "abcdef1234"}))
+    app.fake_helper.update_state = {"state": "done", "version": "0.2.0-dev.5", "message": "0.2.0-dev.5 installed"}
+    assert browser.get("/updates/status").get_json()["done"] is True
+    for url in ("/updates", "/dashboard"):
+        t = browser.text(browser.get(url))
+        assert "Update available" not in t and "update available</span>" not in t, url
+
+
+def test_install_step_sits_beside_the_busy_button_without_a_second_spinner(browser, superconn, logged_in, page, app):
+    logged_in("admin")
+    app.fake_helper.update_state = {"state": "installing", "version": "0.2.0-dev.5", "message": "backing up the database"}
+    t = browser.text(browser.get("/updates"))
+    block = t.split('<div class="update-running">', 1)[1].split("</div>", 1)[0]
+    assert block.index("Installing 0.2.0-dev.5…</button>") < block.index("Backing up the database…")
+    assert "live-quiet update-step" in block                       # its spinner is hidden by CSS
+    assert ".live-quiet > .spinner" in open(os.path.join(os.path.dirname(__file__), "..", "radius_admin",
+                                                         "static", "app.css")).read()
+
+
+def test_a_finished_install_is_done_even_while_a_check_is_pending(browser, superconn, logged_in, page, app):
+    """The install indicator waits for the install only; the check indicator for the check only."""
+    logged_in("admin")
+    browser.post("/updates/check", {}, csrf_page="/updates")                  # check requested, not recorded
+    app.fake_helper.update_state = {"state": "installing", "version": "0.2.0-dev.5", "message": "installing"}
+    assert browser.get("/updates/status?wait=install").get_json()["done"] is False
+    assert browser.get("/updates/status?wait=check").get_json()["done"] is False
+    app.fake_helper.update_state = {"state": "done", "version": "0.2.0-dev.5", "message": "0.2.0-dev.5 installed"}
+    d = browser.get("/updates/status?wait=install").get_json()
+    assert d["done"] is True and d["message"] == ""
+    assert browser.get("/updates/status?wait=check").get_json()["done"] is False
+    assert browser.get("/updates/status").get_json()["done"] is False         # both: still the check
+    n = len(app.fake_helper.requests)
+    browser.get("/updates/status?wait=check")
+    assert not [r for r in app.fake_helper.requests[n:] if r["action"] == "update_status"]   # no helper call
+    offer(superconn)
+    q(superconn, "UPDATE ui.update_check SET checked_at = now() + interval '1 second'")
+    assert browser.get("/updates/status?wait=check").get_json()["done"] is True

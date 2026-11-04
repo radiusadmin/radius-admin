@@ -11,7 +11,7 @@ switch's dynamic-authorization port (Catalyst 1300: UDP 1700, firmware 4.1.3.36+
 """
 import datetime
 
-from flask import Blueprint, abort, g, redirect, render_template, request, url_for
+from flask import Blueprint, abort, g, jsonify, redirect, render_template, request, url_for
 
 from .. import db, oui, paging
 from ..flashing import flash
@@ -167,6 +167,15 @@ def coa(sid):
        detail={"action": action, "switch": c["name"], "nas_ip": s["nas"], "port": s["nasportid"],
                "station": s["callingstationid"], "user": s["username"], "request_id": row["id"]})
     return redirect(url_for("sessions.coa_result", rid=row["id"]))
+
+
+@bp.route("/coa/<int:rid>/status")
+@login_required
+def coa_status(rid):
+    r = db.query_one("SELECT done_at FROM ui.coa_request WHERE id = %s", (rid,))
+    if r is None:
+        abort(404)
+    return jsonify(done=r["done_at"] is not None)
 
 
 @bp.route("/coa/<int:rid>")

@@ -17,8 +17,8 @@
   </div>
   {% if has_role('operator') %}
   <div class="apply-actions">
-    <form method="post" action="{{ url_for('apply.validate') }}" class="inline">{{ m.csrf() }}<button class="btn" type="submit">Validate</button></form>
-    <form method="post" action="{{ url_for('apply.apply') }}" class="inline" data-confirm="Apply the configuration and restart FreeRADIUS now?">
+    <form method="post" action="{{ url_for('apply.validate') }}" class="inline" data-busy="Validating…">{{ m.csrf() }}<button class="btn" type="submit">Validate</button></form>
+    <form method="post" action="{{ url_for('apply.apply') }}" class="inline" data-confirm="Apply the configuration and restart FreeRADIUS now?" data-busy="Applying…">
       {{ m.csrf() }}<input type="hidden" name="expected" value="{{ policy_sha }}:{{ clients_sha }}">
       <input type="hidden" name="return_to" value="{{ url_for('apply.index') }}">
       <button class="btn btn-primary" type="submit">Apply and restart</button></form>
@@ -58,7 +58,7 @@
   <div class="panel-head"><h2>Roll back</h2></div>
   {% if backups %}
   <p>Restore the files that were live before an earlier apply. FreeRADIUS restarts. Database contents are not changed, so the console will show those differences as pending.</p>
-  <form method="post" action="{{ url_for('apply.rollback') }}" class="inline-form" data-confirm="Restore this backup and restart FreeRADIUS?">
+  <form method="post" action="{{ url_for('apply.rollback') }}" class="inline-form" data-confirm="Restore this backup and restart FreeRADIUS?" data-busy="Rolling back…">
     {{ m.csrf() }}<input type="hidden" name="return_to" value="{{ url_for('apply.index') }}">
     <label for="backup_id">Backup</label>
     <select id="backup_id" name="backup_id" class="mono">{% for b in backups %}<option>{{ b }}</option>{% endfor %}</select>

@@ -38,6 +38,8 @@ radius_port = 1812
 # update_check_unit = radius-admin-update-check.service
 # update_install_unit = radius-admin-update-install
 # update_max_mib = 256
+# directory of the install logs (update-<version>-<time>.log) that update_log may read
+# update_log_dir = /var/log/radius-admin
 
 # timeouts (seconds). Worst-case apply = lock + validate + 2 x (restart + wait)
 # = 10 + 30 + 2 x (20 + 15) = 110 s; must stay below the app's helper_timeout (120).
