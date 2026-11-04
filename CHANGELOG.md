@@ -5,6 +5,17 @@ Each release has a section here. `main` builds are the stable releases (`0.2.0`)
 show the "Unreleased" section plus their commits. Bump `VERSION` on `dev` right after a
 release, so previews sort after it.
 
+## Unreleased
+
+### Fixed
+- Updates keep how the server trusts the directory: the TLS settings of the LDAP module
+  (`ca_file`, `ca_path`, client certificate, `start_tls`, `require_cert`, `check_crl`) and
+  its `port` come from the installed `mods-available/ldap`, like the bind account, search
+  base and server already did. An update to 0.2.0 failed on servers whose directory CA is not
+  at the package's `certs/site/ca.pem` ("Unable to check file … ca_file"; the previous
+  configuration was restored). The AD login test before installing now names a missing CA
+  file instead of reporting "Can't contact LDAP server".
+
 ## 0.2.0 — 2026-11-04
 
 ### Added

@@ -1068,8 +1068,14 @@ migration (new switch-admin passwords, MAB devices) exists only in PostgreSQL.
   `identity` / `password` line (test with
   `ldapwhoami -x -H ldaps://dc01.example.net -D '<identity>' -W`), then
   `sudo systemctl start freeradius`. The installer keeps the live `identity`, `password`,
-  `base_dn` and `server` lines when it installs FreeRADIUS files, and tests the AD login
-  before installing anything (it refuses on “Invalid credentials”).
+  `base_dn`, `server` and `port` lines and the TLS settings (`ca_file`, `ca_path`, client
+  certificate, `start_tls`, `require_cert`, `check_crl`) when it installs FreeRADIUS files,
+  and tests the AD login before installing anything (it refuses on “Invalid credentials”).
+* **Update fails in the freeradius phase with `Unable to check file '…/ca.pem'` and
+  `Invalid configuration for module "ldap"`.** The LDAP CA file named in the new
+  `mods-available/ldap` does not exist. Since 0.2.1 the installer takes `ca_file` and the other
+  TLS settings from the live file; on 0.2.0 and earlier, the update restores the previous
+  configuration (nothing changes) and you can update again once 0.2.1 is out.
 
 | Symptom | Check / fix |
 |---|---|
