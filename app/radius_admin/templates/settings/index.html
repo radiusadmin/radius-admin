@@ -14,6 +14,17 @@
   <p id="admin_subnet-hint" class="small muted">Switch admin (PAP) logins are accepted only from switches in this network.</p>
   {{ m.field_error(errors, 'admin_subnet') }}
   <label class="check"><input type="checkbox" name="admin_priv15" value="1" {{ 'checked' if s.admin_priv15 else '' }}> Grant privilege level 15 on login (<span class="mono">shell:priv-lvl=15</span>)</label>
+  <h2>802.1X with a username and password</h2>
+  <label class="check"><input type="checkbox" name="dot1x_ttls" value="1" aria-describedby="dot1x_ttls-hint" {{ 'checked' if s.dot1x_ttls else '' }}> Let <a href="{{ url_for('dot1x_users.index') }}">802.1X users</a> connect with a username and password (EAP-TTLS with PAP inside)</label>
+  <label class="check"><input type="checkbox" name="dot1x_ttls_directory" value="1" aria-describedby="dot1x_ttls_directory-hint" {{ 'checked' if s.dot1x_ttls_directory else '' }}> Also accept directory accounts (Active Directory user name or user@domain, and their directory password)</label>
+  <p id="dot1x_ttls_directory-hint" class="small muted">For a name that is not a local 802.1X user, FreeRADIUS logs in to the directory as that person; the access rules then match their directory groups, as for computers. A local 802.1X user of the same name always wins. Disabled, locked or expired directory accounts are refused by the directory.</p>
+  {% if not fips_mode %}
+  <label class="check"><input type="checkbox" name="dot1x_peap" value="1" aria-describedby="dot1x_peap-hint" {{ 'checked' if s.dot1x_peap else '' }}> Also allow PEAP with MSCHAPv2 for 802.1X users who allow it</label>
+  <p id="dot1x_peap-hint" class="small muted">The method most devices offer without a profile, but weaker: MSCHAPv2 relies on MD4 and DES, and the server must keep an NT hash that works like the password. Only local users with <em>Allow PEAP</em> ticked can use it, unless the next box is ticked.</p>
+  <label class="check"><input type="checkbox" name="dot1x_peap_directory" value="1" aria-describedby="dot1x_peap_directory-hint" {{ 'checked' if s.dot1x_peap_directory else '' }}> Also accept directory accounts over PEAP (checked by a domain controller)</label>
+  <p id="dot1x_peap_directory-hint" class="small muted">This server must be joined to the domain first: on its console run <span class="mono">sudo deploy/ad-join.sh --realm &lt;your AD domain&gt;</span>, then restart FreeRADIUS (RUNBOOK §6.9). A local 802.1X user of the same name always wins; the directory groups select the VLAN, as for EAP-TTLS.</p>
+  {% endif %}
+  <p id="dot1x_ttls-hint" class="small muted">Takes effect at the next connection; no Apply needed. Certificates (EAP-TLS) keep working either way and remain the stronger choice. Devices must trust the RADIUS server certificate's CA and check its name, or a fake access point can collect passwords (RUNBOOK §6.9).</p>
   <h2>Sign-in notice</h2>
   <label for="banner_text">Notice and consent text</label>
   <textarea id="banner_text" name="banner_text" rows="7" maxlength="4000"{{ m.described(errors, 'banner_text') }}>{{ s.banner_text }}</textarea>

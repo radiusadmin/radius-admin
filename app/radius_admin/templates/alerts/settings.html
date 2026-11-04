@@ -20,6 +20,9 @@
   <input id="switch_failed_polls" name="switch_failed_polls" value="{{ s.switch_failed_polls }}" inputmode="numeric" class="select-auto"{{ m.described(errors, 'switch_failed_polls') }}>{{ m.field_error(errors, 'switch_failed_polls') }}
   <p class="small muted">Needs switch monitoring to be enabled; only clients marked as switches are polled.</p>
   <label class="check"><input type="checkbox" name="radius_enabled" value="1" {{ 'checked' if s.radius_enabled }}> Alert when FreeRADIUS is down (service stopped or not listening for two checks in a row)</label>
+  <label class="check"><input type="checkbox" name="portal_enabled" value="1" {{ 'checked' if s.portal_enabled }}> Alert when the portal is down (nginx stopped or not listening on port 443 for two checks in a row)</label>
+  <p class="small muted">Delivered by syslog and email: while nginx is down this page cannot show it.</p>
+  {% if s.portal_enabled and not s.email_enabled %}<p class="small warn-text">Email is off: portal down alerts go only to the local syslog. Forward it to your SIEM or turn on email below.</p>{% endif %}
 </section>
 
 <section class="panel narrow">

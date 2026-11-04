@@ -112,20 +112,24 @@
   </table></div>
   <p class="small muted">Counters are cumulative since the switch last restarted.</p>
   {% endif %}
-  {% if status.ports %}
-  {% set auth_n = status.ports|selectattr('authorized')|list|length %}
-  <h3>802.1X ports <span class="small muted">{{ auth_n }} of {{ status.ports|length }} authorized · as of {{ status.polled_at|ago }}</span></h3>
+  {% if ports %}
+  {% set auth_n = ports|selectattr('authorized')|list|length %}
+  <h3>802.1X ports <span class="small muted">{{ auth_n }} of {{ ports|length }} authorized · as of {{ status.polled_at|ago }}</span></h3>
   <div class="table-wrap"><table class="dense port-table">
     <thead><tr><th scope="col">Port</th><th scope="col">Link</th><th scope="col">802.1X</th><th scope="col">Client</th><th scope="col" class="num">VLAN</th></tr></thead>
-    <tbody>{% for p in status.ports %}
+    <tbody>{% for p in ports %}
     <tr class="{{ '' if p.authorized or p.oper == 'up' else 'is-off' }}">
       <td class="mono">{{ p.name }}</td>
       <td>{% if p.oper == 'up' %}<span class="tag tag-ok">up</span>{% elif p.oper %}<span class="tag tag-muted">{{ p.oper }}</span>{% else %}—{% endif %}</td>
       <td>{% if p.authorized %}<span class="tag tag-ok">authorized</span>{% elif p.oper and p.oper != 'up' %}<span class="muted">—</span>{% elif p.authorized is sameas false %}<span class="tag tag-warn">{{ p.state_text or 'unauthorized' }}</span>{% else %}<span class="muted">{{ p.state_text or 'not reported' }}</span>{% endif %}</td>
       <td class="mono">{% if p.user %}{% if p.user|vendor or (p.user|mac) != p.user %}{{ p.user|mac }}{% if p.user|vendor %}<span class="cell-sub">{{ p.user|vendor }}</span>{% endif %}{% else %}{{ p.user }}{% endif %}{% endif %}</td>
-      <td class="num">{{ p.vlan or '' }}</td>
+      <td class="num">{% if not p.connected %}<span class="muted" title="No device connected">—</span><span class="sr-only">No device</span>
+        {% elif p.vlan_in_use %}<span class="vlan">{{ p.vlan_in_use }}</span>
+        {% elif p.vlan %}<span class="muted" title="Native VLAN of the port (from the switch); no RADIUS session recorded for this device">{{ p.vlan }} <span class="small">native</span></span>
+        {% else %}<span class="muted">—</span>{% endif %}</td>
     </tr>{% endfor %}</tbody>
   </table></div>
+  <p class="small muted">VLAN: the VLAN RADIUS assigned to the connected device; “native” where only the port’s configured VLAN is known; — when no device is connected.</p>
   <p class="small"><a href="{{ url_for('sessions.index', switch=c.id) }}">Sessions on this switch</a></p>
   {% elif status.dot1x_port_count %}
   <p class="small muted">Per-port 802.1X state appears after the next poll.</p>

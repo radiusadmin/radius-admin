@@ -204,12 +204,15 @@ def helper_status(cfg):
         return {"ok": False, "message": str(e)}
 
 
-def run_alerts(conn, cfg, key, profile, radius_state):
+def run_alerts(conn, cfg, key, profile, radius_state, portal_state=None):
     settings = alerts.load_settings(conn)
     if settings is None:
         return
     pw = smtp_password(key, settings)
-    alerts.check_radius(conn, settings, helper_status(cfg), radius_state, pw)
+    status = helper_status(cfg)
+    alerts.check_radius(conn, settings, status, radius_state, pw)
+    conn.commit()
+    alerts.check_portal(conn, settings, status, portal_state if portal_state is not None else {}, pw)
     conn.commit()
     alerts.check_rejects(conn, settings, pw)
     conn.commit()
@@ -250,6 +253,7 @@ def loop(cfg, once=False):
     last_refresh_seen = None
     last_test_seen = None
     radius_state = {}
+    portal_state = {}
     rc, _, why = coa_tool(cfg)
     radclient_note = rc or ("unavailable: " + why)
     while not _stop:
@@ -276,7 +280,7 @@ def loop(cfg, once=False):
                     last_alerts = -1e9      # evaluate switch alerts right after a poll
             last_test_seen = run_alert_test(conn, key, last_test_seen)
             if now - last_alerts >= ALERT_EVERY or once:
-                run_alerts(conn, cfg, key, profile, radius_state)
+                run_alerts(conn, cfg, key, profile, radius_state, portal_state)
                 last_alerts = now
             if now - last_housekeep >= HOUSEKEEP_EVERY:
                 housekeeping(conn)

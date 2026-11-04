@@ -13,7 +13,7 @@ import datetime
 
 from flask import Blueprint, abort, g, redirect, render_template, request, url_for
 
-from .. import db, oui
+from .. import db, oui, paging
 from ..flashing import flash
 from ..insight import ClientIndex, port_status
 from ..security import login_required, role_required
@@ -21,7 +21,7 @@ from ..snmp import is_blocked
 from . import ev
 
 bp = Blueprint("sessions", __name__, url_prefix="/sessions")
-PAGE = 100
+PAGE = 50
 STALE_HOURS = 24
 COA_ACTIONS = {
     "reauth": ("Re-authenticate", "The switch re-runs 802.1X/MAB for this session; the device keeps its link."),
@@ -119,21 +119,17 @@ def index():
             where.append("a.nasipaddress <<= %s::inet")
             params.append(str(client["ipaddr"]))
     w = " WHERE " + " AND ".join(where)
-    try:
-        page = max(1, int(request.args.get("page", 1)))
-    except ValueError:
-        page = 1
+    pager = paging.Pager(paging.requested_page(), PAGE, paging.count(db, " FROM radacct a" + w, params, PAGE))
     rows = db.query("SELECT " + SESSION_COLS + " FROM radacct a" + AUTH_JOIN + w +
                     " ORDER BY a.acctstarttime DESC NULLS LAST, a.radacctid DESC LIMIT %s OFFSET %s",
-                    params + [PAGE + 1, (page - 1) * PAGE])
-    more = len(rows) > PAGE
-    rows = _decorate(rows[:PAGE], idx, _switch_ports())
+                    params + [PAGE, pager.offset])
+    rows = _decorate(rows, idx, _switch_ports())
     open_count = db.query_one("SELECT count(*) AS n FROM radacct WHERE acctstoptime IS NULL")["n"]
     recent_coa = db.query("SELECT r.*, host(r.nas_ip) AS nas, c.name AS switch_name FROM ui.coa_request r"
                           " JOIN ui.radius_client c ON c.id = r.client_id ORDER BY r.id DESC LIMIT 5")
     mon = db.query_one("SELECT radclient, heartbeat_at FROM ui.monitor_state WHERE id = 1")
     switches = sorted((c for c in idx.by_id.values()), key=lambda c: c["name"])
-    return render_template("sessions/index.html", rows=rows, q=q, sw=sw, history=history, page=page, more=more,
+    return render_template("sessions/index.html", rows=rows, q=q, sw=sw, history=history, pager=pager,
                            open_count=open_count, acct=_accounting_overview(idx), switches=switches,
                            recent_coa=recent_coa, mon=mon, actions=COA_ACTIONS)
 

@@ -8,15 +8,35 @@ release, so previews sort after it.
 ## Unreleased
 
 ### Added
+- 802.1X with a username and password: EAP-TTLS with PAP inside, for local 802.1X users
+  (new 802.1X users page) and, optionally, directory accounts checked with an LDAP bind as
+  the user. Both are off by default in Settings. The access rules assign the VLAN by the
+  user's groups (local, or directory groups including nested ones); the auth log shows the
+  name typed inside the tunnel. PEAP-MSCHAPv2 is available too, for local users who allow
+  it (it needs an NT hash of their password, so it is weaker; never with FIPS mode) and for
+  directory accounts once the server has joined the domain (`deploy/ad-join.sh`). Needs
+  the freeradius install phase and a FreeRADIUS restart.
+- Licence: GNU AGPL version 3 or later (copyright Collin Linde), with a Contributor License
+  Agreement for outside contributions (`CLA.md`, `CONTRIBUTING.md`, pull request template).
 - Updates page: current and latest version, changelog, update channel (main, testing,
   dev) and automatic updates. Builds are signed in CI and verified by the root helper
   before anything is installed.
 - Switch networks (`switch_nets` in the installer answers, `--switch-nets`): the monitor may
   reach switches in several networks for SNMP and CoA, not only the management subnet.
+- "Portal down" alert: the monitor alerts (syslog, email) when nginx is not active or not
+  listening on port 443 for two checks in a row, on servers where the portal's nginx site is
+  enabled. On by default; switch it off in Alert settings. Updates also check that nginx
+  serves the portal and roll back if it does not.
 
 ### Fixed
+- The portal no longer stays down when nginx fails to start because DNS was briefly
+  unavailable (nginx looks up the OCSP responder when it starts, for example when
+  unattended-upgrades restarts it). nginx now starts after the network is up and retries
+  every 30 seconds; the drop-in is installed by the nginx phase.
 - `install.sh --phase app` without answers (and updates) no longer resets the monitor's
   allowed network to the `192.0.2.0/24` example; it keeps the installed list.
+- A MAC that connected with 802.1X is reported as such when the switch tries MAB ("authenticates
+  with 802.1X"), for passwords as for certificates.
 - A switch outside the allowed networks is reported as such, instead of Net-SNMP's
   "Unknown engine ID (Operation not permitted)" with advice about the switch.
 

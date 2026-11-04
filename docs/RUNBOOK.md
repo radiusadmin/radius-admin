@@ -244,7 +244,12 @@ sudo ./deploy/install.sh --phase app,nginx,firewall
   falling back to `/etc/resolv.conf`; override with `--resolver "10.x.x.x 10.y.y.y"`),
   copies `/etc/freeradius/certs/site/ca.pem` → `/etc/radius-admin/tls/client-ca.pem`,
   checks key/cert match and SAN, `nginx -t`, reload. The Debian default site (port
-  80) is disabled; nothing listens on port 80.
+  80) is disabled; nothing listens on port 80. Also installs the drop-in
+  `/etc/systemd/system/nginx.service.d/radius-admin.conf`: nginx resolves the OCSP
+  responder when it starts and refuses to start if that lookup fails, so the drop-in
+  starts it after `network-online.target` and restarts it every 30 seconds after a failure
+  (no start limit). A short DNS outage at boot or while `unattended-upgrades` restarts
+  nginx then no longer leaves the portal down. Check with `systemctl cat nginx`.
 * **firewall**: detects ufw / nftables / iptables. Always loads the self-contained
   nftables table `inet radius_admin` (TCP 443 to the management address accepted only from
   192.0.2.0/24, everything else to 443 dropped; RADIUS, SSH and all other ports are
@@ -488,7 +493,7 @@ On every switch, create one SNMPv3 user, security level **authPriv**, authentica
 | `1.3.6.1.2.1.67.1.2` | RADIUS client counters |
 | `1.3.6.1.2.1.2.2.1.8` | interface link state (ifOperStatus) — per-port view |
 | `1.3.6.1.2.1.17.1.4.1.2` | bridge port to interface map — per-port view |
-| `1.3.6.1.2.1.17.7.1.4.5.1.1` | port VLAN (dot1qPvid) — per-port view |
+| `1.3.6.1.2.1.17.7.1.4.5.1.1` | native port VLAN (dot1qPvid) — per-port view; the VLAN in use comes from RADIUS accounting |
 
 (`1.0.8802.1.1.1` already covers the per-port 802.1X state and session user. Without the
 three per-port rows the port table still shows the 802.1X state but no link or VLAN.)
@@ -591,6 +596,11 @@ UI → **Alerts**. The monitoring service checks every minute and raises:
   (default 2). Needs switch monitoring enabled.
 * **FreeRADIUS down**: the service is stopped or not listening on its RADIUS port in two
   checks in a row (so the brief restart of Review and apply never alerts).
+* **Portal down**: nginx is stopped or not listening on TCP 443 in two checks in a row
+  (only on servers where the portal's nginx site is enabled). While nginx is down the
+  Alerts page cannot be reached, so this one is useful only with syslog forwarding or
+  email (the Alerts pages warn while email is off); afterwards it stays in the alert history. nginx restarts itself every 30 seconds after a failure (nginx phase drop-in), so
+  an alert means it has stayed down; check `systemctl status nginx` and `nginx -t`.
 
 Each alert is sent once when it opens and once when it clears, and recorded in the audit
 log. The dashboard and the side menu show open alerts; the dashboard and Alerts page also
@@ -652,6 +662,80 @@ access rules, alerts and session actions. *View / print* opens a print layout �
 browser's Print → Save as PDF; *CSV* downloads a spreadsheet (cells that a spreadsheet
 would evaluate as a formula are prefixed with `'`). Shared secrets never appear. Every
 report viewed or downloaded is recorded in the audit log.
+
+### 6.9 802.1X with a username and password (EAP-TTLS)
+
+For people and devices without a machine certificate. Certificates (EAP-TLS) stay the
+stronger choice and keep working alongside.
+
+1. **Turn it on.** UI → **Settings** → *802.1X with a username and password* (admin). It
+   takes effect at the next connection; no Apply.
+2. **Add users.** UI → **802.1X users** → *Add 802.1X user* (operator): username, password,
+   groups (comma-separated), optional description and expiry. The groups are matched against
+   the access rules' group names, the same way a computer's directory groups are: a user in
+   `Wired-Office` gets the VLAN of the first enabled rule for `Wired-Office` on that kind of
+   connection (wired, or that SSID). A group without a rule is flagged on the list; a user with
+   no matching rule is rejected. Disable, set an expiry, set a new password or delete there;
+   changes apply to the next connection.
+3. **Set up the devices.** The device must use **EAP-TTLS** with **PAP** as the inner method, and
+   it **must** trust the CA that issued the RADIUS server certificate (`certs/site/ca.pem`) and
+   check the server name (the name in that certificate, for example `radius.example.net`).
+   Without that check a fake access point can collect passwords. An outer (anonymous) identity
+   such as `anonymous` is fine: the log shows the name typed inside the tunnel.
+   * Windows 10/11: no built-in prompt for TTLS; push a wired or Wi-Fi profile (Group Policy or
+     Intune) with EAP-TTLS, inner method *Unencrypted password (PAP)*, the CA as trusted root and
+     the server name.
+   * macOS / iOS: a configuration profile (Apple Configurator, MDM) with TTLS, inner PAP, the CA
+     certificate and the server name as *trusted server certificate name*.
+   * Android: *EAP method* TTLS, *Phase 2* PAP, *CA certificate* the installed CA, *Domain* the
+     server name.
+   * Linux (NetworkManager): *Tunneled TLS*, inner *PAP*, the CA certificate.
+4. **Directory accounts (optional).** Settings → *Also accept directory accounts*. People who are
+   not local 802.1X users then sign in with their directory user name (`jroe`) or user@domain
+   (`jroe@example.net`) and directory password; FreeRADIUS checks it with an LDAP bind as that
+   person, using the same domain controllers, bind account and CA as for computers
+   (`mods-available/ldap`). Their directory groups, nested groups included, select the VLAN
+   through the access rules, exactly as for a computer. A local 802.1X user of the same name
+   always wins. Disabled, locked or expired directory accounts are refused by the directory.
+5. **PEAP (optional, standard mode).** Settings → *Also allow PEAP with MSCHAPv2*, then tick
+   **Allow PEAP** on the users who need it, when you set their password (the NT hash MSCHAPv2
+   needs can only be made from the password; existing users need a new password). PEAP is what
+   many devices offer without a profile (Windows: *Microsoft: Protected EAP (PEAP)* with *Secured
+   password (EAP-MSCHAP v2)*), but it is weaker: prefer EAP-TTLS or certificates, and still check
+   the server certificate and name on the devices. Windows 11 with Credential Guard does not
+   offer saved credentials for MSCHAPv2.
+
+   **Directory accounts over PEAP** need this server joined to the domain, because MSCHAPv2
+   cannot be checked with an LDAP login. On the console:
+   ```
+   sudo ./deploy/ad-join.sh --realm EXAMPLE.NET --dry-run        # checks, changes nothing
+   sudo ./deploy/ad-join.sh --realm EXAMPLE.NET --admin Administrator
+   sudo systemctl restart freeradius
+   ntlm_auth --request-nt-key --username=jroe                       # asks for the password: NT_KEY = works
+   sudo ./deploy/ad-join.sh --status
+   ```
+   It installs Samba's winbind, writes a member-only `/etc/samba/smb.conf` (it refuses to replace
+   one it did not write unless you add `--replace-smb-conf`), asks `net ads join` to prompt for
+   the administrator's password, and lets FreeRADIUS use `ntlm_auth`. DNS must find the domain
+   controllers and the clock must be right. The domain controllers must allow NTLM for this
+   computer account (Group Policy *Network security: Restrict NTLM*). Then tick *Also accept
+   directory accounts over PEAP* in Settings. Users type their user name or `DOMAIN\user`; their
+   directory groups select the VLAN, a local 802.1X user of the same name wins.
+6. **Check.** UI → **Auth log**, method `ttls-pap` / `peap` (local) or `ttls-ldap` / `peap-ldap`
+   (directory). Rejects give
+   the reason in plain words: turned off, no such user, disabled, expired, wrong password (or, for
+   the directory, a refused account), not PAP inside the tunnel, or no access rule for the user's
+   groups (§6.7). A directory record lists the groups the rule matcher saw.
+
+Switch admins and 802.1X users are separate: a switch admin's password never opens a network
+port, and an 802.1X user cannot sign in to a switch. A MAC that has connected with a password is
+never offered for MAB approval, as for certificates.
+
+Upgrade to this release: `sudo ./deploy/install.sh --phase postgres` (table and functions),
+`--phase app`, then `--phase freeradius --restart-freeradius` in a maintenance window (enables
+EAP-TTLS and PEAP with their inner servers `radius-admin-inner` and `radius-admin-peap`, the
+`mschap` module and the `ldap_user` section of `mods-available/ldap`; your directory settings
+are kept as before). Both methods stay off until you turn them on in Settings. EAP-TLS, MAB and switch logins behave as before.
 
 ## 7. Backup and restore
 
@@ -932,7 +1016,8 @@ channel, what changed in between, and whether the update restarts FreeRADIUS.
   to install is never retried automatically.
 - **Install** asks for step-up. The helper verifies the signature and the bundle's SHA-384, then
   `radius-admin-update-install@<version>` backs up the database, installs, checks the portal
-  and FreeRADIUS, and rolls back if they do not come up. The page refreshes while it runs.
+  (the app, and nginx active and listening on 443) and FreeRADIUS, and rolls back if they do
+  not come up. The page refreshes while it runs.
 
 Outbound access: the check service needs HTTPS to `api.github.com`, `github.com` and
 `objects.githubusercontent.com`. Behind a proxy, put `HTTPS_PROXY=http://proxy.example.net:3128`

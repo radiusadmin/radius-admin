@@ -102,12 +102,21 @@ case "$1" in
     fi
     echo active > "$st"; exit 0;;
   is-active)
+    case "$*" in *nginx*) st="__ROOT__/nginx";; esac
     [ "$(cat "$st" 2>/dev/null)" = active ]; exit $?;;
 esac
 exit 1
 """
 
 FAKE_SS = r"""#!/bin/sh
+if [ "$2" = -ltnp ]; then
+  echo 'LISTEN 0 4096 127.0.0.53%lo:53 0.0.0.0:* users:(("systemd-resolve",pid=1,fd=2))'
+  if [ "$(cat "__ROOT__/nginx" 2>/dev/null)" = active ] && [ ! -e "__ROOT__/noport443" ]; then
+    echo 'LISTEN 0 511 192.0.2.10:443 0.0.0.0:* users:(("nginx",pid=7,fd=6))'
+  fi
+  [ -e "__ROOT__/other443" ] && echo 'LISTEN 0 5 0.0.0.0:443 0.0.0.0:* users:(("python3",pid=9,fd=3))'
+  exit 0
+fi
 if [ "$(cat "__ROOT__/svc" 2>/dev/null)" = active ] && [ ! -e "__ROOT__/noport" ]; then
   echo 'UNCONN 0 0 0.0.0.0:1812 0.0.0.0:* users:(("radiusd",pid=42,fd=7))'
 fi
@@ -224,6 +233,7 @@ staging_owner = {STAGER}
 work_dir = {e.work}
 systemctl = {bindir}/systemctl
 ss = {bindir}/ss
+portal_site = {root}/sites-enabled/radius-admin
 restart_wait = 3
 keep_backups = 3
 lock_timeout = 3
@@ -241,6 +251,49 @@ def test_status(env):
     assert isinstance(r["fips_enabled"], bool)
     assert "3.2.10" in r["radiusd_version"]
     assert r["last_apply"] is None and r["backups"] == []
+    # no portal site enabled: reported as such, nginx is not asked
+    assert (r["portal_configured"], r["portal_active"], r["portal_listening"]) == (False, False, False)
+    assert "nginx" not in open(os.path.join(env.root, "systemctl.log")).read()
+
+
+def _portal(env, nginx="active", noport=False, other=False):
+    site = os.path.join(env.root, "sites-enabled", "radius-admin")
+    os.makedirs(os.path.dirname(site), exist_ok=True)
+    if not os.path.lexists(site):
+        os.symlink("../sites-available/radius-admin", site)    # dangling, like a broken install
+    _write(os.path.join(env.root, "nginx"), nginx + "\n", 0o644)
+    for name, on in (("noport443", noport), ("other443", other)):
+        p = os.path.join(env.root, name)
+        if on:
+            _write(p, "", 0o644)
+        elif os.path.exists(p):
+            os.unlink(p)
+    r = env.call({"action": "status"})
+    assert r["ok"] is True and r["portal_configured"] is True
+    return r["portal_active"], r["portal_listening"]
+
+
+def test_status_portal(env):
+    assert _portal(env) == (True, True)
+    assert "systemctl is-active --quiet nginx.service" in open(os.path.join(env.root, "systemctl.log")).read()
+    assert _portal(env, nginx="failed") == (False, False)
+    assert _portal(env, noport=True) == (True, False)
+    # something else on 443 is not the portal
+    assert _portal(env, noport=True, other=True) == (True, False)
+    # FreeRADIUS state is reported independently
+    assert _portal(env) == (True, True)
+    _write(os.path.join(env.root, "svc"), "inactive\n", 0o644)
+    r = env.call({"action": "status"})
+    assert r["service_active"] is False and (r["portal_active"], r["portal_listening"]) == (True, True)
+
+
+@pytest.mark.parametrize("line", ["portal_service = nginx reboot", "portal_site = relative/path",
+                                  "portal_port = https"])
+def test_status_portal_config_validated(env, line):
+    with open(env.conf, "a") as fh:
+        fh.write(line + "\n")
+    r = env.call({"action": "status"})
+    assert r["ok"] is False and r["message"] == "helper misconfigured (see syslog)"
 
 
 def test_unknown_action_and_malformed(env):

@@ -71,7 +71,7 @@ def test_settings_validation(bad):
 
 def test_policy_checks_the_connection_certificate():
     p = unlang.render_policy("")
-    sec = p[p.index("radius_admin_radsec {"):p.index("radius_admin_postauth {")]
+    sec = p[p.index("radius_admin_radsec {"):p.index("radius_admin_inner_authorize {")]
     assert '"%{client:proto}" == "tls"' in sec
     assert "%{listen:TLS-Client-Cert-Common-Name}" in sec and "%{listen:TLS-Client-Cert-Subject-Alt-Name-Dns}" in sec
     assert "reject" in sec and "%{sql:" not in sec        # no request data reaches SQL here

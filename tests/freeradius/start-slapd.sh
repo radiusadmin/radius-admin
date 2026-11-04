@@ -38,7 +38,7 @@ CONF
 python3 - "$HERE/ad-emul.ldif.in" "$D/data.ldif" "$PW" <<'PY'
 import sys
 src, dst, pw = sys.argv[1:4]
-s = open(src).read().replace("@BINDPW@", pw)
+s = open(src).read().replace("@BINDPW@", pw).replace("@USERPW@", "Directory-User-Pass-2026")
 names = ["Many Group %03d" % i for i in range(1, 300)] + ["Zz Many 300"]
 dn = lambda n: "CN=%s,OU=Groups,DC=example,DC=net" % n
 s = s.replace("@PC8_MEMBEROF@\n", "".join("memberOf: %s\n" % dn(n) for n in names))

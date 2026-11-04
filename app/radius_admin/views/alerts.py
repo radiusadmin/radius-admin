@@ -38,7 +38,8 @@ def settings():
     s = db.query_one("SELECT *, smtp_pass_enc IS NOT NULL AS pass_set FROM ui.alert_settings WHERE id = 1")
     form, errors = dict(s), {}
     if request.method == "POST":
-        for k in ("syslog_enabled", "email_enabled", "reject_enabled", "switch_enabled", "radius_enabled"):
+        for k in ("syslog_enabled", "email_enabled", "reject_enabled", "switch_enabled", "radius_enabled",
+                  "portal_enabled"):
             form[k] = form_bool(k)
         for k, lo, hi in (("reject_threshold", 1, 100000), ("reject_window_minutes", 1, 1440),
                           ("switch_failed_polls", 1, 20), ("smtp_port", 1, 65535)):
@@ -72,13 +73,13 @@ def settings():
             errors["smtp_security"] = "A login over an unencrypted connection is not allowed; use STARTTLS or TLS."
         if not errors:
             sets = ["syslog_enabled=%s", "email_enabled=%s", "reject_enabled=%s", "switch_enabled=%s",
-                    "radius_enabled=%s", "reject_threshold=%s", "reject_window_minutes=%s", "switch_failed_polls=%s",
+                    "radius_enabled=%s", "portal_enabled=%s", "reject_threshold=%s", "reject_window_minutes=%s", "switch_failed_polls=%s",
                     "smtp_host=%s", "smtp_port=%s", "smtp_security=%s", "smtp_user=%s", "mail_from=%s", "mail_to=%s",
                     "updated_at=now()", "updated_by=%s"]
             params = [form[k] for k in ("syslog_enabled", "email_enabled", "reject_enabled", "switch_enabled",
-                                        "radius_enabled", "reject_threshold", "reject_window_minutes",
-                                        "switch_failed_polls", "smtp_host", "smtp_port", "smtp_security", "smtp_user",
-                                        "mail_from")] + [", ".join(tos), g.user["username"]]
+                                        "radius_enabled", "portal_enabled", "reject_threshold",
+                                        "reject_window_minutes", "switch_failed_polls", "smtp_host", "smtp_port",
+                                        "smtp_security", "smtp_user", "mail_from")] + [", ".join(tos), g.user["username"]]
             if password:
                 sets.append("smtp_pass_enc=%s")
                 params.append(current_app.config["RA_DATA_KEY"].encrypt(password.encode("utf-8"), AAD))
@@ -86,8 +87,8 @@ def settings():
                 sets.append("smtp_pass_enc=NULL")
             db.execute("UPDATE ui.alert_settings SET " + ", ".join(sets) + " WHERE id = 1", tuple(params))
             changed = {k: form[k] for k in ("syslog_enabled", "email_enabled", "reject_enabled", "switch_enabled",
-                                            "radius_enabled", "reject_threshold", "reject_window_minutes",
-                                            "switch_failed_polls", "smtp_host", "smtp_port", "smtp_security",
+                                            "radius_enabled", "portal_enabled", "reject_threshold",
+                                            "reject_window_minutes", "switch_failed_polls", "smtp_host", "smtp_port", "smtp_security",
                                             "smtp_user", "mail_from") if form[k] != s[k]}
             if ", ".join(tos) != s["mail_to"]:
                 changed["mail_to"] = ", ".join(tos)

@@ -19,8 +19,10 @@ The reference build targets (example names; every site sets its own):
   (`deploy/migrate_sqlite_to_pg.py`).
 - Clients: `clients.conf` keeps `client localhost`; switches and access points are managed
   in the UI and rendered to a clients file.
-- 802.1X: EAP-TLS only (machine certificates from an internal PKI, e.g. `pki.example.net`,
-  with OCSP). LDAPS to Active Directory (e.g. `dc01.example.net`); the user filter matches
+- 802.1X: EAP-TLS (machine certificates from an internal PKI, e.g. `pki.example.net`,
+  with OCSP); optionally EAP-TTLS/PAP for local 802.1X users (section 18) and directory
+  accounts (section 19), and PEAP-MSCHAPv2 in standard mode for local users (section 20) and
+  directory accounts on a domain-joined server (section 21). LDAPS to Active Directory (e.g. `dc01.example.net`); the user filter matches
   the computer object by `dNSHostName = TLS-Client-Cert-Subject-Alt-Name-Dns`;
   `LDAP-Group` checks select the VLAN.
 - Switch admin logins: PAP from the management subnet (example 192.0.2.0/24); the user
@@ -77,6 +79,7 @@ radius-admin/
     systemd/radius-admin.service
     systemd/radius-admin-helper.socket
     systemd/radius-admin-helper@.service
+    systemd/nginx.service.d/radius-admin.conf  drop-in for nginx.service (start after network, retry)
     postgres/pg_hba.conf.snippet  postgres/pg_ident.conf.snippet
     etc/radius-admin.conf.example
   tools/lib/fr-release.sh      FreeRADIUS release, signing key, verified download
@@ -159,7 +162,7 @@ CREATE TABLE radpostauth (
   id bigserial PRIMARY KEY,
   username text NOT NULL,
   reply text,                         -- Access-Accept / Access-Reject
-  authmethod text,                    -- 'eap-tls' | 'pap-admin' | 'mab' | 'other'
+  authmethod text,                    -- 'eap-tls' | 'ttls-pap' | 'ttls-ldap' | 'peap' | 'peap-ldap' | 'pap-admin' | 'mab' | 'other'
   nasipaddress inet,
   calledstationid text,
   callingstationid text,
@@ -265,15 +268,17 @@ roles and database `radius` loaded from these files.
    - authenticate: remove CHAP, MS-CHAP, `mschap`, `digest`.
    - post-auth: replace the hand-written "Site policy" block (orig lines 847–934) with
      the single line `radius_admin_postauth`. Everything else unchanged.
-4. `inner-tunnel` removed from sites-enabled (no PEAP/TTLS).
-5. `mods-available/eap`: keep only `tls-config tls-common` + `tls`. Remove md5, psk,
-   gtc, ttls, peap, mschapv2. Remove `ca_path = ${cadir}` (test CA lives there). Set
+4. `inner-tunnel` removed from sites-enabled. EAP-TTLS and PEAP use the project's own
+   `sites-available/radius-admin-inner` and `radius-admin-peap` instead (sections 18, 20).
+5. `mods-available/eap`: keep only `tls-config tls-common`, `tls`, a `ttls` block pointing at
+   `radius-admin-inner` (section 18) and a `peap` block pointing at `radius-admin-peap`, plus the
+   inner instance `eap radius_admin_inner_eap` (mschapv2 only; section 20). Remove md5, psk, gtc. Remove `ca_path = ${cadir}` (test CA lives there). Set
    `reject_unknown_intermediate_ca = yes` (certs/site/ca.pem = Example-IssuingCA + Example-RootCA,
    sizes match). cipher_list = FIPS list (§7). Keep OCSP as is.
 6. `mods-available/ldap`: `ldap_debug = 0x0000`, `tls_min_version = "1.2"`,
    `cipher_list` = FIPS list. Nothing else.
 7. Modules to remove from mods-enabled: chap, digest, dpsk, dynamic_clients, echo,
-   mschap, ntlm_auth, passwd, unix, totp, replicate, radutmp, sradutmp,
+   ntlm_auth, passwd, unix, totp, replicate, radutmp, sradutmp (mschap stays for PEAP, section 20),
    proxy_rate_limit. (Validate with `radiusd -XC`; keep anything still referenced.)
 8. `mods-config/files/authorize`: remove `bob` and `doug`.
 9. `clients.conf`: keep `client localhost`; replace `wifi-aps` block and
@@ -333,7 +338,13 @@ one JSON line out, then the connection closes. Request: `{"action": <str>, ...}`
 Response always: `{"ok": bool, "action": str, "message": str, ...}`.
 Actions:
 - `status` → `{"ok":true, "service_active": bool, "fips_enabled": bool,
-  "radiusd_version": str, "last_apply": {...}|null, "backups": [ids newest first, max 20]}`
+  "radiusd_version": str, "last_apply": {...}|null, "backups": [ids newest first, max 20],
+  "portal_configured": bool, "portal_active": bool, "portal_listening": bool}`.
+  The `portal_*` fields describe the web portal: `portal_configured` when `portal_site`
+  (default `/etc/nginx/sites-enabled/radius-admin`) exists, then `portal_service` (default
+  `nginx.service`) is-active and something named nginx listens on TCP `portal_port` (443).
+  Without the site both are false and nginx is not queried. Older helpers omit the fields;
+  clients treat a missing `portal_configured` as "not known".
 - `validate` → reads `<staging>/policy` and `<staging>/clients`, runs safety checks,
   builds a temp copy of raddb with those files in place, runs
   `runuser -u freerad -- <radiusd> -XC -d <tmpraddb>`; returns `{"ok", "output": last 200 lines}`.
@@ -585,9 +596,15 @@ CSV columns (header row required, exact names, any order tolerated by name):
   tick (`coa.py`: radclient from the FreeRADIUS build, `-S` secret file, validated attributes, Cisco
   AV-pairs reauthenticate / bounce-host-port, Disconnect-Request); alerts every 60 s (`alerts.py`:
   reject spike with hysteresis, switch_down after N failed polls, radius_down after 2 failed helper
-  `status` checks — the helper now reports `listening`); per-port SNMP (`snmp.build_ports`:
+  `status` checks — the helper now reports `listening`; portal_down after 2 checks in which the
+  helper reports the nginx site enabled but nginx not active or not on TCP 443, switch
+  `ui.alert_settings.portal_enabled`, no "last check" kept since the portal can only show it
+  while nginx is up; the Alerts pages warn when it is on and email is off, `sql/96-portal-alert.sql`); per-port SNMP (`snmp.build_ports`:
   dot1xAuthPaeState, dot1xAuthAuthControlledPortStatus, dot1xAuthSessionUserName, ifOperStatus,
-  dot1qPvid via dot1dBasePortIfIndex) for port-control-auto ports; hourly housekeeping (mab_pending
+  dot1qPvid via dot1dBasePortIfIndex) for port-control-auto ports. dot1qPvid is the port's native
+  VLAN; the client page shows the VLAN in use from the open session's Access-Accept on that port
+  (`clients._port_rows`), the native VLAN only as a labelled fallback, and "—" without a device.
+  Quoted SNMP values spanning lines (-Ox wraps hex at 16 bytes) are joined; hourly housekeeping (mab_pending
   30 d, coa_request 90 d, snmp_test 7 d, resolved alerts 400 d).
 - UI: Sessions (`views/sessions.py`; accounting coverage per switch; CoA queue + result page),
   auth-log detail (`/auth-log/<id>`, `insight.py` reason hints, cert expiry, group decode, NAS→client),
@@ -778,7 +795,8 @@ CSV columns (header row required, exact names, any order tolerated by name):
   `/var/backups/radius-admin/radius-db-before-<version>-<ts>.dump` (newest 5 kept), runs the
   bundle's `deploy/update.sh --package … --yes --keep-upload` (plus `--with-freeradius --
   --restart-freeradius` when the release restarts FreeRADIUS), then health checks (portal
-  answers on its socket, helper socket active, FreeRADIUS active and on UDP 1812 when
+  answers on its socket, helper socket active, `nginx.service` active and TCP 443 listening when
+  `/etc/nginx/sites-enabled/radius-admin` exists, FreeRADIUS active and on UDP 1812 when
   restarted, `/opt/radius-admin/BUILD.json` names the version) for up to a minute. On an
   installer error it re-runs the previous release's app phase; on failed health checks
   `update.sh --rollback`. Progress in the helper's `update-state.json`, log in
@@ -807,3 +825,177 @@ CSV columns (header row required, exact names, any order tolerated by name):
   that is not a known zone falls back to UTC) and label times with its abbreviation (`%Z`). The
   auth log's From/To filters are whole days in the zone. Reports and their CSVs (whole UTC days),
   alert messages, syslog and the audit hash stay in UTC.
+
+## 18. Change (2026-11-03): 802.1X with a username and password (EAP-TTLS/PAP, local users)
+
+Step 1 of username/password 802.1X: EAP-TTLS with PAP inside the tunnel, checked against
+local accounts. Directory passwords and PEAP-MSCHAPv2 follow in later steps.
+
+- **Setting** `dot1x_ttls` in `ui.setting` (`'false'` by default): Settings page (admin +
+  step-up), audited in `settings.update`. Read live by the SQL functions; no Apply, no restart.
+- **Table** `ui.dot1x_user` (`sql/95-dot1x-passwords.sql`): `username` (`[A-Za-z0-9._@-]{1,64}`,
+  unique case-insensitively), `password_hash` (rlm_pap `{X-PBKDF2}HMACSHA2+256:…`, PBKDF2-HMAC-SHA256,
+  `pbkdf2_iterations`), `groups text[]` (≤ 50, each a valid access-rule group name), `description`,
+  `enabled`, `expires_at`, `created_at/by`, `updated_at`. Separate from switch admins: the inner
+  tunnel never reads `radcheck`, so a switch admin's password never opens a port and an 802.1X user
+  never reaches switch management. `radius_admin` has full access; `radius_fr` none.
+- **SQL functions** (SECURITY DEFINER, EXECUTE for `radius_fr` only, hex arguments only):
+  `radius_admin_dot1x_user_hex(user_hex)` → the stored hash, or `off` / `unknown` / `disabled` /
+  `expired`, NULL for malformed input (more than 64 bytes, not hex);
+  `radius_admin_dot1x_vlan_rule_hex(user_hex, wired, csi_hex)` → `'<vlan>:<rule id>'` from
+  `radius_admin_vlan_rule_core` with the user's groups (account re-checked), or NULL.
+- **FreeRADIUS.** `mods-available/eap` gains `ttls { tls = tls-common; virtual_server =
+  "radius-admin-inner"; copy_request_to_tunnel = no; use_tunneled_reply = no }`.
+  `sites-available/radius-admin-inner` (enabled by the installer's freeradius phase) runs
+  `filter_username`, `radius_admin_inner_authorize`, `pap`; authenticate PAP only; post-auth
+  `radius_admin_inner_postauth`, Post-Auth-Type REJECT `radius_admin_inner_reject`.
+- **Policy** (`unlang.render_policy`):
+  - `radius_admin_inner_authorize`: sets `outer.control:Tmp-String-1 = "ttls-pap"` and
+    `outer.control:Stripped-User-Name` = the inner User-Name (for the log, also on reject);
+    rejects anything but PAP (EAP or MS-CHAP inside); looks the user up and copies a hash that
+    matches the PBKDF2 pattern into `control:Password-With-Header`; otherwise rejects with a
+    reason on `outer.request:Module-Failure-Message`.
+  - `radius_admin_inner_postauth`: `outer.session-state:Tmp-String-1 = "ttls-pap"` and
+    `Stripped-User-Name`, only after the password was accepted.
+  - `radius_admin_inner_reject`: reason "wrong password" when none was set.
+  - `radius_admin_postauth`, new branch after the admin branch and before EAP-TLS: EAP-Message
+    present and the session marker set → removes the marker from session-state, sets
+    `control:Tmp-String-1` / `Stripped-User-Name`, wired or SSID exactly like EAP-TLS, VLAN and
+    rule id from `radius_admin_dot1x_vlan_rule_hex`; no match → reject.
+- **Log.** The post-auth query writes `username = %{%{control:Stripped-User-Name}:-%{User-Name}}`
+  (only the policy sets `control:Stripped-User-Name`), so EAP-TTLS rows show the inner name,
+  never the outer anonymous identity; `authmethod = 'ttls-pap'`; `rule_id` and the reasons
+  `turned off`, `no such 802.1X user`, `802.1X user is disabled` / `has expired`, `wrong password
+  for 802.1X user`, `only PAP is accepted inside EAP-TTLS`, `no enabled access rule matches the
+  user's groups for this connection`.
+- **MAB.** A MAC with an EAP-TLS or EAP-TTLS Access-Accept is never queued (`radius_admin_mab_hex`,
+  `mab_pending_open`; index `radpostauth_dot1x_mac_idx`, replacing `radpostauth_cert_mac_idx` one
+  release later). The reason reads "MAB not used: this device authenticates with 802.1X".
+- **UI.** `/dot1x-users/` (all roles view; operator+ create, edit groups/description/expiry/
+  enabled, set password, delete). Groups without an enabled rule are flagged. Audited
+  `dot1x_user.create|update|credential_reset|delete` (object_id = username; never the password or
+  its hash). Auth log method filter and labels for `ttls-pap`; reason hints for each reason.
+- **Upgrade.** `--phase postgres` (table, functions), `--phase app`, then `--phase freeradius`
+  (eap, the inner site and its symlink, re-rendered policy) and a FreeRADIUS restart. Without the
+  freeradius phase nothing changes for clients: the new policies are defined but unused.
+
+## 19. Change (2026-11-03): EAP-TTLS with directory passwords
+
+Step 2 of username/password 802.1X: a name that is not a local 802.1X user can sign in with its
+directory account; the password is checked with an LDAP bind as that person.
+
+- **Setting** `dot1x_ttls_directory` (`'false'` by default; Settings, admin + step-up, audited).
+  Only effective while `dot1x_ttls` is on. A local 802.1X user of the same name always wins
+  (its own password, groups, disabled/expired state).
+- **SQL.** `radius_admin_dot1x_user_hex` returns `'directory'` instead of `'unknown'` when the
+  name is not a local user and the setting is on.
+- **FreeRADIUS.** `mods-available/ldap` gains a second section, `ldap ldap_user`, after the main
+  one. It takes `server`, `port`, `identity`, `password`, `base_dn`, the group lookup and the TLS
+  settings from the main section by reference (`${modules.ldap.…}`; FreeRADIUS resolves references
+  while reading and reads `mods-enabled/` in no fixed order, hence the same file). User filter:
+  `(&(objectClass=user)(!(objectClass=computer))(|(sAMAccountName=%{User-Name})(userPrincipalName=%{User-Name})))`,
+  values escaped by rlm_ldap. No `update` section (nothing is read from the entry besides groups);
+  pool `start = 0`. The installer's live-setting carry-over (first match for identity, base DN,
+  password; bind test) is unaffected; its server-line handling ignores reference lines.
+- **Inner site.** When the policy left `control:Tmp-String-0 = "directory"`: `ldap_user`
+  (authorize: user DN, group names cached in `control:ldap_user-LDAP-Group`); `notfound` → reject
+  "no such 802.1X user (not a local user, not found in the directory)"; any other failure → reject
+  "the directory could not be searched for this user"; else `Auth-Type := ldap_user` (authenticate:
+  LDAP bind as the user) and the group names are copied to `control:Tmp-String-9`. Otherwise `pap`.
+- **Policy.** `radius_admin_inner_authorize` marks `outer.control:Tmp-String-1 = "ttls-ldap"` for
+  directory names. `radius_admin_inner_postauth` hex-encodes the groups (same pattern as EAP-TLS:
+  attribute copy, `%{hex:…}` per item) into `outer.session-state:Tmp-String-3` with the marker
+  `ttls-ldap`. `radius_admin_inner_reject` gives "the directory refused the password (wrong password,
+  or a disabled, locked or expired account)". The outer branch accepts either marker; for
+  `ttls-ldap` it validates the group list (`^(,[0-9a-f]+)*$`) and calls `radius_admin_vlan_rule_hex`
+  (the EAP-TLS matcher), and the groups are logged in `radpostauth.ad_groups_hex`.
+- **Log/UI.** `authmethod = 'ttls-ldap'`; filter and labels; the auth log record shows the
+  directory groups seen and the matching rule; hints for the three directory reasons; the 802.1X
+  users page says when directory accounts are accepted. MAB treats `ttls-ldap` like the other
+  802.1X methods.
+- **Upgrade.** As section 18 (`--phase postgres`, `app`, `freeradius` and a restart).
+
+## 20. Change (2026-11-03): PEAP-MSCHAPv2 for local 802.1X users (standard mode only)
+
+Step 3 of username/password 802.1X. MSCHAPv2 uses MD4, DES and SHA-1: a documented exception
+(SECURITY §1.1 exception 8), never available with `require_fips`.
+
+- **Setting** `dot1x_peap` (`'false'`; Settings, admin + step-up, audited). With `require_fips`
+  the checkbox is not shown, a posted value is ignored, `create_app` switches an earlier `'true'`
+  off (`services.fips_peap_off`, audited as `system:fips`).
+- **Column** `ui.dot1x_user.nt_hash` (32 lower-case hex digits or NULL): MD4 of the UTF-16LE
+  password (`crypto.nt_hash`, RFC 1320 in Python). Set only when a password is entered with
+  "Allow PEAP" ticked (create, set password); unticking on edit sets it to NULL; ticking on edit
+  without a password is refused. Never shown or audited (audit detail `peap: bool`). Ignored and
+  cleared on save in FIPS mode.
+- **SQL** `radius_admin_dot1x_nt_hex(user_hex)` → `'0x' || nt_hash`, or `off` / `unknown` /
+  `disabled` / `expired` / `nopeap`, NULL for malformed input; EXECUTE for `radius_fr` only.
+  `radius_admin_dot1x_vlan_rule_hex` answers while `dot1x_ttls` or `dot1x_peap` is on.
+- **FreeRADIUS.** `mods-available/eap`: `peap { tls = tls-common; default_eap_type = mschapv2;
+  virtual_server = "radius-admin-peap"; copy_request_to_tunnel = no; use_tunneled_reply = no }`
+  and, after the main section, `eap radius_admin_inner_eap { default_eap_type = mschapv2;
+  mschapv2 { send_error = no } }`. `sites-available/radius-admin-peap`: authorize
+  `filter_username`, `radius_admin_peap_authorize`, `radius_admin_inner_eap { ok = return }`;
+  authenticate `Auth-Type MS-CHAP { mschap }`, `radius_admin_inner_eap`; post-auth
+  `radius_admin_peap_postauth`, REJECT `radius_admin_inner_reject`. The installer enables the
+  site and re-enables `mods-enabled/mschap` (no longer in `modules-to-disable.txt`).
+  `sites-available/default`, Post-Auth-Type REJECT: `radius_admin_reject` before `-sql`.
+- **Policy.** `radius_admin_peap_authorize` (every inner round): method `peap` and the inner
+  User-Name on `outer.control`; no EAP-Message → reject; `NT-Password` from the function when it
+  matches `^0x[0-9a-f]{32}$`, otherwise reject with the reason. `radius_admin_peap_postauth`:
+  `outer.session-state` marker `peap`. `radius_admin_inner_reject` also stores method, user and
+  reason in `outer.session-state` (`Tmp-String-4`, `Tmp-String-5`, `Module-Failure-Message`);
+  `radius_admin_reject` restores them for the outer reject one round later (PEAP sends its
+  failure inside the tunnel), only when `control:Tmp-String-1` is unset and the stored method is
+  one of `ttls-pap|ttls-ldap|peap`. The outer post-auth branch accepts `peap` like `ttls-pap`.
+- **Log/UI.** `authmethod = 'peap'`; filter, labels, hints (turned off, not allowed for this user,
+  only EAP-MSCHAPv2 inside); PEAP tag on the 802.1X users list. MAB treats `peap` like the other
+  802.1X methods.
+- **Upgrade.** As section 18; the freeradius phase also installs the PEAP site, re-enables mschap
+  and the new default-site line. The policy and that line are installed together; after an app
+  downgrade an Apply is refused by `radiusd -XC` (the policy lacks `radius_admin_reject`) rather
+  than breaking FreeRADIUS.
+
+## 21. Change (2026-11-03): PEAP-MSCHAPv2 with directory accounts (domain join, ntlm_auth)
+
+Step 4 of username/password 802.1X. Same exception and FIPS rule as section 20.
+
+- **Join.** `deploy/ad-join.sh --realm REALM [--workgroup NAME] [--admin USER]` (console, root):
+  refuses with `require_fips`; installs `samba-common-bin winbind`; writes `/etc/samba/smb.conf`
+  (member only: `security = ads`, `ntlm auth = mschapv2-and-ntlmv2-only`, no shares; first line
+  `# radius-admin (deploy/ad-join.sh)`), replacing only nothing, the package default
+  (`/usr/share/samba/smb.conf`) or its own earlier file unless `--replace-smb-conf` (backup kept);
+  `net ads join -U USER` (prompts; the password never passes through the script); enables winbind;
+  `usermod -aG winbindd_priv freerad`; checks `net ads testjoin`, `wbinfo -t`. `--status`,
+  `--dry-run`, `--print-config`. Not run by the installer or the updater.
+- **Setting** `dot1x_peap_directory` (`'false'`; hidden and refused with `require_fips`, switched
+  off by `fips_peap_off` with `dot1x_peap`). `radius_admin_dot1x_nt_hex` returns `'directory'` for
+  a name that is not local while it is on.
+- **FreeRADIUS.** `mods-available/mschap` is shipped (stock 3.2.10 plus `ntlm_auth =
+  "/usr/bin/ntlm_auth --request-nt-key --allow-mschapv2 --username=%{%{mschap:User-Name}:-None}
+  --challenge=… --nt-response=…"`, `ntlm_auth_timeout = 5`). Local users get
+  `MS-CHAP-Use-NTLM-Auth := No` with their `NT-Password`, so ntlm_auth runs only for directory
+  names. The `ldap_user` filter uses `%{%{Stripped-User-Name}:-%{User-Name}}`.
+  `radius-admin-peap` authorize, for `"directory"`: `Stripped-User-Name := %{mschap:User-Name}`
+  (no `DOMAIN\` prefix), `ldap_user` (notfound → "not found in the directory"; other failure →
+  "could not be searched"), groups to `control:Tmp-String-9`; then the inner EAP.
+- **Policy.** `radius_admin_peap_authorize`: `outer.control:Tmp-String-1 = "peap-ldap"` for
+  directory names, no reject. `radius_admin_peap_postauth`: hex-encoded groups (shared
+  `_DIRECTORY_GROUPS_HEX`) into `outer.session-state` with marker `peap-ldap`. Outer branch and
+  `radius_admin_reject` accept `peap-ldap` like `ttls-ldap`; the directory reject reason covers it.
+- **Log/UI.** `authmethod = 'peap-ldap'`; Settings checkbox with the `ad-join.sh` hint; labels,
+  filter, directory groups on the record. MAB treats it like the other 802.1X methods.
+- **Bench.** `tests/freeradius/fake-ntlm-auth.py` stands in for ntlm_auth (checks the MSCHAPv2
+  NT-Response with DES and the NT hash, RFC 2759; logs every call). `tests/installer/test_ad_join.sh`
+  covers the script without a domain.
+
+## 22. Change (2026-11-04): numbered pages
+
+- **Lists.** The authentication log, the audit log and the sessions page show 50 rows per page
+  with numbered page links (`paging.Pager`, macro `pager` in `_macros.html`): "51–100 of 1,234"
+  and Previous · 1 … 4 5 [6] 7 8 … 25 · Next (first and last page, two each side of the current
+  one). The sessions page previously showed 100 per page with Newer/Older only.
+- **Counting.** Each view counts the matching rows with the same `FROM … WHERE` as the page query,
+  capped at `MAX_PAGE` (10,000) pages (`count(*)` over a `LIMIT` subquery); a capped count shows
+  as "500,000+". A page number past the end shows the last page; anything unparsable is page 1.
+- **Links** keep the active filters and leave out empty ones.

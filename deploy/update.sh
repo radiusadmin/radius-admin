@@ -19,7 +19,8 @@
 #                  radius-admin-freeradius but restarts radiusd only with --restart-freeradius
 #        postgres  if sql/ or deploy/postgres/ changed (all SQL files are idempotent)
 #        app       always (installs only what changed; restarts the web UI and the poller)
-#        nginx     if deploy/nginx/ changed
+#        nginx     if deploy/nginx/ or deploy/systemd/nginx.service.d/ (the nginx.service
+#                  drop-in) changed
 #        firewall  if deploy/firewall/ changed
 #      FreeRADIUS files (freeradius/) are never installed automatically: when they change
 #      you are told, and --with-freeradius adds the freeradius phase (it still does not
@@ -183,7 +184,7 @@ else
     if changed freeradius; then fr_changed=1; fi
     if ((WITH_FR)); then phases+=(freeradius); fi
     phases+=(app)
-    if changed deploy/nginx; then phases+=(nginx); fi
+    if changed deploy/nginx deploy/systemd/nginx.service.d; then phases+=(nginx); fi
     if changed deploy/firewall; then phases+=(firewall); fi
 fi
 

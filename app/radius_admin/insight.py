@@ -11,8 +11,9 @@ from . import db
 REASON_HINTS = (
     (r"MAB device not registered", "This MAC is not registered. Approve it under MAB devices → Unknown devices, "
                                    "or add it with Add device."),
-    (r"MAB not used: this device authenticates with a certificate",
-     "This MAC has authenticated with a certificate (802.1X), so it is not offered for MAB approval. The switch "
+    (r"MAB not used: this device authenticates with (a certificate|802\.1X)",
+     "This MAC has authenticated with 802.1X (a certificate or a username and password), so it is not offered "
+     "for MAB approval. The switch "
      "tried MAB, usually because 802.1X timed out or the port tries MAB first; check the computer's 802.1X "
      "client and the port's authentication order."),
     (r"MAB registration expired", "The device's MAB registration has expired. Edit the device and set a new "
@@ -22,6 +23,40 @@ REASON_HINTS = (
                                       "check the switch's MAB settings."),
     (r"MAB Calling-Station-Id is not a MAC", "The switch's Calling-Station-Id is not a MAC address; check the "
                                              "switch's RADIUS attribute settings."),
+    (r"username and password sign-in \(EAP-TTLS\) is turned off",
+     "Username and password 802.1X is turned off. Turn it on in Settings, or configure the device for a "
+     "certificate (EAP-TLS)."),
+    (r"sign-in with PEAP is turned off",
+     "PEAP is turned off. Turn it on in Settings, or set the device up for EAP-TTLS with PAP or a certificate "
+     "(EAP-TLS)."),
+    (r"PEAP is not allowed for this 802\.1X user",
+     "This 802.1X user does not allow PEAP. Set a new password with Allow PEAP ticked under 802.1X users, or set "
+     "the device up for EAP-TTLS with PAP."),
+    (r"only EAP-MSCHAPv2 is accepted inside PEAP",
+     "Set the device's PEAP inner method to EAP-MSCHAPv2 (secured password)."),
+    (r"802\.1X user is disabled", "The local 802.1X user is disabled. Enable it under 802.1X users."),
+    (r"802\.1X user has expired", "The local 802.1X user has expired. Set a new expiry date (or clear it) under "
+                                  "802.1X users."),
+    (r"not found in the directory",
+     "This name is neither a local 802.1X user nor a directory account. Users type their directory user name "
+     "(sAMAccountName) or user@domain (userPrincipalName); check the name the device sends inside the tunnel."),
+    (r"no such 802\.1X user", "No local 802.1X user has this name (the name inside the tunnel, not the outer "
+                              "anonymous identity). Add the user under 802.1X users, or check the device's "
+                              "settings."),
+    (r"the directory refused the password",
+     "The directory refused the login: a wrong password, or the account is disabled, locked out or expired. "
+     "Check the account in Active Directory."),
+    (r"directory could not be searched",
+     "FreeRADIUS could not search the directory for this user. Check that the domain controllers are "
+     "reachable and the LDAP bind account works (FreeRADIUS log)."),
+    (r"wrong password for 802\.1X user", "Wrong password for this 802.1X user. Set a new one under 802.1X users "
+                                         "if the user has forgotten it."),
+    (r"only PAP is accepted inside EAP-TTLS", "Set the device's EAP-TTLS inner authentication to PAP (the "
+                                             "password is protected by the TLS tunnel)."),
+    (r"no enabled access rule matches the user's groups",
+     "None of the user's groups (a local 802.1X user's groups, or a directory account's groups shown below) has "
+     "an enabled access rule for this kind of connection (wired, or this SSID). Add a rule or change the "
+     "user's groups."),
     (r"no enabled access rule", "None of the computer's AD groups (below) has an enabled access rule for this "
                                 "kind of connection (wired, or this SSID). Add a rule or change the computer's "
                                 "group membership."),
@@ -43,8 +78,8 @@ REASON_HINTS = (
     (r"(?i)User-Name contains whitespace|User-Name .*(invalid|not allowed)",
      "The user name sent by the device contains characters FreeRADIUS refuses (for example spaces)."),
     (r"(?i)No mutually acceptable types|(PEAP|TTLS|MD5|MSCHAP|NAK).*(not|disabled|reject)|Peer NAK",
-     "The device tried an EAP method other than EAP-TLS. Configure it for certificate (EAP-TLS) "
-     "authentication."),
+     "The device tried an EAP method this server does not offer. Configure it for a certificate (EAP-TLS), or "
+     "for a username and password with EAP-TTLS and PAP inside."),
     (r"(?i)sql|database|rlm_sql", "A database error occurred; check PostgreSQL and the FreeRADIUS log."),
 )
 

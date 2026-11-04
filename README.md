@@ -9,7 +9,7 @@
 ![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-4169E1?logo=postgresql&logoColor=white)
 ![FIPS mode](https://img.shields.io/badge/FIPS%20mode-optional-informational)
-![licence](https://img.shields.io/badge/licence-to%20be%20decided-lightgrey)
+[![licence](https://img.shields.io/badge/licence-AGPL--3.0--or--later-blue)](LICENSE)
 ![made with love](https://img.shields.io/badge/made%20with-%E2%9D%A4%EF%B8%8F-red)
 
 **A secure web console for FreeRADIUS: 802.1X, MAB, RadSec and switch logins, managed in one place.**
@@ -30,6 +30,10 @@ automatically if FreeRADIUS does not come back up.
 
 - **Wired and wireless 802.1X with EAP-TLS.** Computers authenticate with certificates; their
   Active Directory group decides the VLAN (per wired port or per SSID). Nested groups work.
+- **802.1X with a username and password** (EAP-TTLS with PAP inside) for people and devices
+  without a certificate: local accounts with groups and expiry, or Active Directory accounts
+  and their groups, with the same access rules. PEAP-MSCHAPv2 where devices need it, for
+  local users or, with the server joined to the domain, directory accounts.
 - **Devices without 802.1X** (printers, cameras, IoT). MAC Authentication Bypass with a VLAN per
   device, optional expiry, vendor names, and an approval queue: unknown devices that try to
   connect show up for one-click approval.
@@ -192,13 +196,30 @@ Being a young project, some parts are still to come:
 - The bundled FreeRADIUS package is built for Ubuntu 24.04 (amd64); Debian 12 follows.
 - The nginx phase expects the site CA bundle and an OCSP responder for client-certificate MFA.
 - Vendor profiles: Cisco Catalyst 1200/1300 is the tested switch family today.
-- Updates from the portal need the project's signing key to be set up once
-  ([RUNBOOK §9.3](docs/RUNBOOK.md#93-updates-from-the-portal-signed-builds)); until then,
-  updates use `deploy/update.sh` or the Windows push script.
 
 ## Licence
 
-Not decided yet.
+Copyright © 2026 Collin Linde.
+
+radius-admin is free software: you can redistribute it and/or modify it under the terms of the
+[GNU Affero General Public License](LICENSE) as published by the Free Software Foundation,
+either version 3 of the License, or (at your option) any later version. It is free to use, at
+home and in organizations. If you run a modified version for others over a network, the AGPL
+asks you to offer them its source code (section 13). radius-admin is distributed in the hope
+that it will be useful, but WITHOUT ANY WARRANTY; see the licence for details. Other licensing
+terms may be available from the copyright holder.
+
+The release bundle also contains the `radius-admin-freeradius` package: FreeRADIUS, a separate
+program under its own licence (GNU GPL version 2 or later; parts under the LGPL). Its upstream
+source tarball and signature ship in the bundle's `packages/source/`, and its licence and
+copyright notices are installed with it under
+`/opt/radius-admin-freeradius/share/doc/radius-admin-freeradius/`. radius-admin runs and
+configures FreeRADIUS; it does not link to it.
+
+## Contributing
+
+Contributions are welcome; please read [CONTRIBUTING.md](CONTRIBUTING.md). Pull requests can
+be merged once their author has accepted the [Contributor License Agreement](CLA.md).
 
 ---
 
