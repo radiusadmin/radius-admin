@@ -1003,7 +1003,9 @@ person approves every published build.
 changes under `## Unreleased` in `CHANGELOG.md`, and when releasing rename that section to
 `## 0.2.0 — <date>`. `dev` builds are `0.2.0-dev.N`, `testing` builds `0.2.0-rc.N`, and the
 merge to `main` publishes `0.2.0`. A push to `main` without a `VERSION` change publishes
-nothing.
+nothing; the Release run then shows the warning "No release published". Rename
+`## Unreleased` before the merge to `main`, or the run warns "Empty release notes" and the
+release is published without notes.
 
 **On a server.** Administration → **Updates** shows the installed and the latest build on the
 channel, what changed in between, and whether the update restarts FreeRADIUS.
