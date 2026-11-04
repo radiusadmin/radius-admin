@@ -70,7 +70,7 @@
 </table></div>
 {% else %}<p class="empty">{% if q or sw %}No sessions match.{% elif history %}No sessions in the last 30 days.{% else %}No open sessions.{% endif %}</p>{% endif %}
 </section>
-{{ m.pager(page, more, 'sessions.index', {'q': q, 'switch': sw, 'history': '1' if history else ''}) }}
+{{ m.pager(pager, 'sessions.index', {'q': q, 'switch': sw, 'history': '1' if history else ''}) }}
 
 {% if recent_coa %}
 <section class="panel flush">

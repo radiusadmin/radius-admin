@@ -974,3 +974,14 @@ Step 4 of username/password 802.1X. Same exception and FIPS rule as section 20.
 - **Bench.** `tests/freeradius/fake-ntlm-auth.py` stands in for ntlm_auth (checks the MSCHAPv2
   NT-Response with DES and the NT hash, RFC 2759; logs every call). `tests/installer/test_ad_join.sh`
   covers the script without a domain.
+
+## 22. Change (2026-11-04): numbered pages
+
+- **Lists.** The authentication log, the audit log and the sessions page show 50 rows per page
+  with numbered page links (`paging.Pager`, macro `pager` in `_macros.html`): "51–100 of 1,234"
+  and Previous · 1 … 4 5 [6] 7 8 … 25 · Next (first and last page, two each side of the current
+  one). The sessions page previously showed 100 per page with Newer/Older only.
+- **Counting.** Each view counts the matching rows with the same `FROM … WHERE` as the page query,
+  capped at `MAX_PAGE` (10,000) pages (`count(*)` over a `LIMIT` subquery); a capped count shows
+  as "500,000+". A page number past the end shows the last page; anything unparsable is page 1.
+- **Links** keep the active filters and leave out empty ones.

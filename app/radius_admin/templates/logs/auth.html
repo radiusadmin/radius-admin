@@ -30,5 +30,5 @@
 </table></div>
 {% else %}<p class="empty">No authentications match these filters.</p>{% endif %}
 </section>
-{{ m.pager(page, more, 'logs.auth_log', {'user': f.user, 'nas': f.nas, 'mac': f.mac, 'reply': f.reply, 'method': f.method, 'since': since or '', 'until': until or ''}) }}
+{{ m.pager(pager, 'logs.auth_log', {'user': f.user, 'nas': f.nas, 'mac': f.mac, 'reply': f.reply, 'method': f.method, 'since': since or '', 'until': until or ''}) }}
 {% endblock %}

@@ -26,12 +26,25 @@
 {% if v %}<span class="tag tag-ok">{{ on }}</span>{% else %}<span class="tag tag-muted">{{ off }}</span>{% endif %}
 {% endmacro %}
 
-{% macro pager(page, more, endpoint, args) %}
-{% if page > 1 or more %}
+{# Numbered pages (paging.Pager): "51–100 of 1,234" and Previous 1 … 4 5 [6] 7 8 … 25 Next.
+   Empty filter values are left out of the links. #}
+{% macro pager(p, endpoint, args) %}
+{% if p.total %}
+{%- set ns = namespace(a={}) -%}
+{%- for k, v in args.items() if v %}{% set _ = ns.a.update({k: v}) %}{% endfor -%}
 <nav class="pager" aria-label="Pages">
-  {% if page > 1 %}<a class="btn btn-quiet" href="{{ url_for(endpoint, page=page-1, **args) }}">Newer</a>{% endif %}
-  <span>Page {{ page }}</span>
-  {% if more %}<a class="btn btn-quiet" href="{{ url_for(endpoint, page=page+1, **args) }}">Older</a>{% endif %}
+  <p class="pager-count">{{ "{:,}".format(p.first) }}–{{ "{:,}".format(p.last) }} of {{ "{:,}".format(p.total) }}{{ '+' if p.capped }}</p>
+  {% if p.pages > 1 %}
+  <ul class="pager-pages">
+    <li>{% if p.has_prev %}<a class="pager-step" rel="prev" href="{{ url_for(endpoint, page=p.page-1, **ns.a) }}">Previous</a>{% else %}<span class="pager-step is-off" aria-disabled="true">Previous</span>{% endif %}</li>
+    {% for n in p.numbers() %}
+    {% if n is none %}<li class="pager-gap" aria-hidden="true">…</li>
+    {% elif n == p.page %}<li><span class="pager-num is-current" aria-current="page">{{ n }}</span></li>
+    {% else %}<li><a class="pager-num" href="{{ url_for(endpoint, page=n, **ns.a) }}" aria-label="Page {{ n }}">{{ n }}</a></li>{% endif %}
+    {% endfor %}
+    <li>{% if p.has_next %}<a class="pager-step" rel="next" href="{{ url_for(endpoint, page=p.page+1, **ns.a) }}">Next</a>{% else %}<span class="pager-step is-off" aria-disabled="true">Next</span>{% endif %}</li>
+  </ul>
+  {% endif %}
 </nav>
 {% endif %}
 {% endmacro %}
