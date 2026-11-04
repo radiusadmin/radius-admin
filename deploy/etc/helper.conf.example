@@ -23,6 +23,11 @@ runuser = /usr/sbin/runuser
 ss = /usr/bin/ss
 radius_port = 1812
 
+# the web portal, reported by status (and the monitor's "Portal down" alert) when the site exists
+# portal_service = nginx.service
+# portal_site = /etc/nginx/sites-enabled/radius-admin
+# portal_port = 443
+
 # updates (SPEC section 16): downloads by the update check service (owned by update_owner),
 # the pinned public key their signed manifests must verify with, and the installed build
 # update_dir = /var/lib/radius-admin/updates

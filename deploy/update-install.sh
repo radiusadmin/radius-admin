@@ -9,7 +9,8 @@
 #   3. runs the bundle's deploy/update.sh; when the release restarts FreeRADIUS, also its
 #      freeradius phase with --restart-freeradius (that phase restores its own backup if
 #      FreeRADIUS does not come back)
-#   4. health checks: web portal answering, helper socket, FreeRADIUS active and listening,
+#   4. health checks: web portal answering, helper socket, nginx active and listening on
+#      TCP 443 (when the portal's nginx site is enabled), FreeRADIUS active and listening,
 #      the installed BUILD.json names VERSION
 #   5. on failure: puts the previous release back (update.sh --rollback)
 # Progress goes to the helper's update-state.json; the full log to /var/log/radius-admin.
@@ -113,6 +114,12 @@ fi
 rm -f "$upd"
 
 state "message=checking the new release"
+NGINX_SITE=/etc/nginx/sites-enabled/radius-admin
+portal_healthy() { # nginx serves the portal: active and listening on TCP 443 (if its site is enabled)
+    [[ -e $NGINX_SITE || -L $NGINX_SITE ]] || return 0
+    systemctl is-active --quiet nginx.service || { echo "health: nginx (the web portal) is not active"; return 1; }
+    ss -H -ltn | awk '{print $4}' | grep -q ':443$' || { echo "health: nginx is not listening on TCP 443"; return 1; }
+}
 healthy() {
     systemctl is-active --quiet radius-admin.service || { echo "health: radius-admin.service is not active"; return 1; }
     systemctl is-active --quiet radius-admin-helper.socket || { echo "health: helper socket is not active"; return 1; }
@@ -124,6 +131,7 @@ s.connect("/run/radius-admin/app.sock")
 s.sendall(b"GET /login HTTP/1.0\r\nHost: localhost\r\n\r\n")
 sys.exit(0 if s.recv(64).split(b" ")[1:2] in ([b"200"], [b"302"], [b"303"]) else 1)
 PY
+    portal_healthy || return 1
     if [[ $restarts == True ]]; then
         systemctl is-active --quiet freeradius.service || { echo "health: FreeRADIUS is not active"; return 1; }
         ss -H -lun | awk '{print $4}' | grep -q ':1812$' || { echo "health: FreeRADIUS is not listening on 1812"; return 1; }

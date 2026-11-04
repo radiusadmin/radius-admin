@@ -23,6 +23,10 @@ release, so previews sort after it.
   before anything is installed.
 - Switch networks (`switch_nets` in the installer answers, `--switch-nets`): the monitor may
   reach switches in several networks for SNMP and CoA, not only the management subnet.
+- "Portal down" alert: the monitor alerts (syslog, email) when nginx is not active or not
+  listening on port 443 for two checks in a row, on servers where the portal's nginx site is
+  enabled. On by default; switch it off in Alert settings. Updates also check that nginx
+  serves the portal and roll back if it does not.
 
 ### Fixed
 - The portal no longer stays down when nginx fails to start because DNS was briefly

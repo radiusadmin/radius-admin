@@ -338,7 +338,13 @@ one JSON line out, then the connection closes. Request: `{"action": <str>, ...}`
 Response always: `{"ok": bool, "action": str, "message": str, ...}`.
 Actions:
 - `status` → `{"ok":true, "service_active": bool, "fips_enabled": bool,
-  "radiusd_version": str, "last_apply": {...}|null, "backups": [ids newest first, max 20]}`
+  "radiusd_version": str, "last_apply": {...}|null, "backups": [ids newest first, max 20],
+  "portal_configured": bool, "portal_active": bool, "portal_listening": bool}`.
+  The `portal_*` fields describe the web portal: `portal_configured` when `portal_site`
+  (default `/etc/nginx/sites-enabled/radius-admin`) exists, then `portal_service` (default
+  `nginx.service`) is-active and something named nginx listens on TCP `portal_port` (443).
+  Without the site both are false and nginx is not queried. Older helpers omit the fields;
+  clients treat a missing `portal_configured` as "not known".
 - `validate` → reads `<staging>/policy` and `<staging>/clients`, runs safety checks,
   builds a temp copy of raddb with those files in place, runs
   `runuser -u freerad -- <radiusd> -XC -d <tmpraddb>`; returns `{"ok", "output": last 200 lines}`.
@@ -590,7 +596,10 @@ CSV columns (header row required, exact names, any order tolerated by name):
   tick (`coa.py`: radclient from the FreeRADIUS build, `-S` secret file, validated attributes, Cisco
   AV-pairs reauthenticate / bounce-host-port, Disconnect-Request); alerts every 60 s (`alerts.py`:
   reject spike with hysteresis, switch_down after N failed polls, radius_down after 2 failed helper
-  `status` checks — the helper now reports `listening`); per-port SNMP (`snmp.build_ports`:
+  `status` checks — the helper now reports `listening`; portal_down after 2 checks in which the
+  helper reports the nginx site enabled but nginx not active or not on TCP 443, switch
+  `ui.alert_settings.portal_enabled`, no "last check" kept since the portal can only show it
+  while nginx is up; the Alerts pages warn when it is on and email is off, `sql/96-portal-alert.sql`); per-port SNMP (`snmp.build_ports`:
   dot1xAuthPaeState, dot1xAuthAuthControlledPortStatus, dot1xAuthSessionUserName, ifOperStatus,
   dot1qPvid via dot1dBasePortIfIndex) for port-control-auto ports; hourly housekeeping (mab_pending
   30 d, coa_request 90 d, snmp_test 7 d, resolved alerts 400 d).
@@ -783,7 +792,8 @@ CSV columns (header row required, exact names, any order tolerated by name):
   `/var/backups/radius-admin/radius-db-before-<version>-<ts>.dump` (newest 5 kept), runs the
   bundle's `deploy/update.sh --package … --yes --keep-upload` (plus `--with-freeradius --
   --restart-freeradius` when the release restarts FreeRADIUS), then health checks (portal
-  answers on its socket, helper socket active, FreeRADIUS active and on UDP 1812 when
+  answers on its socket, helper socket active, `nginx.service` active and TCP 443 listening when
+  `/etc/nginx/sites-enabled/radius-admin` exists, FreeRADIUS active and on UDP 1812 when
   restarted, `/opt/radius-admin/BUILD.json` names the version) for up to a minute. On an
   installer error it re-runs the previous release's app phase; on failed health checks
   `update.sh --rollback`. Progress in the helper's `update-state.json`, log in
