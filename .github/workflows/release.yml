@@ -46,8 +46,18 @@ jobs:
           ver=$(tools/release/build-version.sh "$CHANNEL" HEAD)
           echo "version=$ver" >> "$GITHUB_OUTPUT"
           if git rev-parse -q --verify "refs/tags/v$ver" >/dev/null; then
-            echo "::notice::v$ver is already released"
             echo "exists=true" >> "$GITHUB_OUTPUT"
+            if [ "$CHANNEL" = main ]; then
+              # main takes its version from VERSION alone: without a bump nothing new is published.
+              msg="v$ver is already released, so this push to main publishes nothing. Bump VERSION on dev after each release (RUNBOOK, Releasing)."
+              echo "::warning title=No release published::$msg"
+              echo "### No release published" >> "$GITHUB_STEP_SUMMARY"
+              echo "$msg" >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "::notice::v$ver is already released"
+            fi
+          elif [ "$CHANNEL" = main ] && ! grep -Eq "^## $(printf %s "$ver" | sed 's/\./\\./g')( |$)" CHANGELOG.md; then
+            echo "::warning title=Empty release notes::CHANGELOG.md has no \"## $ver\" section, so v$ver is published without notes. Rename \"## Unreleased\" to \"## $ver — <date>\" before merging to main."
           fi
           case $CHANNEL in
             main) prev=$(git tag -l 'v*' --sort=-v:refname | grep -v -- - | grep -vx "v$ver" | head -n1 || true) ;;

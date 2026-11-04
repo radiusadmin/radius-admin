@@ -753,7 +753,9 @@ CSV columns (header row required, exact names, any order tolerated by name):
   version: `main` X.Y.Z, `testing` X.Y.Z-rc.N, `dev` X.Y.Z-dev.N, with N = commits since
   `VERSION` last changed. Ordering (same X.Y.Z): dev < rc < release (`radius_admin.versions`,
   and a copy in the helper). Bump `VERSION` on `dev` right after a release. `CHANGELOG.md`
-  has an `## Unreleased` section and one `## X.Y.Z — date` section per release.
+  has an `## Unreleased` section and one `## X.Y.Z — date` section per release. On main the
+  release job warns when `vX.Y.Z` already exists (nothing is published) and when
+  `CHANGELOG.md` has no `## X.Y.Z` section (the release would have no notes).
 - **Releases** (`.github/workflows/release.yml`, after CI passes on a push to main, testing
   or dev; job in the `release` environment): builds the FreeRADIUS package and the bundle
   (`make-bundle.sh --channel`, which writes `BUILD.json`), then `tools/release/make-release.sh`
