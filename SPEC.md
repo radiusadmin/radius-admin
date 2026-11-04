@@ -79,6 +79,7 @@ radius-admin/
     systemd/radius-admin.service
     systemd/radius-admin-helper.socket
     systemd/radius-admin-helper@.service
+    systemd/nginx.service.d/radius-admin.conf  drop-in for nginx.service (start after network, retry)
     postgres/pg_hba.conf.snippet  postgres/pg_ident.conf.snippet
     etc/radius-admin.conf.example
   tools/lib/fr-release.sh      FreeRADIUS release, signing key, verified download

@@ -244,7 +244,12 @@ sudo ./deploy/install.sh --phase app,nginx,firewall
   falling back to `/etc/resolv.conf`; override with `--resolver "10.x.x.x 10.y.y.y"`),
   copies `/etc/freeradius/certs/site/ca.pem` → `/etc/radius-admin/tls/client-ca.pem`,
   checks key/cert match and SAN, `nginx -t`, reload. The Debian default site (port
-  80) is disabled; nothing listens on port 80.
+  80) is disabled; nothing listens on port 80. Also installs the drop-in
+  `/etc/systemd/system/nginx.service.d/radius-admin.conf`: nginx resolves the OCSP
+  responder when it starts and refuses to start if that lookup fails, so the drop-in
+  starts it after `network-online.target` and restarts it every 30 seconds after a failure
+  (no start limit). A short DNS outage at boot or while `unattended-upgrades` restarts
+  nginx then no longer leaves the portal down. Check with `systemctl cat nginx`.
 * **firewall**: detects ufw / nftables / iptables. Always loads the self-contained
   nftables table `inet radius_admin` (TCP 443 to the management address accepted only from
   192.0.2.0/24, everything else to 443 dropped; RADIUS, SSH and all other ports are
