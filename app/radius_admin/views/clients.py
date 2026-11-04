@@ -9,8 +9,10 @@ from ..crypto import generate_radius_secret
 from ..flashing import flash
 from ..security import cfg, login_required, role_required, stepup_required
 from ..services import get_settings, set_setting, unlang
+from ..snmp import cli_port_name
 from . import ev, form_bool, form_str
 from .auth import inline_stepup
+from .sessions import AUTH_JOIN
 
 bp = Blueprint("clients", __name__, url_prefix="/clients")
 
@@ -237,7 +239,34 @@ def edit(cid):
             return redirect(url_for("clients.index"))
     status = db.query_one("SELECT * FROM ui.switch_status WHERE client_id = %s", (cid,))
     return render_template("clients/form.html", c=data, errors=errors, is_new=False, status=status,
+                           ports=_port_rows(existing, status),
                            tristate=TRISTATE, nas_types=NAS_TYPES, key_labels=KEY_LABELS), (400 if errors else 200)
+
+
+def _port_rows(client, status):
+    """The 802.1X ports from the last poll, each with the VLAN in use by its device.
+
+    The switch reports dot1qPvid, the port's configured (native) VLAN; a VLAN assigned by
+    RADIUS does not show there. The VLAN in use comes from the Access-Accept of the open
+    session on the port (radacct + radpostauth, as on the sessions page). `connected` is
+    false when the port has no authorized device and no session user."""
+    ports = (status or {}).get("ports") or []
+    if not ports:
+        return []
+    in_use = {}
+    rows = db.query("SELECT a.nasportid, pa.vlan FROM radacct a" + AUTH_JOIN +
+                    " WHERE a.acctstoptime IS NULL AND a.nasportid IS NOT NULL AND a.nasipaddress <<= %s::inet"
+                    " ORDER BY a.acctstarttime NULLS FIRST, a.radacctid", (str(client["ipaddr"]),))
+    for r in rows:          # oldest first: the newest session on a port wins
+        if r["vlan"]:
+            in_use[cli_port_name(r["nasportid"]).lower()] = r["vlan"]
+    out = []
+    for p in ports:
+        p = dict(p)
+        p["connected"] = bool(p.get("authorized") or p.get("user")) and p.get("oper") in ("up", None)
+        p["vlan_in_use"] = in_use.get(str(p.get("name", "")).lower()) if p["connected"] else None
+        out.append(p)
+    return out
 
 
 @bp.route("/<int:cid>/delete", methods=["POST"])

@@ -591,7 +591,10 @@ CSV columns (header row required, exact names, any order tolerated by name):
   reject spike with hysteresis, switch_down after N failed polls, radius_down after 2 failed helper
   `status` checks — the helper now reports `listening`); per-port SNMP (`snmp.build_ports`:
   dot1xAuthPaeState, dot1xAuthAuthControlledPortStatus, dot1xAuthSessionUserName, ifOperStatus,
-  dot1qPvid via dot1dBasePortIfIndex) for port-control-auto ports; hourly housekeeping (mab_pending
+  dot1qPvid via dot1dBasePortIfIndex) for port-control-auto ports. dot1qPvid is the port's native
+  VLAN; the client page shows the VLAN in use from the open session's Access-Accept on that port
+  (`clients._port_rows`), the native VLAN only as a labelled fallback, and "—" without a device.
+  Quoted SNMP values spanning lines (-Ox wraps hex at 16 bytes) are joined; hourly housekeeping (mab_pending
   30 d, coa_request 90 d, snmp_test 7 d, resolved alerts 400 d).
 - UI: Sessions (`views/sessions.py`; accounting coverage per switch; CoA queue + result page),
   auth-log detail (`/auth-log/<id>`, `insight.py` reason hints, cert expiry, group decode, NAS→client),

@@ -5,6 +5,7 @@ import datetime
 import io
 import json
 import os
+import re
 import socket
 import threading
 
@@ -88,6 +89,23 @@ def test_port_state_parsing():
     # every optional table missing: still one row per 802.1X port, nothing invented
     bare = snmp.build_ports(ctl, names, {}, {}, {}, {}, {}, {})
     assert [p["authorized"] for p in bare] == [None, None, None] and all(not p["user"] for p in bare)
+
+
+def test_wrapped_snmp_strings():
+    """-Ox prints 16 bytes of hex per line; a longer 802.1X user name used to come out as the
+    first line's raw hex with a stray quote. Multi-line text values are kept whole too."""
+    from radius_admin import snmp
+    out = snmp.parse_output(
+        '.1.3.6.1.2.1.1.1.0 = "Example switch\nfirmware 1.2 = test"\n'
+        '.1.0.8802.1.1.1.1.2.4.1.9.4 = "68 6F 73 74 2F 70 63 2D 30 31 2E 65 78 61 6D 70 \n'
+        '6C 65 2E 6E 65 74 "\n'
+        '.1.0.8802.1.1.1.1.2.4.1.9.5 = "AA BB CC 00 00 01 "\n'
+        '.1.3.6.1.2.1.1.5.0 = "sw1"\n')
+    assert out["1.3.6.1.2.1.1.1.0"] == "Example switch\nfirmware 1.2 = test"
+    assert out["1.3.6.1.2.1.1.5.0"] == "sw1" and len(out) == 4
+    ctl = {snmp.OID_DOT1X_PORT_CONTROL + ".4": "2", snmp.OID_DOT1X_PORT_CONTROL + ".5": "2"}
+    ports = snmp.build_ports(ctl, {}, {}, {}, {}, out, {}, {})
+    assert [p["user"] for p in ports] == ["host/pc-01.example.net", "aabbcc000001"]
 
 
 def test_save_status_tracks_failures_and_ports(app, superconn):
@@ -648,6 +666,33 @@ def test_client_page_shows_port_states(app, browser, superconn, logged_in):
     logged_in("admin")
     t = browser.text(browser.get("/clients/%d/edit" % cid))
     assert "1 of 2 authorized" in t and "held after a failed attempt" in t and "00-1B-0C-00-00-01" in t
+
+
+def test_client_page_port_vlan_in_use(app, browser, superconn, logged_in):
+    """The port table shows the VLAN RADIUS assigned (the switch's dot1qPvid stays at the
+    native VLAN, often 1), the native VLAN only as a labelled fallback, and — without a device."""
+    cid = _client(superconn)
+    q(superconn, "INSERT INTO ui.switch_status (client_id, reachable, dot1x_supported, dot1x_ports, dot1x_port_count,"
+                 " ports) VALUES (%s, true, true, 'gi1/0/4-7', 4, %s)",
+      (cid, json.dumps([{"name": "gi1/0/4", "authorized": True, "oper": "up", "user": "host/pc1.example.net", "vlan": 1},
+                        {"name": "gi1/0/5", "authorized": False, "oper": "up", "state_text": "connecting", "vlan": 1},
+                        {"name": "gi1/0/6", "authorized": True, "oper": "up", "user": "host/pc6.example.net", "vlan": 1},
+                        {"name": "gi1/0/7", "authorized": None, "oper": "down", "vlan": 1}])))
+    _session(superconn, 120, True)                                   # ended session on gi1/0/4: ignored
+    q(superconn, "INSERT INTO radpostauth (username, reply, authmethod, nasipaddress, callingstationid, vlan, authdate)"
+                 " VALUES ('host/pc1.example.net', 'Access-Accept', 'eap-tls', '192.0.2.10', '3C-22-FB-00-00-01',"
+                 " '777', now() - interval '125 minutes')")
+    _session(superconn)                                              # open session on gi1/0/4
+    q(superconn, "INSERT INTO radpostauth (username, reply, authmethod, nasipaddress, callingstationid, vlan, authdate)"
+                 " VALUES ('host/pc1.example.net', 'Access-Accept', 'eap-tls', '192.0.2.10', '3C-22-FB-00-00-01',"
+                 " '510', now() - interval '31 minutes')")
+    logged_in("admin")
+    t = browser.text(browser.get("/clients/%d/edit" % cid))
+    rows = {m.group(1): m.group(0) for m in re.finditer(r'<tr[^>]*>\s*<td class="mono">(gi1/0/\d)</td>.*?</tr>', t, re.S)}
+    assert sorted(rows) == ["gi1/0/4", "gi1/0/5", "gi1/0/6", "gi1/0/7"]
+    assert '<span class="vlan">510</span>' in rows["gi1/0/4"] and "777" not in rows["gi1/0/4"]
+    assert "No device" in rows["gi1/0/5"] and "No device" in rows["gi1/0/7"]
+    assert "native" in rows["gi1/0/6"] and "No device" not in rows["gi1/0/6"]
 
 
 def test_no_smart_card_wording(app, browser, superconn, logged_in):
