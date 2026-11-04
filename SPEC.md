@@ -894,7 +894,12 @@ directory account; the password is checked with an LDAP bind as that person.
 - **FreeRADIUS.** `mods-available/ldap` gains a second section, `ldap ldap_user`, after the main
   one. It takes `server`, `port`, `identity`, `password`, `base_dn`, the group lookup and the TLS
   settings from the main section by reference (`${modules.ldap.…}`; FreeRADIUS resolves references
-  while reading and reads `mods-enabled/` in no fixed order, hence the same file). User filter:
+  while reading and reads `mods-enabled/` in no fixed order, hence the same file). Upgrades
+  (`install.sh` `carry_over_secrets`) keep the live `password`, `identity`, `base_dn`, `server`,
+  `port` and, in the main section's `tls { }`, `start_tls`, `ca_file`, `ca_path`,
+  `certificate_file`, `private_key_file`, `require_cert`, `check_crl` (set, added or commented out
+  to match the live file; `ldap_user`'s references follow). `tls_min_version` stays as shipped.
+  User filter:
   `(&(objectClass=user)(!(objectClass=computer))(|(sAMAccountName=%{User-Name})(userPrincipalName=%{User-Name})))`,
   values escaped by rlm_ldap. No `update` section (nothing is read from the entry besides groups);
   pool `start = 0`. The installer's live-setting carry-over (first match for identity, base DN,
