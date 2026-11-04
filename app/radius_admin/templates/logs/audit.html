@@ -26,5 +26,5 @@
 </table></div>
 {% else %}<p class="empty">No audit records match these filters.</p>{% endif %}
 </section>
-{{ m.pager(page, more, 'logs.audit_log', {'actor': f.actor, 'action': f.action, 'result': f.result}) }}
+{{ m.pager(pager, 'logs.audit_log', {'actor': f.actor, 'action': f.action, 'result': f.result}) }}
 {% endblock %}
