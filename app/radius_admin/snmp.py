@@ -93,18 +93,37 @@ def validate_passphrase(v, label):
 
 # ------------------------------------------------------------------ parsing
 def parse_output(text):
-    """Net-SNMP output with -On -OQ -Oe -Ot -Ox... -> {oid: value_str} (quotes removed)."""
+    """Net-SNMP output with -On -OQ -Oe -Ot -Ox... -> {oid: value_str} (quotes removed).
+
+    A quoted value can span lines: -Ox prints 16 bytes of hex per line (a 802.1X user
+    name such as host/pc-01.example.net takes two), and text such as sysDescr may hold
+    newlines. Lines after an unclosed quote belong to that value, joined with newlines."""
     out = {}
+
+    def store(oid, val):
+        if val.startswith('"') and val.endswith('"') and len(val) >= 2:
+            val = val[1:-1]
+        if not (val.startswith("No Such") or val.startswith("No more variables")):
+            out[oid] = val
+
+    pending = None          # (oid, [lines]) while inside a quoted value
     for line in text.splitlines():
+        if pending is not None:
+            pending[1].append(line.strip())
+            if line.rstrip().endswith('"'):
+                store(pending[0], "\n".join(pending[1]))
+                pending = None
+            continue
         m = _LINE_RE.match(line.strip())
         if not m:
             continue
         val = m.group("val").strip()
-        if val.startswith('"') and val.endswith('"') and len(val) >= 2:
-            val = val[1:-1]
-        if val.startswith("No Such") or val.startswith("No more variables"):
+        if val.startswith('"') and (len(val) == 1 or not val.endswith('"')):
+            pending = (m.group("oid"), [val])
             continue
-        out[m.group("oid")] = val
+        store(m.group("oid"), val)
+    if pending is not None:  # output cut off inside a value: keep what arrived
+        store(pending[0], "\n".join(pending[1]))
     return out
 
 
@@ -120,7 +139,7 @@ def _children(values, base):
 
 def _hex_to_text(v):
     """Net-SNMP -Ox prints octet strings as hex ('C0 00 02 05'); decode for addresses."""
-    h = v.replace(" ", "").replace(":", "")
+    h = re.sub(r"[\s:]", "", v)
     if not h or len(h) % 2 or not re.fullmatch(r"[0-9A-Fa-f]+", h):
         return v
     return bytes.fromhex(h)
@@ -227,7 +246,8 @@ def build_status(system, port_control, if_names, radius_ext, radius_old):
 def _octets_text(v):
     """Net-SNMP prints printable octet strings quoted (removed by parse_output) and
     binary ones as hex; MAB user names are MACs either way."""
-    b = _hex_to_text(v) if re.fullmatch(r"([0-9A-Fa-f]{2} ?)+", v or "") else v
+    v = " ".join((v or "").split())
+    b = _hex_to_text(v) if re.fullmatch(r"([0-9A-Fa-f]{2} ?)+", v) else v
     if isinstance(b, bytes):
         try:
             return b.decode("ascii")

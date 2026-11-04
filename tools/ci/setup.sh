@@ -41,7 +41,7 @@ P() { runuser -u postgres -- psql -X -q -v ON_ERROR_STOP=1 "$@"; }
 P -d postgres < "$REPO/sql/00-roles.sql"
 for db in radius radius_apptest; do               # bench / app tests
     P -d postgres -c "DROP DATABASE IF EXISTS $db" -c "CREATE DATABASE $db OWNER radius_owner"
-    for f in "$REPO"/sql/[1-9]0-*.sql; do P -d $db < "$f" >/dev/null; done
+    for f in "$REPO"/sql/[1-9][0-9]-*.sql; do P -d $db < "$f" >/dev/null; done
 done
 
 # bench host names and loopback source addresses

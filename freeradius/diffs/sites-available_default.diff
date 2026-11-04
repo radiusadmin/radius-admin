@@ -9,10 +9,16 @@
  #
  ######################################################################
  #
-@@ -329,6 +329,17 @@
+@@ -329,6 +329,23 @@
  	#  and the 'raddb/mods-config/preprocess/huntgroups' files.
  	preprocess
  
++	#
++	#  radius-admin: a RadSec client whose TLS certificate does not carry
++	#  the name configured for it is rejected (policy.d/radius-admin).
++	#
++	radius_admin_radsec
++
 +	#
 +	#  radius-admin: MAC Authentication Bypass for devices registered
 +	#  in the mab_device table (policy.d/radius-admin).  An accepted MAB
@@ -27,7 +33,7 @@
  	#  If you intend to use CUI and you require that the Operator-Name
  	#  be set for CUI generation and you want to generate CUI also
  	#  for your local clients then uncomment the operator-name
-@@ -349,7 +360,12 @@
+@@ -349,7 +366,12 @@
  	#
  	#  The chap module will set 'Auth-Type := CHAP' if we are
  	#  handling a CHAP request and Auth-Type has not already been set
@@ -41,7 +47,7 @@
  
  	#
  	#  If the users are logging in with an MS-CHAP-Challenge
-@@ -357,13 +373,19 @@
+@@ -357,13 +379,19 @@
  	#  the MS-CHAP-Challenge attribute, and add 'Auth-Type := MS-CHAP'
  	#  to the request, which will cause the server to then use
  	#  the mschap module for authentication.
@@ -63,7 +69,7 @@
  
  	#
  	#  The dpsk module implements dynamic PSK.
-@@ -377,7 +399,17 @@
+@@ -377,7 +405,17 @@
  	#  the dpsk module.
  	#
  #	rewrite_called_station_id
@@ -81,7 +87,7 @@
  
  	#
  	#  The WiMAX specification says that the Calling-Station-Id
-@@ -590,33 +622,49 @@
+@@ -590,33 +628,49 @@
  		pap
  	}
  
@@ -140,7 +146,17 @@
  
  	#
  	#  Pluggable Authentication Modules.
-@@ -777,7 +825,7 @@
+@@ -668,6 +722,9 @@
+ preacct {
+ 	preprocess
+ 
++	#  radius-admin: accounting from a RadSec client with the wrong certificate is dropped
++	radius_admin_radsec
++
+ 	#
+ 	#  Merge Acct-[Input|Output]-Gigawords and Acct-[Input-Output]-Octets
+ 	#  into a single 64bit counter Acct-[Input|Output]-Octets64.
+@@ -777,7 +834,7 @@
  #	pgsql-voip
  
  	# For Exec-Program and Exec-Program-Wait
@@ -149,7 +165,7 @@
  
  	#  Filter attributes from the accounting response.
  	attr_filter.accounting_response
-@@ -805,12 +853,15 @@
+@@ -805,12 +862,15 @@
  #	sql
  }
  
@@ -168,7 +184,7 @@
  	#  If you need to have a State attribute, you can
  	#  add it here.  e.g. for later CoA-Request with
  	#  State, and Service-Type = Authorize-Only.
-@@ -925,7 +976,7 @@
+@@ -925,7 +985,7 @@
  #	ldap
  
  	# For Exec-Program and Exec-Program-Wait
@@ -177,7 +193,18 @@
  
  	#
  	#  In order to calcualate the various keys for old style WiMAX
-@@ -1250,5 +1301,37 @@
+@@ -1020,6 +1080,10 @@
+ 	#  The "session-state" attributes are not available here.
+ 	#
+ 	Post-Auth-Type REJECT {
++		# radius-admin: a PEAP reject is logged one round after the inner tunnel
++		# refused the login; restore its method, user and reason (policy.d/radius-admin;
++		# a policy, so not optional: "-name" only skips missing modules)
++		radius_admin_reject
+ 		# log failed authentications in SQL, too.
+ 		-sql
+ 		attr_filter.access_reject
+@@ -1250,5 +1314,37 @@
  		#
  #		acct_response
  #	}

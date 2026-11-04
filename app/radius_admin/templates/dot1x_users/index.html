@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block title %}802.1X users{% endblock %}
+{% block content %}
+<header class="page-head">
+  <div><h1>802.1X users</h1>
+  <p class="lede">Local accounts that connect to the network with a username and password (EAP-TTLS with PAP inside). The access rules assign the VLAN by each user's groups. Changes apply to the next connection.</p></div>
+  {% if has_role('operator') %}<a class="btn btn-primary" href="{{ url_for('dot1x_users.new') }}">Add 802.1X user</a>{% endif %}
+</header>
+{% if not ttls_on %}
+<p class="flash flash-info" role="status">Username and password sign-in is turned off, so these accounts cannot connect yet.{% if has_role('admin') %} Turn it on in <a href="{{ url_for('settings.index') }}">Settings</a>.{% else %} An administrator can turn it on in Settings.{% endif %}</p>
+{% elif directory_on %}
+<p class="flash flash-info" role="status">Directory accounts are accepted too: people who are not listed here can connect with their directory user name and password, and their directory groups select the VLAN. A user listed here takes precedence over a directory account of the same name.</p>
+{% endif %}
+<section class="panel flush">
+{% if users %}
+<div class="table-wrap"><table>
+  <thead><tr><th scope="col">Username</th><th scope="col">Groups</th><th scope="col">Expires</th><th scope="col">Status</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead>
+  <tbody>
+  {% for u in users %}
+  <tr class="{{ 'is-off' if not u.enabled or u.expired else '' }}">
+    <td><span class="mono">{{ u.username }}</span>{% if u.peap and not fips_mode %} <span class="tag tag-muted" title="This user may also sign in with PEAP-MSCHAPv2">PEAP</span>{% endif %}{% if u.description %}<span class="cell-sub">{{ u.description }}</span>{% endif %}</td>
+    <td>{% for grp in u.groups %}<span class="tag {{ 'tag-muted' if grp.lower() in rule_groups else 'tag-warn' }}"{% if grp.lower() not in rule_groups %} title="No enabled access rule uses this group"{% endif %}>{{ grp }}</span> {% else %}<span class="tag tag-warn" title="Without a group no access rule matches, so the user is rejected">No groups</span>{% endfor %}</td>
+    <td>{% if u.expires_at %}{{ u.expires_at|dt }}{% if u.expired %} <span class="tag tag-warn">Expired</span>{% endif %}{% else %}<span class="muted">Never</span>{% endif %}</td>
+    <td>{{ m.onoff(u.enabled) }}</td>
+    <td class="row-actions">{% if has_role('operator') %}
+      <a class="btn btn-quiet btn-small" href="{{ url_for('dot1x_users.edit', uid=u.id) }}">Edit</a>
+      <a class="btn btn-quiet btn-small" href="{{ url_for('dot1x_users.password', uid=u.id) }}">Set password</a>
+      {{ m.post_button(url_for('dot1x_users.delete', uid=u.id), 'Delete', 'btn btn-danger-quiet btn-small', confirm='Delete 802.1X user ' ~ u.username ~ '? Their next connection is rejected.') }}
+    {% endif %}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table></div>
+{% else %}<p class="empty">No 802.1X users. Add one to let people connect with a username and password.</p>{% endif %}
+</section>
+{% endblock %}

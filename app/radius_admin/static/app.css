@@ -410,7 +410,22 @@ pre.diff span { display: block; padding: 0 1.25rem; white-space: pre; min-height
 .kv { display: grid; grid-template-columns: max-content 1fr; gap: .4rem 1.25rem; margin: 0; }
 .kv dt { font-weight: 600; color: var(--ink-soft); }
 .kv dd { margin: 0; overflow-wrap: anywhere; }
-.pager { display: flex; align-items: center; justify-content: center; gap: 1rem; margin-top: 1rem; }
+.pager { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .5rem 1rem; margin-top: 1rem; }
+.pager-count { margin: 0; font-size: .85rem; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+.pager-pages { display: flex; flex-wrap: wrap; align-items: center; gap: .25rem; margin: 0; padding: 0; list-style: none; }
+.pager-num, .pager-step {
+  display: inline-flex; align-items: center; justify-content: center; min-width: var(--ctl-h-sm); min-height: var(--ctl-h-sm);
+  padding: 0 .55rem; border: 1px solid var(--line); border-radius: var(--radius-s); background: var(--surface);
+  color: var(--ink); font-size: .85rem; font-weight: 600; text-decoration: none; font-variant-numeric: tabular-nums;
+}
+a.pager-num:hover, a.pager-step:hover { border-color: var(--steel-500); }
+.pager-num.is-current { background: var(--steel-800); border-color: var(--steel-800); color: #fff; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .pager-num.is-current { background: #d5e0ea; border-color: #d5e0ea; color: var(--steel-900); }
+}
+:root[data-theme="dark"] .pager-num.is-current { background: #d5e0ea; border-color: #d5e0ea; color: var(--steel-900); }
+.pager-step.is-off { opacity: .45; }
+.pager-gap { padding: 0 .2rem; color: var(--ink-soft); }
 
 /* --------------------------------------------------------- gate (login) */
 body.gate, body.bare { min-height: 100vh; background: var(--steel-900); color: var(--ink); }

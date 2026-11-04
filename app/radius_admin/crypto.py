@@ -124,6 +124,40 @@ def fr_pbkdf2_hash(password: str, iterations: int = 600000) -> str:
         FR_PBKDF2_HEADER, b64(struct.pack(">I", iterations)), b64(salt), b64(dk))
 
 
+def nt_hash(password: str) -> str:
+    """NT hash (MD4 of the UTF-16LE password) as 32 hex digits, for PEAP-MSCHAPv2 only.
+
+    Documented exception to the FIPS-safe rule (SECURITY.md): MSCHAPv2 can only check a
+    password against this unsalted hash. OpenSSL 3 no longer offers MD4 to hashlib, so this
+    is the RFC 1320 algorithm in Python; never use it for anything else."""
+    return _md4(password.encode("utf-16-le")).hex()
+
+
+def _md4(data: bytes) -> bytes:
+    """RFC 1320 MD4. Only for nt_hash() (and the bench's MSCHAPv2 stand-in)."""
+    msg = data + b"\x80" + b"\x00" * ((55 - len(data)) % 64) + struct.pack("<Q", len(data) * 8)
+    mask = 0xFFFFFFFF
+    rotl = lambda x, n: ((x << n) | (x >> (32 - n))) & mask  # noqa: E731
+    h = [0x67452301, 0xEFCDAB89, 0x98BADCFE, 0x10325476]
+    for off in range(0, len(msg), 64):
+        x = struct.unpack("<16I", msg[off:off + 64])
+        a, b, c, d = h
+        for i in range(16):                                   # round 1: F, shifts 3 7 11 19
+            k = i
+            a = rotl((a + ((b & c) | (~b & d)) + x[k]) & mask, (3, 7, 11, 19)[i % 4])
+            a, b, c, d = d, a, b, c
+        for i in range(16):                                   # round 2: G, constant 0x5A827999
+            k = (i % 4) * 4 + i // 4
+            a = rotl((a + ((b & c) | (b & d) | (c & d)) + x[k] + 0x5A827999) & mask, (3, 5, 9, 13)[i % 4])
+            a, b, c, d = d, a, b, c
+        for i in range(16):                                   # round 3: H, constant 0x6ED9EBA1
+            k = (0, 8, 4, 12, 2, 10, 6, 14, 1, 9, 5, 13, 3, 11, 7, 15)[i]
+            a = rotl((a + (b ^ c ^ d) + x[k] + 0x6ED9EBA1) & mask, (3, 9, 11, 15)[i % 4])
+            a, b, c, d = d, a, b, c
+        h = [(v + w) & mask for v, w in zip(h, (a, b, c, d))]
+    return struct.pack("<4I", *h)
+
+
 def fr_pbkdf2_parse(value: str):
     """Parse a {X-PBKDF2} value -> (digest, iterations, salt, dk). Raises ValueError."""
     if not value.startswith(FR_PBKDF2_HEADER):

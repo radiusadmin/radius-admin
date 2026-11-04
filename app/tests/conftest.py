@@ -1,6 +1,6 @@
 """Test fixtures.
 
-Database: a dedicated database (default radius_apptest) loaded from sql/10..60 (all files except 00-roles).
+Database: a dedicated database (default radius_apptest) loaded from sql/10..95 (all files except 00-roles).
 The app connects as the postgres superuser over the unix socket and immediately
 switches to role radius_admin (libpq options '-c role=radius_admin'), so the
 production grants are what is exercised. Fixtures use a separate superuser
@@ -270,7 +270,7 @@ def superconn():
 
 RESET_TABLES = ("ui.session", "ui.password_history", "ui.login_attempt", "ui.apply_log", "ui.audit_log",
                 "ui.radius_client", "ui.access_rule", "ui.admin_user", "radcheck", "radusergroup", "radreply",
-                "mab_device", "radpostauth", "radacct", "mab_pending", "ui.alert", "ui.coa_request",
+                "mab_device", "ui.dot1x_user", "radpostauth", "radacct", "mab_pending", "ui.alert", "ui.coa_request",
                 "ui.sso_group_role", "ui.saml_request", "ui.saml_replay")
 
 

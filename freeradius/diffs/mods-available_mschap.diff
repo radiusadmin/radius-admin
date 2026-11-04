@@ -1,0 +1,24 @@
+--- a/mods-available/mschap
++++ b/mods-available/mschap
+@@ -114,6 +114,13 @@
+ 	#  to the command-line parameters.
+ 	#
+ #	ntlm_auth = "/path/to/ntlm_auth --request-nt-key --allow-mschapv2 --username=%{%{Stripped-User-Name}:-%{%{User-Name}:-None}} --challenge=%{%{mschap:Challenge}:-00} --nt-response=%{%{mschap:NT-Response}:-00}"
++	#
++	#  radius-admin: PEAP with directory accounts (SPEC section 21). Used only for a
++	#  name that is not a local 802.1X user, after deploy/ad-join.sh joined this server
++	#  to the domain; local users carry NT-Password and MS-CHAP-Use-NTLM-Auth := No
++	#  (policy.d/radius-admin), so this is never run for them. Without the join (no
++	#  ntlm_auth or no winbind) such logins are simply rejected.
++	ntlm_auth = "/usr/bin/ntlm_auth --request-nt-key --allow-mschapv2 --username=%{%{mschap:User-Name}:-None} --challenge=%{%{mschap:Challenge}:-00} --nt-response=%{%{mschap:NT-Response}:-00}"
+ 
+ 	#
+ 	#  The default is to wait 10 seconds for ntlm_auth to
+@@ -124,6 +131,7 @@
+ 	#  usually finishes quicker. Range 1 to 10 seconds.
+ 	#
+ #	ntlm_auth_timeout = 10
++	ntlm_auth_timeout = 5	# radius-admin: fail fast when the domain controller does not answer
+ 
+ 	#
+ 	#  An alternative to using ntlm_auth is to connect to the

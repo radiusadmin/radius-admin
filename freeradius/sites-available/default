@@ -1080,6 +1080,10 @@ post-auth {
 	#  The "session-state" attributes are not available here.
 	#
 	Post-Auth-Type REJECT {
+		# radius-admin: a PEAP reject is logged one round after the inner tunnel
+		# refused the login; restore its method, user and reason (policy.d/radius-admin;
+		# a policy, so not optional: "-name" only skips missing modules)
+		radius_admin_reject
 		# log failed authentications in SQL, too.
 		-sql
 		attr_filter.access_reject

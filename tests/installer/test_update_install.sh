@@ -38,5 +38,29 @@ prep 0.2.0 0.2.0 tamper
 [[ $(st actor) == netadmin && -n $(st finished) ]] && pass "the state keeps who asked and when it ended" \
     || fail "state: $(cat "$W/update-state.json")"
 
+# health check: nginx must serve the portal (active, TCP 443) when its site is enabled. The
+# real function from update-install.sh, with stand-ins for systemctl and ss.
+fn=$(awk '/^portal_healthy\(\) \{/,/^}/' "$UI")
+grep -q '^    portal_healthy || return 1$' <(awk '/^healthy\(\) \{/,/^}/' "$UI") \
+    && pass "the health check includes the portal check" || fail "healthy() does not call portal_healthy"
+mkdir -p "$W/bin"
+printf '#!/bin/sh\n[ "$(cat %s/nginx 2>/dev/null)" = active ]\n' "$W" > "$W/bin/systemctl"
+printf '#!/bin/sh\n[ -e %s/port443 ] && echo "LISTEN 0 511 192.0.2.10:443 0.0.0.0:*"\necho "LISTEN 0 128 0.0.0.0:22 0.0.0.0:*"\n' "$W" > "$W/bin/ss"
+chmod 0755 "$W/bin/systemctl" "$W/bin/ss"
+portal() { # portal NGINX PORT443 SITE -> output of portal_healthy, then its result
+    echo "$1" > "$W/nginx"; rm -f "$W/port443" "$W/site"
+    [[ $2 == yes ]] && : > "$W/port443"
+    [[ $3 == yes ]] && ln -s "$W/missing-target" "$W/site"
+    # shellcheck disable=SC2034  # NGINX_SITE: read by the eval-ed portal_healthy()
+    (PATH=$W/bin:$PATH; NGINX_SITE=$W/site; eval "$fn"; portal_healthy && echo healthy || echo unhealthy)
+}
+[[ $(portal active yes yes) == healthy ]] && pass "health: nginx active and on 443 passes" || fail "health: $(portal active yes yes)"
+out=$(portal failed no yes)
+[[ $out == *"nginx (the web portal) is not active"*unhealthy ]] && pass "health: nginx not active fails" || fail "health nginx down: $out"
+out=$(portal active no yes)
+[[ $out == *"not listening on TCP 443"*unhealthy ]] && pass "health: nothing on 443 fails" || fail "health no 443: $out"
+[[ $(portal failed no no) == healthy ]] && pass "health: no portal site enabled, nginx is not required" \
+    || fail "health without a site: $(portal failed no no)"
+
 echo; (( fails == 0 )) && echo "all update-install checks passed" || echo "$fails check(s) FAILED"
 exit $(( fails > 0 ))

@@ -57,6 +57,7 @@
     <li><a href="{{ url_for('clients.index') }}" {% if ep.startswith('clients.') %}aria-current="page"{% endif %}>RADIUS clients</a></li>
     <li><a href="{{ url_for('rules.index') }}" {% if ep.startswith('rules.') %}aria-current="page"{% endif %}>Access rules</a></li>
     <li><a href="{{ url_for('mab.index') }}" {% if ep.startswith('mab.') %}aria-current="page"{% endif %}>MAB devices{% if nav_counts and nav_counts.unknown_mab %}<span class="badge" title="Unknown devices waiting for approval">{{ nav_counts.unknown_mab }}<span class="sr-only"> unknown devices</span></span>{% endif %}</a></li>
+    <li><a href="{{ url_for('dot1x_users.index') }}" {% if ep.startswith('dot1x_users.') %}aria-current="page"{% endif %}>802.1X users</a></li>
     <li><a href="{{ url_for('switch_admins.index') }}" {% if ep.startswith('switch_admins.') %}aria-current="page"{% endif %}>Switch admins</a></li>
     {% if has_role('admin') %}
     <li><a href="{{ url_for('settings.custom_policy') }}" {% if ep in ('settings.custom_policy', 'settings.policy_preview') %}aria-current="page"{% endif %}>Custom policy</a></li>
