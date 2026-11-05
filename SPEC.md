@@ -603,7 +603,9 @@ CSV columns (header row required, exact names, any order tolerated by name):
   post-auth insert turns an Accept into a Reject).
 - Monitor service (`snmp_poller.py`, unit `radius-admin-snmp`): heartbeat every 5 s; CoA queue every
   tick (`coa.py`: radclient from the FreeRADIUS build, `-S` secret file, validated attributes, Cisco
-  AV-pairs reauthenticate / bounce-host-port, Disconnect-Request); alerts every 60 s (`alerts.py`:
+  AV-pairs reauthenticate / bounce-host-port, Disconnect-Request; the session is named by
+  Calling-Station-Id + NAS-Port-Id with NAS-IP-Address and Event-Timestamp, Acct-Session-Id only
+  when the record has no MAC, since a Catalyst 1300 then finds no session); alerts every 60 s (`alerts.py`:
   reject spike with hysteresis, switch_down after N failed polls, radius_down after 2 failed helper
   `status` checks — the helper now reports `listening`; portal_down after 2 checks in which the
   helper reports the nginx site enabled but nginx not active or not on TCP 443, switch

@@ -10,6 +10,11 @@ Actions (Catalyst 1300 firmware 4.1.3.36+, Cisco AV-pair commands):
   reauth      CoA-Request   Cisco-AVPair = "subscriber:command=reauthenticate"
   bounce      CoA-Request   Cisco-AVPair = "subscriber:command=bounce-host-port"
   disconnect  Disconnect-Request
+
+The session is named by Calling-Station-Id (the device's MAC) and NAS-Port-Id, with the
+switch's NAS-IP-Address and an Event-Timestamp. Acct-Session-Id is sent only when the
+accounting record has no MAC: a Catalyst 1300 finds no session when the request names one
+(CoA-NAK Session-Context-Not-Found) and needs NAS-IP-Address (else Missing-Attribute).
 """
 import ipaddress
 import os
@@ -77,20 +82,20 @@ def build_request(action, nas_ip, acct_session_id="", calling_station_id="", nas
     except ValueError:
         raise CoaError("bad NAS address") from None
     lines = []
-    if acct_session_id:
-        if not _SESSION_RE.match(acct_session_id):
-            raise CoaError("accounting session id has unexpected characters")
-        lines.append('Acct-Session-Id = "%s"' % acct_session_id)
     if calling_station_id:
         if not _STATION_RE.match(calling_station_id):
             raise CoaError("station id is not a MAC address")
         lines.append('Calling-Station-Id = "%s"' % calling_station_id)
+    elif acct_session_id:       # no MAC in the accounting record: the session id is all there is
+        if not _SESSION_RE.match(acct_session_id):
+            raise CoaError("accounting session id has unexpected characters")
+        lines.append('Acct-Session-Id = "%s"' % acct_session_id)
+    else:
+        raise CoaError("the session has neither an accounting session id nor a station MAC")
     if nas_port_id:
         if not _PORT_RE.match(nas_port_id):
             raise CoaError("port id has unexpected characters")
         lines.append('NAS-Port-Id = "%s"' % nas_port_id)
-    if not (acct_session_id or calling_station_id):
-        raise CoaError("the session has neither an accounting session id nor a station MAC")
     lines.append(("NAS-IPv6-Address = %s" if ip.version == 6 else "NAS-IP-Address = %s") % ip)
     lines.append("Event-Timestamp = %d" % int(time.time()))
     extra = ACTIONS[action][1]
