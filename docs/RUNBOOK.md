@@ -578,10 +578,12 @@ aaa server radius dynamic-author
  exit
 ```
 
-Cisco documents ISE as the tested CoA client for the 1300 series; the requests use the
-same attributes ISE sends for these actions (Acct-Session-Id, Calling-Station-Id,
-NAS-Port-Id, Event-Timestamp, Message-Authenticator and the Cisco AV-pairs
-`subscriber:command=reauthenticate` / `bounce-host-port`). **Test once on one switch**
+Cisco documents ISE as the tested CoA client for the 1300 series. The requests name the
+session by the device's MAC (Calling-Station-Id) and port (NAS-Port-Id), with the switch's
+NAS-IP-Address, Event-Timestamp, Message-Authenticator and the Cisco AV-pairs
+`subscriber:command=reauthenticate` / `bounce-host-port`. Acct-Session-Id is sent only for a
+session without a MAC: a Catalyst 1300 answers a request that names one with
+`CoA-NAK: Session-Context-Not-Found`, and one without NAS-IP-Address with `Missing-Attribute`. **Test once on one switch**
 before relying on it; the result page shows the switch's ACK or NAK (with Error-Cause),
 and every request and result is in the audit log. `install.sh --phase app` reports
 whether it found radclient; if it lives somewhere unusual set

@@ -5,6 +5,14 @@ Each release has a section here. `main` builds are the stable releases (`0.2.0`)
 show the "Unreleased" section plus their commits. Bump `VERSION` on `dev` right after a
 release, so previews sort after it.
 
+## Unreleased
+
+### Fixed
+- Session actions (Re-authenticate, Bounce port, Disconnect) work on Catalyst 1300 switches. The
+  switch refused them with "CoA-NAK: Session-Context-Not-Found" because the request also named
+  the accounting session id; it now names the session by the device's MAC and port (the
+  session id only when there is no MAC).
+
 ## 0.2.2 — 2026-11-04
 
 ### Changed
