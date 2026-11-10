@@ -164,10 +164,13 @@ def run_coa(conn, cfg, profile):
         return 0
     rc, dd, why = coa_tool(cfg)
     port = int((profile or {}).get("coa_port") or 1700)
+    silent = set()      # switches that timed out in this pass: their other requests are not tried
     for r in pending:
         ok, msg = False, ""
         if why:
             msg = "Cannot send: %s" % why
+        elif r["client_id"] in silent:
+            msg = "Not sent: %s did not answer the request before this one." % r["name"]
         elif not r["enabled"] or r.get("key_status", "ok") != "ok":
             msg = "%s is disabled or has no usable shared key in this console." % r["name"]
         else:
@@ -176,6 +179,8 @@ def run_coa(conn, cfg, profile):
                 req = coa.build_request(r["action"], r["nas"], r["acct_session_id"], r["calling_station_id"],
                                         r["nas_port_id"])
                 ok, msg = coa.send(r["action"], host, port, r["secret"], req, rc, dd)
+                if not ok and msg.startswith(coa.NO_REPLY):
+                    silent.add(r["client_id"])
             except coa.CoaError as e:
                 msg = "Not sent: %s" % e
         db.execute("UPDATE ui.coa_request SET done_at = now(), ok = %s, message = %s WHERE id = %s",

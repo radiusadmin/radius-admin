@@ -43,6 +43,9 @@ ACTIONS = {
 }
 
 
+NO_REPLY = "No reply from the switch"       # start of the message when every try timed out
+
+
 class CoaError(Exception):
     pass
 
@@ -112,7 +115,7 @@ def parse_reply(out, host=""):
         if "sendto failed: Operation not permitted" in out:
             return False, blocked_message(host)
         if "No reply from server" in out or "no response" in out.lower():
-            return False, "No reply from the switch (dynamic authorization not configured, wrong key, or UDP blocked)."
+            return False, NO_REPLY + " (dynamic authorization not configured, wrong key, or UDP blocked)."
         last = [ln for ln in out.strip().splitlines() if ln.strip()]
         return False, ("radclient: " + last[-1].strip())[:300] if last else "No reply from the switch."
     kind = m.group(1)

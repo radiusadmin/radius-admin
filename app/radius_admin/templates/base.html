@@ -66,7 +66,8 @@
   </ul>
   <p class="nav-group">Monitoring</p>
   <ul>
-    <li><a href="{{ url_for('sessions.index') }}" {% if ep.startswith('sessions.') %}aria-current="page"{% endif %}>Sessions</a></li>
+    <li><a href="{{ url_for('sessions.index') }}" {% if ep == 'sessions.index' %}aria-current="page"{% endif %}>Sessions</a></li>
+    <li><a href="{{ url_for('sessions.actions') }}" {% if ep in ('sessions.actions', 'sessions.coa_result') %}aria-current="page"{% endif %}>Session actions</a></li>
     <li><a href="{{ url_for('alerts.index') }}" {% if ep.startswith('alerts.') %}aria-current="page"{% endif %}>Alerts{% if nav_counts and nav_counts.alerts %}<span class="badge badge-danger" title="Open alerts">{{ nav_counts.alerts }}<span class="sr-only"> open alerts</span></span>{% endif %}</a></li>
     {% if has_role('admin') %}
     <li><a href="{{ url_for('snmp.index') }}" {% if ep.startswith('snmp.') %}aria-current="page"{% endif %}>Switch monitoring</a></li>

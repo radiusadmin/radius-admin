@@ -559,13 +559,28 @@ Sessions → the summary line names any switch that sent no accounting in 30 day
 the server runs a host firewall (ufw), UDP 1813 from the switches must be allowed (it
 already is when the firewall only restricts the UI port, as installed).
 
-**Actions** (operator or admin), from the *Actions* menu of an open session:
+**Actions** (operator or admin), from the *Actions* menu of a session that is still up, in
+either view (“Last 30 days” offers them for the sessions that have not ended). To act on
+several sessions at once, tick them (the box in the table header ticks the whole page) and
+use the buttons in the bar above the table; one request is sent per session, at most one page
+(50) at a time.
 
 | Action | What the switch does |
 |---|---|
 | Re-authenticate | re-runs 802.1X/MAB for the session; link stays up (picks up a changed VLAN or MAB entry) |
 | Bounce port | shuts the port briefly and re-enables it; the device reconnects |
 | Disconnect | ends the session; the device must authenticate again |
+
+The page does not change while a request is sent: the session's row shows *Sending…* and
+then **Done** or **Failed**, which links to the details (the switch's answer and what to check
+when it failed). A result stays in the row for 15 minutes. **Session actions** in the menu
+lists every request of the last 90 days, with filters for user, MAC, port, requester, switch,
+action and result. When a switch does not answer, the remaining requests queued for it in
+the same pass are marked “Not sent” at once instead of each waiting for a timeout; send them
+again once the switch answers.
+
+Going back to a list (*Back to sessions*, *Back to log*, *Cancel* on a form, or after a row
+action) returns to the filters and page you had; the menu links open the plain list.
 
 These are RADIUS Change-of-Authorization messages (RFC 5176) sent by the monitoring
 service with `radclient` from your FreeRADIUS build, to UDP **1700** on the switch
@@ -584,7 +599,7 @@ NAS-IP-Address, Event-Timestamp, Message-Authenticator and the Cisco AV-pairs
 `subscriber:command=reauthenticate` / `bounce-host-port`. Acct-Session-Id is sent only for a
 session without a MAC: a Catalyst 1300 answers a request that names one with
 `CoA-NAK: Session-Context-Not-Found`, and one without NAS-IP-Address with `Missing-Attribute`. **Test once on one switch**
-before relying on it; the result page shows the switch's ACK or NAK (with Error-Cause),
+before relying on it; the Failed or Done label in its row links to the details, which show the switch's ACK or NAK (with Error-Cause),
 and every request and result is in the audit log. `install.sh --phase app` reports
 whether it found radclient; if it lives somewhere unusual set
 `radclient = /path/to/radclient` in `/etc/radius-admin/radius-admin.conf`.

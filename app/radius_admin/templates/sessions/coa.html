@@ -4,8 +4,9 @@
 {% block head %}{% if r.done_at is none %}{{ m.noscript_refresh(2) }}{% endif %}{% endblock %}
 {% block content %}
 <header class="page-head"><div><h1>{{ actions[r.action][0] }}</h1>
-<p class="lede">{{ r.switch_name }} <span class="mono">{{ r.nas }}</span>{% if r.nas_port_id %} port <span class="mono">{{ r.nas_port_id }}</span>{% endif %} · <span class="mono">{{ r.username or r.calling_station_id }}</span></p></div>
-<div class="head-actions"><a class="btn btn-quiet" href="{{ url_for('sessions.index') }}">Back to sessions</a></div></header>
+<p class="lede">{{ r.switch_name }} <span class="mono">{{ r.nas }}</span>{% if r.nas_port_id %} port <span class="mono">{{ r.nas_port_id }}</span>{% endif %} · <span class="mono">{{ r.username or r.calling_station_id|mac }}</span></p></div>
+<div class="head-actions"><a class="btn btn-quiet" href="{{ list_url('sessions.actions') }}">Back to session actions</a>
+<a class="btn btn-quiet" href="{{ list_url('sessions.index') }}">Back to sessions</a></div></header>
 <section class="panel narrow">
 {% if r.done_at is none %}
   {{ m.live_status(url_for('sessions.coa_status', rid=r.id), 'Sending the request to ' ~ r.switch_name ~ '…', interval=2, limit=120,
@@ -24,9 +25,15 @@
   {% endif %}
 {% endif %}
 <dl class="kv small">
-  <dt>Requested</dt><dd>{{ r.requested_at|dt }} by {{ r.requested_by }}</dd>
+  <dt>Action</dt><dd>{{ actions[r.action][0] }} <span class="muted">· {{ actions[r.action][1] }}</span></dd>
+  <dt>Requested</dt><dd>{{ r.requested_at|dt }} by {{ r.requested_by or '—' }}</dd>
   {% if r.done_at %}<dt>Finished</dt><dd>{{ r.done_at|dt }}</dd>{% endif %}
-  <dt>Session</dt><dd class="mono">{{ r.acct_session_id or '—' }}</dd>
+  <dt>Switch</dt><dd><a href="{{ url_for('clients.edit', cid=r.client_id) }}">{{ r.switch_name }}</a> <span class="mono">{{ r.nas }}</span></dd>
+  <dt>Port</dt><dd class="mono">{{ r.nas_port_id or '—' }}</dd>
+  <dt>User</dt><dd class="mono">{{ r.username or '—' }}</dd>
+  <dt>Station</dt><dd>{% if r.calling_station_id %}<span class="mono">{{ r.calling_station_id|mac }}</span>{% if vendor %} <span class="muted">· {{ vendor }}</span>{% endif %}{% else %}—{% endif %}</dd>
+  <dt>Accounting session</dt><dd><span class="mono">{{ r.acct_session_id or '—' }}</span>
+    {%- if session %} <span class="muted">· {% if session.acctstoptime %}ended {{ session.acctstoptime|dt }}{% if session.acctterminatecause %} ({{ session.acctterminatecause }}){% endif %}{% else %}still open, started {{ session.acctstarttime|dt }}{% endif %}</span>{% endif %}</dd>
 </dl>
 </section>
 {% endblock %}

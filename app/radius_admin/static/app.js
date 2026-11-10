@@ -78,7 +78,7 @@
         if (form.getAttribute("data-confirmed") === "1") { form.removeAttribute("data-confirmed"); return; }
         e.preventDefault();
         var btn = e.submitter || form.querySelector('button[type="submit"], button:not([type])');
-        var msg = form.getAttribute("data-confirm");
+        var msg = (btn && btn.getAttribute("data-confirm")) || form.getAttribute("data-confirm");   // a button may ask its own question
         var danger = /danger/.test((btn && btn.className) || "") || /^(Delete|Remove|Disable)\b/.test(msg);
         askConfirm(msg, actionLabel(btn), danger, function (ok) {
           if (!ok) { if (btn) btn.focus(); return; }
@@ -281,6 +281,160 @@
         });
       }
       setTimeout(tick, every);
+    });
+
+    // Session actions (SPEC section 24). A form with data-coa is sent in the background; the
+    // session's row shows "Sending…" and then Done or Failed, linked to the action's page.
+    // One request asks for the state of every waiting action on the page. Without
+    // JavaScript the form posts as usual and the list comes back with the same row states.
+    var coaHost = document.querySelector("[data-coa-status]");
+    var coaSummary = document.querySelector("[data-coa-summary]");
+    var coaTimer = null, coaStarted = 0, COA_LIMIT = 300000;
+    function span(cls, text) {
+      var e = document.createElement("span");
+      e.className = cls;
+      if (text) e.textContent = text;
+      return e;
+    }
+    function coaSpinner() {
+      var sp = span("spinner");
+      sp.setAttribute("aria-hidden", "true");
+      return sp;
+    }
+    function coaBegin(cell, id, label, url) {             // same markup as the coa_state macro
+      var a = document.createElement("a");
+      a.className = "coa-link";
+      a.href = url;
+      a.appendChild(coaSpinner());
+      a.appendChild(span("coa-text", "Sending…"));
+      a.appendChild(span("cell-sub", label));
+      cell.textContent = "";
+      cell.appendChild(a);
+      cell.setAttribute("data-coa-waiting", id);
+    }
+    function coaFinish(cell, state, message) {
+      var sp = cell.querySelector(".spinner"), text = cell.querySelector(".coa-text");
+      var tag = state === "ok" ? span("tag tag-ok", "Done")
+        : state === "failed" ? span("tag tag-danger", "Failed") : span("tag tag-muted", "No answer yet");
+      cell.removeAttribute("data-coa-waiting");
+      if (text) text.remove();
+      if (sp) sp.replaceWith(tag);
+      else cell.insertBefore(tag, cell.firstChild);
+      var link = cell.querySelector("a.coa-link");
+      if (link && message && state !== "ok") link.title = message;
+      if (cell.hasAttribute("data-coa-plain") && message) cell.appendChild(span("cell-sub", message));
+    }
+    function coaPoll() {
+      coaTimer = null;
+      var cells = Array.prototype.slice.call(document.querySelectorAll("[data-coa-waiting]"));
+      if (!cells.length) return;
+      if (Date.now() - coaStarted > COA_LIMIT) {
+        cells.forEach(function (c) { coaFinish(c, "late", "Still waiting. Reload the page to check again."); });
+        return;
+      }
+      var byId = {};
+      cells.forEach(function (c) { byId[c.getAttribute("data-coa-waiting")] = c; });
+      var again = function () { if (!coaTimer) coaTimer = setTimeout(coaPoll, 2000); };
+      getJSON(coaHost.getAttribute("data-coa-status") + "?id=" + Object.keys(byId).join("&id=")).then(function (d) {
+        if (!d) return;
+        (d.requests || []).forEach(function (r) {
+          if (r.state !== "waiting" && byId[r.id]) coaFinish(byId[r.id], r.state, r.message);
+        });
+        again();
+      }).catch(again);
+    }
+    function coaWatch() {
+      coaStarted = Date.now();
+      if (!coaTimer) coaTimer = setTimeout(coaPoll, 1500);
+    }
+    function coaSay(text, bad) {
+      if (!coaSummary) return;
+      coaSummary.textContent = text;
+      coaSummary.className = "coa-summary flash " + (bad ? "flash-error" : "flash-info");
+      coaSummary.hidden = !text;
+    }
+    if (coaHost && document.querySelector("[data-coa-waiting]")) coaWatch();
+
+    // Tick boxes for acting on several sessions: the bar counts the selection, its buttons
+    // work once something is ticked and ask "<Action> N sessions?" first.
+    var bulk = document.querySelector("form[data-bulk]");
+    var syncBulk = function () {};
+    if (bulk) {
+      var bulkAll = document.querySelector("[data-bulk-all]");
+      var bulkCount = bulk.querySelector("[data-bulk-count]");
+      var bulkIdle = bulkCount ? bulkCount.textContent : "";
+      var bulkBoxes = function () { return Array.prototype.slice.call(document.querySelectorAll("[data-bulk-box]")); };
+      syncBulk = function () {
+        var boxes = bulkBoxes();
+        var n = boxes.filter(function (b) { return b.checked; }).length;
+        var many = n === 1 ? "1 session" : n + " sessions";
+        if (bulkCount) bulkCount.textContent = n ? many + " selected" : bulkIdle;
+        bulk.classList.toggle("has-selection", n > 0);
+        bulk.querySelectorAll("[data-bulk-button]").forEach(function (b) {
+          b.disabled = !n;
+          b.setAttribute("data-confirm", (b.getAttribute("data-confirm-many") || "").replace("{n}", many));
+        });
+        if (bulkAll) {
+          bulkAll.checked = n > 0 && n === boxes.length;
+          bulkAll.indeterminate = n > 0 && n < boxes.length;
+        }
+      };
+      bulkBoxes().forEach(function (b) { b.addEventListener("change", syncBulk); });
+      if (bulkAll) {
+        bulkAll.addEventListener("change", function () {
+          var on = bulkAll.checked;
+          bulkBoxes().forEach(function (b) { b.checked = on; });
+          syncBulk();
+        });
+      }
+      syncBulk();
+      window.addEventListener("pageshow", syncBulk);        // the browser may restore ticks
+    }
+
+    // Registered after the data-confirm handler, so a cancelled confirmation sends nothing.
+    document.querySelectorAll("form[data-coa]").forEach(function (form) {
+      form.addEventListener("submit", function (e) {
+        if (e.defaultPrevented || !coaHost || !window.fetch || !window.URLSearchParams) return;
+        e.preventDefault();
+        var btn = e.submitter;
+        var body = new URLSearchParams(new FormData(form));
+        if (btn && btn.name) body.append(btn.name, btn.value);
+        var menu = form.closest ? form.closest("details.row-menu") : null;
+        if (menu) {
+          menu.removeAttribute("open");
+          var opener = menu.querySelector("summary");
+          if (opener) opener.focus();
+        }
+        var buttons = form.querySelectorAll("button");
+        buttons.forEach(function (b) { b.disabled = true; });
+        var done = function () {
+          buttons.forEach(function (b) { b.disabled = false; });
+          syncBulk();
+        };
+        fetch(form.action, {method: "POST", credentials: "same-origin", headers: {Accept: "application/json"}, body: body})
+          .then(function (r) {
+            if ((r.headers.get("Content-Type") || "").indexOf("application/json") !== 0) {
+              if (r.ok) { window.location.reload(); return null; }      // signed out
+              throw new Error("HTTP " + r.status);
+            }
+            return r.json();
+          }).then(function (d) {
+            if (!d) return;
+            (d.queued || []).forEach(function (x) {
+              var row = document.querySelector('tr[data-session="' + x.sid + '"]');
+              var cell = row && row.querySelector("[data-coa-state]");
+              var box = row && row.querySelector("[data-bulk-box]");
+              if (cell) coaBegin(cell, x.id, d.label, x.url);
+              if (box) box.checked = false;
+            });
+            coaSay(d.message || "", !(d.queued || []).length);
+            done();
+            if ((d.queued || []).length) coaWatch();
+          }).catch(function () {
+            coaSay("The action could not be sent. Reload the page and try again.", true);
+            done();
+          });
+      });
     });
 
     // Install log (Updates page): the Details drop-down fetches the log as it grows and keeps

@@ -12,6 +12,7 @@ from flask import Blueprint, abort, current_app, g, jsonify, redirect, render_te
 
 from .. import db
 from ..flashing import flash
+from ..listnav import list_url
 from ..security import login_required, role_required, stepup_required
 from ..snmp import is_blocked, validate_passphrase, validate_username
 from ..snmp_poller import encrypt_pass
@@ -164,7 +165,7 @@ def refresh():
         ev("snmp.refresh", object_type="snmp_profile", object_id=1)
         if request.form.get("next_page") == "clients":
             flash("Refresh requested. Results appear within a minute.", "success")
-    return redirect(request.form.get("next_page") == "clients" and url_for("clients.index") or url_for("snmp.index"))
+    return redirect(request.form.get("next_page") == "clients" and list_url("clients.index") or url_for("snmp.index"))
 
 
 @bp.route("/refresh/status")

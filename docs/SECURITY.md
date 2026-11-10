@@ -388,7 +388,10 @@ secret exactly "radsec"). Anything else is refused before `radiusd -XC`.
 
 **Other fixes.** Database sessions run in UTC (timestamps labelled UTC were in the host's zone);
 a request no longer holds a lock on its own session row (removed a deadlock between two admins
-changing each other's accounts). The colour-theme cookie is a display hint only.
+changing each other's accounts). The colour-theme cookie is a display hint only. So is the cookie
+that remembers each list's filters (`__Host-radius_admin_lists`, deleted at sign-out): only known
+argument names are read from it, and only to build the URL of that same list, where they are
+validated like any query string.
 
 **802.1X with a username and password (EAP-TTLS/PAP, local users).** Off by default
 (Settings, admin + step-up, audited).

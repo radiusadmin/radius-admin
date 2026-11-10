@@ -5,7 +5,7 @@
 <header class="page-head">
   <div><h1>{% if r.reply == 'Access-Accept' %}Accepted{% elif r.reply == 'Access-Reject' %}Rejected{% else %}{{ r.reply }}{% endif %}: <span class="mono">{{ r.username }}</span></h1>
   <p class="lede">{{ r.authdate|dt }} · {{ r.authmethod or 'other' }}{% if client %} · {{ client.name }}{% endif %}{% if r.nasportid %} port <span class="mono">{{ r.nasportid }}</span>{% endif %}</p></div>
-  <div class="head-actions"><a class="btn btn-quiet" href="{{ url_for('logs.auth_log') }}">Back to log</a></div>
+  <div class="head-actions"><a class="btn btn-quiet" href="{{ list_url('logs.auth_log') }}">Back to log</a></div>
 </header>
 
 {% if r.reply == 'Access-Reject' %}

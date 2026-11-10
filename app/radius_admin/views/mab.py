@@ -12,6 +12,7 @@ from flask import Blueprint, abort, redirect, render_template, request, url_for
 
 from .. import db, oui
 from ..flashing import flash
+from ..listnav import list_url
 from ..insight import ClientIndex
 from ..security import login_required, role_required
 from ..services import get_settings, set_setting, unlang
@@ -175,7 +176,7 @@ def edit(mid):
                        "after": {"mac": d["mac"], "vlan": d["vlan"], "enabled": d["enabled"],
                                  "expires_at": _exp(d["expires_at"])}})
             flash("Device %s saved. This is live now." % d["mac"], "success")
-            return redirect(url_for("mab.index"))
+            return redirect(list_url("mab.index"))
     return render_template("mab/form.html", d=d, errors=errors, is_new=False), (400 if errors else 200)
 
 
@@ -186,7 +187,7 @@ def delete(mid):
     db.execute("DELETE FROM mab_device WHERE id=%s", (mid,))
     ev("mab.delete", object_type="mab_device", object_id=mid, detail={"mac": row["mac"], "vlan": row["vlan"]})
     flash("Device %s removed. This is live now." % row["mac"], "success")
-    return redirect(url_for("mab.index"))
+    return redirect(list_url("mab.index"))
 
 
 def parse_csv(text):
@@ -327,7 +328,7 @@ def _pending_row(mac):
 
 
 def _back():
-    return redirect(url_for("mab.pending", ignored="1" if request.form.get("from_ignored") else None))
+    return redirect(list_url("mab.pending", ignored="1" if request.form.get("from_ignored") else None))
 
 
 @bp.route("/unknown/<mac>/approve", methods=["POST"])
@@ -399,9 +400,9 @@ def default_vlan():
             unlang().validate_vlan(v)
         except (ValueError, TypeError):
             flash("Default VLAN must be 1-4094 (or empty).", "error")
-            return redirect(url_for("mab.pending"))
+            return redirect(list_url("mab.pending"))
     old = _default_vlan()
     set_setting("mab_default_vlan", v)
     ev("setting.update", object_type="setting", object_id="mab_default_vlan", detail={"from": old, "to": v})
     flash("Default VLAN for approvals saved." if v else "Default VLAN cleared.", "success")
-    return redirect(url_for("mab.pending"))
+    return redirect(list_url("mab.pending"))
