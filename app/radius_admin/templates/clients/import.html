@@ -22,7 +22,7 @@
   <label class="check"><input type="checkbox" name="is_switch" value="1" {{ 'checked' if opts.is_switch else '' }}> Mark new clients as switches (include in SNMP monitoring)</label>
   <p class="small muted">An optional <span class="mono">is_switch</span> column (yes/no) in a file with a header row overrides this per row, and also updates existing clients.</p>
   <div class="actions"><button type="submit" class="btn btn-primary">Check file</button>
-  <a class="btn btn-quiet" href="{{ url_for('clients.index') }}">Cancel</a></div>
+  <a class="btn btn-quiet" href="{{ list_url('clients.index') }}">Cancel</a></div>
 </form>
 </section>
 {% endblock %}

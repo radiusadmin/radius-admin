@@ -312,8 +312,9 @@ def test_coa_request_queue_and_rbac(app, browser, superconn, logged_in):
     sid = _session(superconn)
     ended = _session(superconn, 60, True, "3C-22-FB-00-00-02", "host/pc2")
     logged_in("viewer")
-    r = browser.post("/sessions/%d/coa" % sid, {"action": "reauth"}, csrf_page="/sessions/")
+    r = browser.post("/sessions/coa", {"sid": sid, "action": "reauth"}, csrf_page="/sessions/")
     assert r.status_code == 403
+    assert q(superconn, "SELECT count(*) FROM ui.coa_request")[0][0] == 0
     browser.cookies = {}
 
 
@@ -323,17 +324,21 @@ def test_coa_request_operator(app, browser, superconn, logged_in):
     ended = _session(superconn, 60, True, "3C-22-FB-00-00-02", "host/pc2")
     logged_in("operator")
     assert "Actions" in browser.text(browser.get("/sessions/"))
-    assert browser.post("/sessions/%d/coa" % sid, {"action": "explode"}, csrf_page="/sessions/").status_code == 400
-    r = browser.post("/sessions/%d/coa" % sid, {"action": "bounce"}, csrf_page="/sessions/")
-    assert r.status_code == 302 and "/sessions/coa/" in r.headers["Location"]
+    assert browser.post("/sessions/coa", {"sid": sid, "action": "explode"}, csrf_page="/sessions/").status_code == 400
+    r = browser.post("/sessions/coa", {"sid": sid, "action": "bounce"}, csrf_page="/sessions/")
+    assert r.status_code == 302 and r.headers["Location"].endswith("/sessions/")     # back on the list, no result page
     row = q(superconn, "SELECT action, acct_session_id, calling_station_id, host(nas_ip), nas_port_id, requested_by,"
-                       " done_at FROM ui.coa_request")[0]
-    assert row == ("bounce", "0000002A", "3C-22-FB-00-00-01", "192.0.2.10", "gi1/0/4", "operator1", None)
-    t = browser.text(browser.get(r.headers["Location"]))
+                       " done_at, radacct_id FROM ui.coa_request")[0]
+    assert row == ("bounce", "0000002A", "3C-22-FB-00-00-01", "192.0.2.10", "gi1/0/4", "operator1", None, sid)
+    t = browser.text(browser.get("/sessions/"))
+    assert "Bounce port requested for host/pc1.example.net on sw1 gi1/0/4." in t
+    assert 'data-coa-waiting="1"' in t and "/sessions/coa/1" in t and "Sending" in t
+    t = browser.text(browser.get("/sessions/coa/1"))
     assert "Bounce port" in t and "Sending" in t
     assert q(superconn, "SELECT detail->>'action' FROM ui.audit_log WHERE action='coa.request'")[0][0] == "bounce"
-    r = browser.post("/sessions/%d/coa" % ended, {"action": "disconnect"}, csrf_page="/sessions/")
+    r = browser.post("/sessions/coa", {"sid": ended, "action": "disconnect"}, csrf_page="/sessions/")
     assert r.status_code == 302 and q(superconn, "SELECT count(*) FROM ui.coa_request")[0][0] == 1
+    assert "the session has already ended" in browser.text(browser.get("/sessions/"))
 
 
 def _radclient():

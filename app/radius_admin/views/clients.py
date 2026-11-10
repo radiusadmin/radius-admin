@@ -7,6 +7,7 @@ from .. import client_import as ci
 from .. import db
 from ..crypto import generate_radius_secret
 from ..flashing import flash
+from ..listnav import list_url
 from ..security import cfg, login_required, role_required, stepup_required
 from ..services import get_settings, set_setting, unlang
 from ..snmp import cli_port_name
@@ -236,7 +237,7 @@ def edit(cid):
             if mode == "generate":
                 return render_template("clients/secret.html", c=dict(data, id=cid),
                                        secret=data["secret"], generated=True)
-            return redirect(url_for("clients.index"))
+            return redirect(list_url("clients.index"))
     status = db.query_one("SELECT * FROM ui.switch_status WHERE client_id = %s", (cid,))
     return render_template("clients/form.html", c=data, errors=errors, is_new=False, status=status,
                            ports=_port_rows(existing, status),
@@ -277,7 +278,7 @@ def delete(cid):
     ev("client.delete", object_type="radius_client", object_id=cid,
        detail={"name": row["name"], "ipaddr": row["ipaddr"]})
     flash("Client %s deleted. Apply changes to remove it from FreeRADIUS." % row["name"], "success")
-    return redirect(url_for("clients.index"))
+    return redirect(list_url("clients.index"))
 
 
 @bp.route("/<int:cid>/secret", methods=["GET", "POST"])
@@ -288,7 +289,7 @@ def reveal(cid):
     row = _get(cid)
     if row["transport"] == "radsec":
         flash("%s uses RadSec: it authenticates with a certificate and has no shared secret." % row["name"], "info")
-        return redirect(url_for("clients.index"))
+        return redirect(list_url("clients.index"))
     secret = None
     if request.method == "POST":
         secret = row["secret"]
@@ -349,7 +350,7 @@ def set_enabled(cid):
     enable = request.form.get("enabled") == "1"
     if enable and row["key_status"] != "ok":
         flash(KEY_NOT_USABLE % KEY_LABELS[row["key_status"]], "error")
-        return redirect(url_for("clients.index"))
+        return redirect(list_url("clients.index"))
     try:
         with db.cursor() as cur:
             cur.execute("SAVEPOINT client_enable")
@@ -358,12 +359,12 @@ def set_enabled(cid):
     except psycopg2.errors.CheckViolation:
         db.execute("ROLLBACK TO SAVEPOINT client_enable")
         flash(KEY_NOT_USABLE % "key status not ok", "error")
-        return redirect(url_for("clients.index"))
+        return redirect(list_url("clients.index"))
     ev("client.enable" if enable else "client.disable", object_type="radius_client", object_id=cid,
        detail={"name": row["name"]})
     flash("Client %s %s. Apply changes to make it live." % (row["name"], "enabled" if enable else "disabled"),
           "success")
-    return redirect(url_for("clients.index"))
+    return redirect(list_url("clients.index"))
 
 
 # ------------------------------------------------------------- CSV import

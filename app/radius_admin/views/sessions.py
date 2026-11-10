@@ -8,6 +8,10 @@ monitoring is on, to the port's live 802.1X state.
 Disconnect / re-authenticate / bounce are queued in ui.coa_request; the monitor
 service (the only component with network access) sends them with radclient to the
 switch's dynamic-authorization port (Catalyst 1300: UDP 1700, firmware 4.1.3.36+).
+
+One request or many go through the same POST (SPEC section 24): every open session
+chosen gets its own ui.coa_request row and audit event. The sessions page shows the
+state of each request in the session's row; "Session actions" lists all of them.
 """
 import datetime
 
@@ -15,6 +19,7 @@ from flask import Blueprint, abort, g, jsonify, redirect, render_template, reque
 
 from .. import db, oui, paging
 from ..flashing import flash
+from ..listnav import list_url
 from ..insight import ClientIndex, port_status
 from ..security import login_required, role_required
 from ..snmp import is_blocked
@@ -23,11 +28,27 @@ from . import ev
 bp = Blueprint("sessions", __name__, url_prefix="/sessions")
 PAGE = 50
 STALE_HOURS = 24
+MAX_BULK = PAGE             # one request can name at most one page of sessions
+MAX_STATUS_IDS = 200
+RECENT_MINUTES = 15         # a finished request stays in its session's row this long
+# label, what it does to one session, what it does to several (confirmation text)
 COA_ACTIONS = {
-    "reauth": ("Re-authenticate", "The switch re-runs 802.1X/MAB for this session; the device keeps its link."),
-    "bounce": ("Bounce port", "The switch shuts the port briefly and re-enables it; the device reconnects."),
-    "disconnect": ("Disconnect", "The switch ends the session; the device must authenticate again."),
+    "reauth": ("Re-authenticate", "The switch re-runs 802.1X/MAB for this session; the device keeps its link.",
+               "The switches re-run 802.1X/MAB for these sessions; the devices keep their link."),
+    "bounce": ("Bounce port", "The switch shuts the port briefly and re-enables it; the device reconnects.",
+               "The switches shut each port briefly and re-enable it; the devices reconnect."),
+    "disconnect": ("Disconnect", "The switch ends the session; the device must authenticate again.",
+                   "The switches end these sessions; the devices must authenticate again."),
 }
+# The latest request for the session, shown in its row while it waits and for a while after.
+COA_JOIN = (
+    " LEFT JOIN LATERAL (SELECT r.id AS coa_id, r.action AS coa_action, r.done_at AS coa_done_at,"
+    "  r.ok AS coa_ok, r.message AS coa_message FROM ui.coa_request r"
+    "  WHERE r.radacct_id = a.radacctid"
+    "  AND (r.done_at IS NULL OR r.requested_at > now() - make_interval(mins => %s))"
+    "  ORDER BY r.id DESC LIMIT 1) cr ON true")
+REQUEST_SELECT = ("SELECT r.*, host(r.nas_ip) AS nas, c.name AS switch_name FROM ui.coa_request r"
+                  " JOIN ui.radius_client c ON c.id = r.client_id")
 
 SESSION_COLS = (
     "a.radacctid, a.acctsessionid, a.acctuniqueid, a.username, host(a.nasipaddress) AS nas, a.nasportid,"
@@ -120,53 +141,132 @@ def index():
             params.append(str(client["ipaddr"]))
     w = " WHERE " + " AND ".join(where)
     pager = paging.Pager(paging.requested_page(), PAGE, paging.count(db, " FROM radacct a" + w, params, PAGE))
-    rows = db.query("SELECT " + SESSION_COLS + " FROM radacct a" + AUTH_JOIN + w +
+    rows = db.query("SELECT " + SESSION_COLS + ", cr.* FROM radacct a" + AUTH_JOIN + COA_JOIN + w +
                     " ORDER BY a.acctstarttime DESC NULLS LAST, a.radacctid DESC LIMIT %s OFFSET %s",
-                    params + [PAGE, pager.offset])
+                    [RECENT_MINUTES] + params + [PAGE, pager.offset])
     rows = _decorate(rows, idx, _switch_ports())
     open_count = db.query_one("SELECT count(*) AS n FROM radacct WHERE acctstoptime IS NULL")["n"]
-    recent_coa = db.query("SELECT r.*, host(r.nas_ip) AS nas, c.name AS switch_name FROM ui.coa_request r"
-                          " JOIN ui.radius_client c ON c.id = r.client_id ORDER BY r.id DESC LIMIT 5")
     mon = db.query_one("SELECT radclient, heartbeat_at FROM ui.monitor_state WHERE id = 1")
     switches = sorted((c for c in idx.by_id.values()), key=lambda c: c["name"])
+    waiting = [r["coa_id"] for r in rows if r["coa_id"] and r["coa_done_at"] is None]
     return render_template("sessions/index.html", rows=rows, q=q, sw=sw, history=history, pager=pager,
                            open_count=open_count, acct=_accounting_overview(idx), switches=switches,
-                           recent_coa=recent_coa, mon=mon, actions=COA_ACTIONS)
+                           mon=mon, actions=COA_ACTIONS, waiting=waiting, max_bulk=MAX_BULK,
+                           selectable=any(r["acctstoptime"] is None and r["client"] for r in rows))
 
 
-def _session(sid):
-    row = db.query_one("SELECT " + SESSION_COLS + " FROM radacct a" + AUTH_JOIN + " WHERE a.radacctid = %s", (sid,))
-    if row is None:
-        abort(404)
-    return row
+def _session_name(s):
+    return s["username"] or s["callingstationid"] or "session %d" % s["radacctid"]
 
 
-@bp.route("/<int:sid>/coa", methods=["POST"])
+def _plural(n):
+    return "1 session" if n == 1 else "%d sessions" % n
+
+
+def _queue(action, sids):
+    """Queue `action` for each session id. Returns (queued, skipped): queued holds
+    {"sid", "id", "name"}; skipped {"sid", "name", "reason"} for sessions that have ended,
+    whose switch is unknown or disabled, or that already have a request waiting."""
+    rows = db.query("SELECT a.radacctid, a.acctsessionid, a.username, host(a.nasipaddress) AS nas, a.nasportid,"
+                    " a.acctstoptime, a.callingstationid, EXISTS (SELECT 1 FROM ui.coa_request r"
+                    "  WHERE r.radacct_id = a.radacctid AND r.done_at IS NULL) AS waiting"
+                    " FROM radacct a WHERE a.radacctid = ANY(%s)", (sids,))
+    by_id = {r["radacctid"]: r for r in rows}
+    idx = ClientIndex.load()
+    queued, skipped = [], []
+    for sid in sids:
+        s = by_id.get(sid)
+        if s is None:
+            skipped.append({"sid": sid, "name": "session %d" % sid, "reason": "it is no longer in the accounting records"})
+            continue
+        c = idx.find(s["nas"])
+        if s["acctstoptime"] is not None:
+            reason = "the session has already ended"
+        elif c is None:
+            reason = "its switch (%s) is not a RADIUS client in this console" % s["nas"]
+        elif not c["enabled"]:
+            reason = "%s is disabled in this console" % c["name"]
+        elif s["waiting"]:
+            reason = "an earlier request for it is still waiting"
+        else:
+            reason = None
+        if reason:
+            skipped.append({"sid": sid, "name": _session_name(s), "reason": reason})
+            continue
+        row = db.execute_returning(
+            "INSERT INTO ui.coa_request (client_id, action, acct_session_id, calling_station_id, nas_ip, nas_port_id,"
+            " username, requested_by, radacct_id) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id",
+            (c["id"], action, (s["acctsessionid"] or "")[:200], (s["callingstationid"] or "")[:64], s["nas"],
+             (s["nasportid"] or "")[:100], (s["username"] or "")[:253], g.user["username"], sid))
+        ev("coa.request", object_type="radius_client", object_id=c["id"],
+           detail={"action": action, "switch": c["name"], "nas_ip": s["nas"], "port": s["nasportid"],
+                   "station": s["callingstationid"], "user": s["username"], "request_id": row["id"],
+                   "selected": len(sids)})
+        queued.append({"sid": sid, "id": row["id"], "name": _session_name(s),
+                       "where": ("%s %s" % (c["name"], s["nasportid"] or "")).strip()})
+    return queued, skipped
+
+
+def _summary(action, queued, skipped):
+    label = COA_ACTIONS[action][0]
+    parts = []
+    if len(queued) == 1:
+        parts.append("%s requested for %s on %s." % (label, queued[0]["name"], queued[0]["where"]))
+    elif queued:
+        parts.append("%s requested for %s." % (label, _plural(len(queued))))
+    if skipped:
+        shown = "; ".join("%s (%s)" % (x["name"], x["reason"]) for x in skipped[:3])
+        more = " and %d more" % (len(skipped) - 3) if len(skipped) > 3 else ""
+        parts.append("Not sent for %s: %s%s." % (_plural(len(skipped)), shown, more))
+    return " ".join(parts)
+
+
+def _wants_json():
+    return request.headers.get("Accept", "").startswith("application/json")
+
+
+@bp.route("/coa", methods=["POST"])
 @role_required("operator")
-def coa(sid):
+def coa():
+    """Queue one action for the chosen sessions (`sid`, once per session)."""
     action = request.form.get("action", "")
     if action not in COA_ACTIONS:
         abort(400)
-    s = _session(sid)
-    if s["acctstoptime"] is not None:
-        flash("That session has already ended.", "error")
-        return redirect(url_for("sessions.index"))
-    c = ClientIndex.load().find(s["nas"])
-    if c is None:
-        flash("The session's switch (%s) is not a RADIUS client in this console." % s["nas"], "error")
-        return redirect(url_for("sessions.index"))
-    if not c["enabled"]:
-        flash("%s is disabled in this console; enable it first." % c["name"], "error")
-        return redirect(url_for("sessions.index"))
-    row = db.execute_returning(
-        "INSERT INTO ui.coa_request (client_id, action, acct_session_id, calling_station_id, nas_ip, nas_port_id,"
-        " username, requested_by) VALUES (%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id",
-        (c["id"], action, (s["acctsessionid"] or "")[:200], (s["callingstationid"] or "")[:64], s["nas"],
-         (s["nasportid"] or "")[:100], (s["username"] or "")[:253], g.user["username"]))
-    ev("coa.request", object_type="radius_client", object_id=c["id"],
-       detail={"action": action, "switch": c["name"], "nas_ip": s["nas"], "port": s["nasportid"],
-               "station": s["callingstationid"], "user": s["username"], "request_id": row["id"]})
-    return redirect(url_for("sessions.coa_result", rid=row["id"]))
+    sids = []
+    for v in request.form.getlist("sid"):
+        if not (v.isascii() and v.isdigit() and len(v) <= 18):
+            abort(400)
+        if int(v) not in sids:
+            sids.append(int(v))
+    if len(sids) > MAX_BULK:
+        abort(400)
+    if not sids:
+        message, queued, skipped = "Select at least one session first.", [], []
+    else:
+        queued, skipped = _queue(action, sids)
+        message = _summary(action, queued, skipped)
+    if _wants_json():
+        return jsonify(action=action, label=COA_ACTIONS[action][0], message=message, skipped=skipped,
+                       queued=[{"sid": x["sid"], "id": x["id"], "url": url_for("sessions.coa_result", rid=x["id"])}
+                               for x in queued])
+    flash(message, "success" if queued and not skipped else "info" if queued else "error")
+    return redirect(list_url("sessions.index"))
+
+
+def _state(r):
+    return "waiting" if r["done_at"] is None else "ok" if r["ok"] else "failed"
+
+
+@bp.route("/coa/status")
+@login_required
+def coa_states():
+    """State of several requests at once, for the rows of the sessions page."""
+    ids = []
+    for v in request.args.getlist("id")[:MAX_STATUS_IDS]:
+        if v.isascii() and v.isdigit() and len(v) <= 9:
+            ids.append(int(v))
+    rows = db.query("SELECT id, done_at, ok, message FROM ui.coa_request WHERE id = ANY(%s)", (ids,)) if ids else []
+    return jsonify(requests=[{"id": r["id"], "state": _state(r), "message": r["message"][:300]} for r in rows])
 
 
 @bp.route("/coa/<int:rid>/status")
@@ -181,11 +281,60 @@ def coa_status(rid):
 @bp.route("/coa/<int:rid>")
 @login_required
 def coa_result(rid):
-    r = db.query_one("SELECT r.*, host(r.nas_ip) AS nas, c.name AS switch_name FROM ui.coa_request r"
-                     " JOIN ui.radius_client c ON c.id = r.client_id WHERE r.id = %s", (rid,))
+    r = db.query_one(REQUEST_SELECT + " WHERE r.id = %s", (rid,))
     if r is None:
         abort(404)
     mon = db.query_one("SELECT radclient, heartbeat_at FROM ui.monitor_state WHERE id = 1")
     port = db.query_one("SELECT coa_port FROM ui.snmp_profile WHERE id = 1")
-    return render_template("sessions/coa.html", r=r, mon=mon, actions=COA_ACTIONS,
+    session = None
+    if r.get("radacct_id"):
+        session = db.query_one("SELECT acctstarttime, acctstoptime, acctterminatecause FROM radacct"
+                               " WHERE radacctid = %s", (r["radacct_id"],))
+    return render_template("sessions/coa.html", r=r, mon=mon, actions=COA_ACTIONS, session=session,
+                           vendor=oui.vendor(r["calling_station_id"]),
                            coa_port=port["coa_port"] if port else 1700, blocked=is_blocked(r["message"]))
+
+
+@bp.route("/actions")
+@login_required
+def actions():
+    """Every session action requested (kept 90 days), newest first."""
+    q = request.args.get("q", "").strip()[:100]
+    sw = request.args.get("switch", "")
+    action = request.args.get("action", "")
+    result = request.args.get("result", "")
+    idx = ClientIndex.load()
+    where, params = [], []
+    if q:
+        qm = q.replace(":", "").replace("-", "").replace(".", "")
+        where.append("(r.username ILIKE %s OR r.nas_port_id ILIKE %s OR r.requested_by ILIKE %s"
+                     " OR regexp_replace(r.calling_station_id, '[^0-9A-Fa-f]', '', 'g') ILIKE %s)")
+        params += ["%" + q + "%", "%" + q + "%", "%" + q + "%", "%" + (qm or q) + "%"]
+    if sw.isascii() and sw.isdigit() and len(sw) <= 9:
+        where.append("r.client_id = %s")
+        params.append(int(sw))
+    else:
+        sw = ""
+    if action in COA_ACTIONS:
+        where.append("r.action = %s")
+        params.append(action)
+    else:
+        action = ""
+    if result == "waiting":
+        where.append("r.done_at IS NULL")
+    elif result == "ok":
+        where.append("r.ok")
+    elif result == "failed":
+        where.append("r.done_at IS NOT NULL AND NOT coalesce(r.ok, false)")
+    else:
+        result = ""
+    frm = (" FROM ui.coa_request r JOIN ui.radius_client c ON c.id = r.client_id"
+           + ((" WHERE " + " AND ".join(where)) if where else ""))
+    pager = paging.Pager(paging.requested_page(), PAGE, paging.count(db, frm, params, PAGE))
+    rows = db.query("SELECT r.*, host(r.nas_ip) AS nas, c.name AS switch_name" + frm +
+                    " ORDER BY r.id DESC LIMIT %s OFFSET %s", params + [PAGE, pager.offset])
+    mon = db.query_one("SELECT radclient, heartbeat_at FROM ui.monitor_state WHERE id = 1")
+    switches = sorted((c for c in idx.by_id.values()), key=lambda c: c["name"])
+    return render_template("sessions/actions.html", rows=rows, q=q, sw=sw, action=action, result=result,
+                           pager=pager, switches=switches, actions=COA_ACTIONS, mon=mon,
+                           waiting=any(r["done_at"] is None for r in rows))

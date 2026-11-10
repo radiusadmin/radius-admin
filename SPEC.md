@@ -617,7 +617,7 @@ CSV columns (header row required, exact names, any order tolerated by name):
   (`clients._port_rows`), the native VLAN only as a labelled fallback, and "—" without a device.
   Quoted SNMP values spanning lines (-Ox wraps hex at 16 bytes) are joined; hourly housekeeping (mab_pending
   30 d, coa_request 90 d, snmp_test 7 d, resolved alerts 400 d).
-- UI: Sessions (`views/sessions.py`; accounting coverage per switch; CoA queue + result page),
+- UI: Sessions (`views/sessions.py`; accounting coverage per switch; CoA queue + result page; reworked in section 24),
   auth-log detail (`/auth-log/<id>`, `insight.py` reason hints, cert expiry, group decode, NAS→client),
   Alerts (+ settings, admin + step-up; SMTP password AES-256-GCM, AAD `radius-admin/alert_settings/smtp`),
   MAB expiry / vendor (`oui.py`, package `ieee-data`) / unknown-device queue with one-click approve and
@@ -1044,7 +1044,7 @@ meta refresh stays only inside `<noscript>`, so every page still works without J
   | Updates, Check now | `/updates/status?wait=check` (admin; no helper call) | `ui.update_check.checked_at` ≥ `update_check_requested`, or 5 min passed (the page then says the check did not finish; forgotten after 1 h) |
   | Updates, install | `/updates/status?wait=install` (admin) | the helper's state is not queued/installing; a helper that does not answer is "not done" |
   | SNMP test | `/switch-monitoring/test/<id>/status` (signed in) | `ui.snmp_test.done_at` set |
-  | Session action (CoA) | `/sessions/coa/<id>/status` (signed in) | `ui.coa_request.done_at` set |
+  | Session action (CoA), its own page | `/sessions/coa/<id>/status` (signed in) | `ui.coa_request.done_at` set (rows of the sessions page: section 24) |
   | Switch monitoring, Refresh now | `/switch-monitoring/refresh/status` (operator) | every switch has `ui.switch_status.polled_at` ≥ `refresh_requested_at`, or 3 min passed |
   | Alerts, Send test alert | `/alerts/test/status` (admin) | a `test` alert opened at or after `test_requested_at`, or 2 min passed |
 
@@ -1068,3 +1068,52 @@ meta refresh stays only inside `<noscript>`, so every page still works without J
   button (`requestSubmit`), so validation and the busy spinner still apply.
 - Polling counts as activity for the idle session timeout while it runs (bounded by `limit`:
   30 min for an install, at most 5 min elsewhere).
+
+## 24. Change (2026-11-10): session actions in place, several at once; lists keep their filters
+
+- **One POST for one or many.** `POST /sessions/coa` (operator; replaces `/sessions/<id>/coa`)
+  takes `action` (`reauth`/`bounce`/`disconnect`) and `sid` once per session (`radacct.radacctid`,
+  digits only, at most 50 = one page; anything else is 400). Each session that is still open, on
+  an enabled RADIUS client and without a request already waiting gets its own `ui.coa_request`
+  row and its own `coa.request` audit event (detail gains `selected`, the number of sessions
+  named in the POST). The others are skipped with a reason (ended, switch unknown or disabled,
+  request waiting, record gone). Nothing selected is not an error status: the answer says so.
+  - Browser form: redirect to the sessions list as it was last shown, with the summary as a
+    flash message.
+  - `Accept: application/json` (the page script): `{"action", "label", "message", "queued":
+    [{"sid", "id", "url"}], "skipped": [{"sid", "name", "reason"}]}`.
+- **Open sessions in the 30-day view.** Tick boxes and the Actions menu appear for every row
+  with no stop time and a known switch, in both views; ended rows have neither. The server
+  decides again on every request.
+- **State in the row.** `ui.coa_request.radacct_id` (`sql/97-session-actions.sql`: nullable
+  bigint, partial index, additive; no foreign key because accounting rows are owned by
+  FreeRADIUS and pruned separately) names the session. The sessions page joins the latest
+  request per session and shows it in the row while it waits and for 15 minutes after it was
+  requested: spinner and "Sending…", then Done or Failed, always a link to the request's page.
+  `GET /sessions/coa/status?id=1&id=2…` (signed in, at most 200 ids, unknown ids left out) →
+  `{"requests": [{"id", "state": "waiting"|"ok"|"failed", "message"}]}`; `app.js` asks every
+  2 s for all waiting rows of the page at once and stops after 5 minutes ("No answer yet").
+  With JavaScript the POST is sent with `fetch` and nothing reloads; without it the page comes
+  back with the same row states and a `<noscript>` refresh every 5 s while a request waits.
+  The confirmation dialog takes its question from the pressed button when that has
+  `data-confirm` (the bulk buttons: "<Action> N sessions?").
+- **Session actions page.** `GET /sessions/actions` (signed in; menu item under Monitoring):
+  every request, newest first, 50 per page, filters `q` (user, MAC, port, requester),
+  `switch`, `action`, `result` (`ok`/`failed`/`waiting`). Each row links to
+  `/sessions/coa/<id>`, which shows the result, the advice for a failure and the request's
+  details (who, when, switch, port, user, station and vendor, accounting session id and
+  whether that session is still open). The "recent requests" table on the sessions page is gone.
+- **Monitor.** In one pass over the queue (10 requests), after a switch gave no reply the other
+  requests for that switch are answered "Not sent: <switch> did not answer the request before
+  this one" without waiting for each to time out; the next pass tries the switch again.
+- **Lists keep their filters** (`listnav.py`). The sessions list, session actions, the
+  authentication log, RADIUS clients, MAB devices, unknown devices and alerts remember the
+  query arguments they were last shown with (the names in `listnav.LISTS`, values cut to 100
+  characters). `list_url(endpoint)` (Python and templates) builds the list's URL with them; it
+  is used by "Back to …" and Cancel links and by the redirects after editing, deleting or
+  acting on a row. Adding or importing entries still opens the plain list, where the new entry
+  is. Opening a list without arguments (the menu) forgets its filters. The state is a session
+  cookie `__Host-radius_admin_lists` (Secure, HttpOnly, SameSite=Strict; base64 JSON, at most
+  3000 characters, deleted at sign-out), per browser rather than per tab. It is display state
+  and is not trusted: only the listed argument names are read, as text, and only to build the
+  URL of the same list, whose view validates them like any query string.

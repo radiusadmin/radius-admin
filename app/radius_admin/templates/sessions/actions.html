@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block title %}Session actions{% endblock %}
+{% block head %}{% if waiting %}{{ m.noscript_refresh(5) }}{% endif %}{% endblock %}
+{% block content %}
+<header class="page-head">
+  <div><h1>Session actions</h1>
+  <p class="lede">Every re-authenticate, port bounce and disconnect requested from this console, with the switch's answer. Kept for 90 days.</p></div>
+  <div class="head-actions"><a class="btn btn-quiet" href="{{ list_url('sessions.index') }}">Back to sessions</a></div>
+</header>
+
+{% if mon and mon.radclient.startswith('unavailable') %}<p class="flash flash-error" role="alert">Session actions cannot be sent: {{ mon.radclient[13:] }}</p>{% endif %}
+
+<form class="filters" method="get" role="search">
+  <label for="q" class="sr-only">Search session actions</label>
+  <input id="q" name="q" type="search" value="{{ q }}" placeholder="User, MAC, port or requester">
+  <label for="switch" class="sr-only">Switch</label>
+  <select id="switch" name="switch" class="select-auto">
+    <option value="">All switches</option>
+    {% for c in switches %}<option value="{{ c.id }}" {{ 'selected' if sw == c.id|string }}>{{ c.name }}</option>{% endfor %}
+  </select>
+  <label for="action" class="sr-only">Action</label>
+  <select id="action" name="action" class="select-auto">
+    <option value="">All actions</option>
+    {% for key, a in actions.items() %}<option value="{{ key }}" {{ 'selected' if action == key }}>{{ a[0] }}</option>{% endfor %}
+  </select>
+  <label for="result" class="sr-only">Result</label>
+  <select id="result" name="result" class="select-auto">
+    <option value="">All results</option>
+    <option value="ok" {{ 'selected' if result == 'ok' }}>Done</option>
+    <option value="failed" {{ 'selected' if result == 'failed' }}>Failed</option>
+    <option value="waiting" {{ 'selected' if result == 'waiting' }}>Waiting</option>
+  </select>
+  <button class="btn btn-quiet" type="submit">Show</button>
+</form>
+
+<section class="panel flush" data-coa-status="{{ url_for('sessions.coa_states') }}">
+{% if rows %}
+<div class="table-wrap"><table class="actions-table">
+  <thead><tr><th scope="col">Requested</th><th scope="col">Action</th><th scope="col">User / device</th><th scope="col">Switch / port</th><th scope="col">Result</th><th scope="col"><span class="sr-only">Details</span></th></tr></thead>
+  <tbody>{% for c in rows %}
+  <tr>
+    <td class="small nowrap" title="{{ c.requested_at|dt }}">{{ c.requested_at|dtc }}<span class="cell-sub">{{ c.requested_by or '—' }}</span></td>
+    <td>{{ actions[c.action][0] }}</td>
+    <td class="name-cell"><span class="mono ellip" title="{{ c.username }}">{{ c.username or '—' }}</span>
+      {% if c.calling_station_id %}<span class="cell-sub mono">{{ c.calling_station_id|mac }}</span>{% endif %}</td>
+    <td><a href="{{ url_for('clients.edit', cid=c.client_id) }}">{{ c.switch_name }}</a><span class="cell-sub mono">{{ c.nas_port_id }}</span></td>
+    <td class="coa-state"{% if c.done_at is none %} data-coa-state data-coa-waiting="{{ c.id }}" data-coa-plain{% endif %}>
+      {%- if c.done_at is none %}<span class="spinner" aria-hidden="true"></span> <span class="coa-text">Sending…</span>
+      {%- elif c.ok %}<span class="tag tag-ok">Done</span>
+      {%- else %}<span class="tag tag-danger">Failed</span>{% endif -%}
+      {% if c.done_at is not none %}<span class="cell-sub">{{ c.message[:160] }}</span>{% endif %}</td>
+    <td class="row-actions"><a class="btn btn-quiet btn-small" href="{{ url_for('sessions.coa_result', rid=c.id) }}" aria-label="Details of {{ actions[c.action][0] }} for {{ c.username or c.calling_station_id }}">Details</a></td>
+  </tr>{% endfor %}</tbody>
+</table></div>
+{% else %}<p class="empty">{% if q or sw or action or result %}No session actions match.{% else %}No session actions yet. Use the Actions menu or the tick boxes on the <a href="{{ url_for('sessions.index') }}">Sessions</a> page.{% endif %}</p>{% endif %}
+</section>
+{{ m.pager(pager, 'sessions.actions', {'q': q, 'switch': sw, 'action': action, 'result': result}) }}
+{% endblock %}
