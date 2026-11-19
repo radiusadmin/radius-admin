@@ -604,6 +604,16 @@ and every request and result is in the audit log. `install.sh --phase app` repor
 whether it found radclient; if it lives somewhere unusual set
 `radclient = /path/to/radclient` in `/etc/radius-admin/radius-admin.conf`.
 
+**Sessions that never ended.** A switch that reboots, loses an Accounting-Stop or starts a new
+accounting session when it re-authenticates a port leaves the old record open. Every 5 minutes
+the monitoring service closes an open record once the same device (MAC) has started a newer
+session on the same switch, and one whose switch sent interim updates but none for 24 hours;
+the 30-day view shows them as "Closed: newer session from this device" / "Closed: no
+accounting update for a day". A session action the switch refuses with
+`Session-Context-Not-Found` closes its record too ("Closed: the switch no longer has it").
+Records from a switch that sends no interim updates are only closed by those two events, so
+turn on periodic interim accounting updates on the switches where the firmware offers it.
+
 ### 6.5 Alerts
 
 UI → **Alerts**. The monitoring service checks every minute and raises:

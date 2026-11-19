@@ -31,6 +31,12 @@ STALE_HOURS = 24
 MAX_BULK = PAGE             # one request can name at most one page of sessions
 MAX_STATUS_IDS = 200
 RECENT_MINUTES = 15         # a finished request stays in its session's row this long
+# end causes written by the monitor for records that never got an Accounting-Stop (SPEC 25)
+CLOSED_CAUSES = {
+    "Superseded": "Closed: newer session from this device",
+    "Stale-Session": "Closed: no accounting update for a day",
+    "Session-Not-Found": "Closed: the switch no longer has it",
+}
 # label, what it does to one session, what it does to several (confirmation text)
 COA_ACTIONS = {
     "reauth": ("Re-authenticate", "The switch re-runs 802.1X/MAB for this session; the device keeps its link.",
@@ -151,7 +157,7 @@ def index():
     waiting = [r["coa_id"] for r in rows if r["coa_id"] and r["coa_done_at"] is None]
     return render_template("sessions/index.html", rows=rows, q=q, sw=sw, history=history, pager=pager,
                            open_count=open_count, acct=_accounting_overview(idx), switches=switches,
-                           mon=mon, actions=COA_ACTIONS, waiting=waiting, max_bulk=MAX_BULK,
+                           mon=mon, actions=COA_ACTIONS, waiting=waiting, max_bulk=MAX_BULK, closed_causes=CLOSED_CAUSES,
                            selectable=any(r["acctstoptime"] is None and r["client"] for r in rows))
 
 
@@ -291,6 +297,7 @@ def coa_result(rid):
         session = db.query_one("SELECT acctstarttime, acctstoptime, acctterminatecause FROM radacct"
                                " WHERE radacctid = %s", (r["radacct_id"],))
     return render_template("sessions/coa.html", r=r, mon=mon, actions=COA_ACTIONS, session=session,
+                           closed_causes=CLOSED_CAUSES,
                            vendor=oui.vendor(r["calling_station_id"]),
                            coa_port=port["coa_port"] if port else 1700, blocked=is_blocked(r["message"]))
 

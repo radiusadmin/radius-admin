@@ -198,6 +198,10 @@ without a FreeRADIUS restart. Security properties:
   `radius_admin_admin_source_ok_hex` and `radius_admin_priv15`, and still has no
   rights on schema `ui`. The web app gets the text-argument matcher for its
   parameterized "Test a match" tool; both use the same core matcher.
+  The monitoring service closes accounting records that never got an Accounting-Stop only
+  through `radius_admin_close_stale_sessions` and `radius_admin_close_after_coa` (SPEC §25);
+  `radius_admin` still has no write access to `radacct`, and neither function takes session
+  data from the caller.
 * **Fail closed.** If PostgreSQL is unavailable, EAP-TLS, EAP-TTLS, switch-admin and MAB requests
   are rejected; service recovers by itself once the database returns (sql pool
   `retry_delay`, 30 s). PostgreSQL is now a hard dependency of every 802.1X login.

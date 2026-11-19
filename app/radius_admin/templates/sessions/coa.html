@@ -20,6 +20,8 @@
   <p><span class="tag tag-danger">Failed</span> {{ r.message }}</p>
   {% if blocked %}
   <p class="small">This server did not send the request: the monitoring service may only reach the switch networks. Add the switch's network to <span class="mono">switch_nets</span> in <span class="mono">/etc/radius-admin/site.yaml</span> and run <span class="mono">sudo deploy/install.sh --answers /etc/radius-admin/site.yaml --phase app</span> (RUNBOOK §6.3).</p>
+  {% elif 'Session-Context-Not-Found' in r.message %}
+  <p class="small">The switch has no session for this device on this port: the device has left or authenticated again since the accounting record was written, and the switch did not send Accounting-Stop. Nothing needs to be done on the switch.</p>
   {% else %}
   <p class="small">Check that the switch has dynamic authorization configured for this server with the same shared key (RUNBOOK §6.4), runs firmware 4.1.3.36 or later, and that UDP {{ coa_port }} on the switch is reachable from this server.</p>
   {% endif %}
@@ -33,7 +35,7 @@
   <dt>User</dt><dd class="mono">{{ r.username or '—' }}</dd>
   <dt>Station</dt><dd>{% if r.calling_station_id %}<span class="mono">{{ r.calling_station_id|mac }}</span>{% if vendor %} <span class="muted">· {{ vendor }}</span>{% endif %}{% else %}—{% endif %}</dd>
   <dt>Accounting session</dt><dd><span class="mono">{{ r.acct_session_id or '—' }}</span>
-    {%- if session %} <span class="muted">· {% if session.acctstoptime %}ended {{ session.acctstoptime|dt }}{% if session.acctterminatecause %} ({{ session.acctterminatecause }}){% endif %}{% else %}still open, started {{ session.acctstarttime|dt }}{% endif %}</span>{% endif %}</dd>
+    {%- if session %} <span class="muted">· {% if session.acctstoptime %}ended {{ session.acctstoptime|dt }}{% if session.acctterminatecause %} ({{ closed_causes.get(session.acctterminatecause, session.acctterminatecause) }}){% endif %}{% else %}still open, started {{ session.acctstarttime|dt }}{% endif %}</span>{% endif %}</dd>
 </dl>
 </section>
 {% endblock %}

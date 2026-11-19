@@ -80,7 +80,7 @@
       <span class="cell-sub mono">{{ s.nasportid or '' }}</span></td>
     <td class="num">{% if s.vlan %}<span class="vlan">{{ s.vlan }}</span>{% else %}—{% endif %}</td>
     <td class="small started" title="{{ s.acctstarttime|dt }}">{{ s.acctstarttime|dtc }}<span class="cell-sub">{{ s.duration|duration }}{% if s.stale %} · <span class="warn-text">no update for over a day</span>{% endif %}</span></td>
-    <td class="small">{% if s.acctstoptime %}{{ s.acctstoptime|dtc }}<span class="cell-sub">{{ s.acctterminatecause or '' }}</span>
+    <td class="small">{% if s.acctstoptime %}{{ s.acctstoptime|dtc }}<span class="cell-sub">{{ closed_causes.get(s.acctterminatecause, s.acctterminatecause or '') }}</span>
       {% elif s.port %}{% if s.port.authorized %}<span class="tag tag-ok">Authorized</span>{% elif s.port.oper == 'down' %}<span class="tag tag-warn">Link down</span>{% else %}<span class="tag tag-warn">{{ s.port.state_text or 'Unauthorized' }}</span>{% endif %}
       {% else %}<span class="muted">—</span>{% endif %}
       {% if s.auth_id %}<span class="cell-sub"><a href="{{ url_for('logs.auth_detail', aid=s.auth_id) }}">Authentication</a></span>{% endif %}</td>
