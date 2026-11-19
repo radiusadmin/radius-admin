@@ -8,6 +8,8 @@ component allowed to send network traffic (UDP to the management subnet). It:
   * executes "test this switch" requests (ui.snmp_test) and CoA / Disconnect
     requests (ui.coa_request) queued by the web UI;
   * evaluates the alerts once a minute (alerts.py) and writes a heartbeat;
+  * every 5 minutes closes accounting records that never got an Accounting-Stop
+    (replaced by a newer session of the same device, or no interim update for a day);
   * removes old queue rows once an hour.
 """
 import concurrent.futures
@@ -29,6 +31,9 @@ TICK = 5            # seconds between checks for tests / refresh / CoA requests
 ALERT_EVERY = 60    # seconds between alert evaluations
 HEARTBEAT_EVERY = 30   # the UI treats the service as stopped after 3 minutes without one
 HOUSEKEEP_EVERY = 3600
+CLOSE_SESSIONS_EVERY = 300  # seconds between passes over accounting records without a Stop
+STALE_HOURS = 24            # interim updates stopped this long ago: the session has ended
+NOT_FOUND = "Session-Context-Not-Found"
 _stop = False
 
 
@@ -185,6 +190,12 @@ def run_coa(conn, cfg, profile):
                 msg = "Not sent: %s" % e
         db.execute("UPDATE ui.coa_request SET done_at = now(), ok = %s, message = %s WHERE id = %s",
                    (ok, msg[:500], r["id"]), conn=conn)
+        if not ok and NOT_FOUND in msg and r.get("radacct_id"):
+            # the switch has no session for this MAC on this port: the record missed its Stop
+            closed = db.query_one("SELECT radius_admin_close_after_coa(%s) AS closed", (r["id"],), conn=conn)
+            if closed and closed["closed"]:
+                msg = (msg + " The switch no longer has this session; its accounting record was marked as ended.")
+                db.execute("UPDATE ui.coa_request SET message = %s WHERE id = %s", (msg[:500], r["id"]), conn=conn)
         audit.write("coa.result", actor=ACTOR, success=ok, object_type="radius_client", object_id=r["client_id"],
                     detail={"request_id": r["id"], "action": r["action"], "switch": r["name"], "message": msg[:200]},
                     conn=conn)
@@ -241,6 +252,20 @@ def heartbeat(conn, radclient_note):
     conn.commit()
 
 
+def close_stale_sessions(conn, stale_hours=STALE_HOURS):
+    """Close accounting records that never got an Accounting-Stop (SPEC section 25):
+    replaced by a newer session of the same device on the same switch, or no interim
+    update for `stale_hours`. Returns {"superseded": n, "stale": n}."""
+    r = db.query_one("SELECT superseded, stale FROM radius_admin_close_stale_sessions(%s)", (int(stale_hours),),
+                     conn=conn)
+    conn.commit()
+    res = {"superseded": r["superseded"], "stale": r["stale"]}
+    if res["superseded"] or res["stale"]:
+        audit.log_syslog("accounting: closed %d replaced and %d stale sessions without Accounting-Stop"
+                         % (res["superseded"], res["stale"]))
+    return res
+
+
 def housekeeping(conn):
     db.execute("DELETE FROM mab_pending WHERE last_seen < now() - interval '30 days'", conn=conn)
     db.execute("DELETE FROM ui.coa_request WHERE requested_at < now() - interval '90 days'", conn=conn)
@@ -254,7 +279,7 @@ def loop(cfg, once=False):
     key = DataKey.from_file(cfg["key_file"])
     conn = db.connect(cfg["db_dsn"])
     last_cycle = 0.0
-    last_alerts = last_housekeep = last_beat = -1e9
+    last_alerts = last_housekeep = last_beat = last_close = -1e9
     last_refresh_seen = None
     last_test_seen = None
     radius_state = {}
@@ -287,6 +312,9 @@ def loop(cfg, once=False):
             if now - last_alerts >= ALERT_EVERY or once:
                 run_alerts(conn, cfg, key, profile, radius_state, portal_state)
                 last_alerts = now
+            if now - last_close >= CLOSE_SESSIONS_EVERY or once:
+                close_stale_sessions(conn)
+                last_close = now
             if now - last_housekeep >= HOUSEKEEP_EVERY:
                 housekeeping(conn)
                 last_housekeep = now

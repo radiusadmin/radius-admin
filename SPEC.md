@@ -1122,3 +1122,36 @@ meta refresh stays only inside `<noscript>`, so every page still works without J
   3000 characters, deleted at sign-out), per browser rather than per tab. It is display state
   and is not trusted: only the listed argument names are read, as text, and only to build the
   URL of the same list, whose view validates them like any query string.
+
+## 25. Change (2026-11-19): accounting records without an Accounting-Stop are closed
+
+- **Why.** A switch that reboots without Accounting-On, loses a Stop packet, or starts a new
+  accounting session each time it re-authenticates a port (802.1X ↔ MAB) leaves the old
+  `radacct` row open. The sessions page listed every such row as up, each with the port's live
+  state ("Authorized" came from the device's current session), and session actions on them
+  failed with `Session-Context-Not-Found`.
+- **`sql/98-stale-sessions.sql`** (idempotent, additive): partial index
+  `radacct_open_csi_idx (callingstationid, nasipaddress) WHERE acctstoptime IS NULL` and two
+  `SECURITY DEFINER` functions owned by `radius_owner`, `search_path` pinned, executable only by
+  `radius_admin` (the web app's role still has `SELECT` only on `radacct`):
+  - `radius_admin_close_stale_sessions(p_stale_hours integer DEFAULT 24, OUT superseded,
+    OUT stale)`: closes an open record when a later accounting session started for the same
+    Calling-Station-Id on the same NAS address (stop = the later start, cause `Superseded`),
+    then open records that had interim updates and none for `p_stale_hours` (at least 24;
+    stop = last update, session time kept from it, cause `Stale-Session`). Records that never
+    had an interim update are left open. Takes no request data.
+  - `radius_admin_close_after_coa(p_request_id bigint) → boolean`: closes the record named by
+    `ui.coa_request.radacct_id` only when that request is finished, not ok and its message
+    contains `Session-Context-Not-Found`, and only if the record is still open (stop = last
+    update, else now; cause `Session-Not-Found`).
+  A real Accounting-Stop that arrives later still overwrites the row (the stock stop query's
+  last fallback has no `AcctStopTime IS NULL`); an Interim-Update for a closed row is ignored.
+- **Monitor.** `close_stale_sessions()` runs every 5 minutes (`CLOSE_SESSIONS_EVERY`) and
+  writes a syslog line when it closed anything. After a CoA/Disconnect request is refused with
+  `Session-Context-Not-Found` for a request that names a session, `run_coa` calls
+  `radius_admin_close_after_coa` and appends "The switch no longer has this session; its
+  accounting record was marked as ended." to the request's message.
+- **UI.** The 30-day view and the request page show the three causes as "Closed: newer
+  session from this device", "Closed: no accounting update for a day" and "Closed: the switch
+  no longer has it". The request page explains `Session-Context-Not-Found` instead of the
+  dynamic-authorization checklist.
