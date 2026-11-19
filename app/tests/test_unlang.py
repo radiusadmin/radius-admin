@@ -86,6 +86,19 @@ def test_sql_arguments_are_hex_or_constant_only():
     assert "&Tmp-String-2 := \"%{toupper:%{1}-%{2}-%{3}-%{4}-%{5}-%{6}}\"" in p
 
 
+def test_group_lists_skip_duplicate_names():
+    p = render()
+    # EAP-TLS loop and both directory-user loops (EAP-TTLS, PEAP) use the de-duplicating append
+    assert p.count('if ("%{control:Tmp-String-3}," !~ /,%{control:Tmp-String-2},/) {') == 3
+    assert '&Tmp-String-3 := "%{control:Tmp-String-3},%{hex:' not in p
+    for start in ("foreach &control:LDAP-Group {", "foreach &control:Tmp-String-7 {"):
+        i = p.index(start)
+        body = p[i:p.index("\n\t\t}\n", i)]
+        # cleared before the hex xlat, so a failed xlat cannot reuse the previous item's hex
+        assert body.index("&Tmp-String-2 !* ANY") < body.index('&Tmp-String-2 := "%{hex:control:Tmp-String-9[0]}"')
+        assert body.index("&Tmp-String-9[0] !* ANY") > body.index("!~ /,%{control:Tmp-String-2},/")
+
+
 def test_eap_branch_uses_live_vlan_function():
     p = render()
     eap = p[p.index("# 802.1X EAP-TLS"):p.index("\n\tradius_admin_custom")]
@@ -94,6 +107,8 @@ def test_eap_branch_uses_live_vlan_function():
     assert "\t\t\treject\n" in nosan and "no DNS name" in nosan
     assert "&Tmp-String-9 += &control:LDAP-Group[*]" in eap  # raw copy, no string re-parse
     assert "%{hex:control:Tmp-String-9[0]}" in eap
+    # each group name once (rlm_ldap caches direct groups from memberOf AND the filter search)
+    assert '!~ /,%{control:Tmp-String-2},/' in eap and "&Tmp-String-2 !* ANY" in eap
     assert '&Tmp-String-8 := "%{hex:Called-Station-Id}"' in eap
     assert "&control:Tmp-String-0 =~ /^[0-9]{1,4}$/" in eap
     assert "&Tunnel-Private-Group-Id := &control:Tmp-String-0" in eap

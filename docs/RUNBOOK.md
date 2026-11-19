@@ -559,13 +559,28 @@ Sessions → the summary line names any switch that sent no accounting in 30 day
 the server runs a host firewall (ufw), UDP 1813 from the switches must be allowed (it
 already is when the firewall only restricts the UI port, as installed).
 
-**Actions** (operator or admin), from the *Actions* menu of an open session:
+**Actions** (operator or admin), from the *Actions* menu of a session that is still up, in
+either view (“Last 30 days” offers them for the sessions that have not ended). To act on
+several sessions at once, tick them (the box in the table header ticks the whole page) and
+use the buttons in the bar above the table; one request is sent per session, at most one page
+(50) at a time.
 
 | Action | What the switch does |
 |---|---|
 | Re-authenticate | re-runs 802.1X/MAB for the session; link stays up (picks up a changed VLAN or MAB entry) |
 | Bounce port | shuts the port briefly and re-enables it; the device reconnects |
 | Disconnect | ends the session; the device must authenticate again |
+
+The page does not change while a request is sent: the session's row shows *Sending…* and
+then **Done** or **Failed**, which links to the details (the switch's answer and what to check
+when it failed). A result stays in the row for 15 minutes. **Session actions** in the menu
+lists every request of the last 90 days, with filters for user, MAC, port, requester, switch,
+action and result. When a switch does not answer, the remaining requests queued for it in
+the same pass are marked “Not sent” at once instead of each waiting for a timeout; send them
+again once the switch answers.
+
+Going back to a list (*Back to sessions*, *Back to log*, *Cancel* on a form, or after a row
+action) returns to the filters and page you had; the menu links open the plain list.
 
 These are RADIUS Change-of-Authorization messages (RFC 5176) sent by the monitoring
 service with `radclient` from your FreeRADIUS build, to UDP **1700** on the switch
@@ -578,14 +593,26 @@ aaa server radius dynamic-author
  exit
 ```
 
-Cisco documents ISE as the tested CoA client for the 1300 series; the requests use the
-same attributes ISE sends for these actions (Acct-Session-Id, Calling-Station-Id,
-NAS-Port-Id, Event-Timestamp, Message-Authenticator and the Cisco AV-pairs
-`subscriber:command=reauthenticate` / `bounce-host-port`). **Test once on one switch**
-before relying on it; the result page shows the switch's ACK or NAK (with Error-Cause),
+Cisco documents ISE as the tested CoA client for the 1300 series. The requests name the
+session by the device's MAC (Calling-Station-Id) and port (NAS-Port-Id), with the switch's
+NAS-IP-Address, Event-Timestamp, Message-Authenticator and the Cisco AV-pairs
+`subscriber:command=reauthenticate` / `bounce-host-port`. Acct-Session-Id is sent only for a
+session without a MAC: a Catalyst 1300 answers a request that names one with
+`CoA-NAK: Session-Context-Not-Found`, and one without NAS-IP-Address with `Missing-Attribute`. **Test once on one switch**
+before relying on it; the Failed or Done label in its row links to the details, which show the switch's ACK or NAK (with Error-Cause),
 and every request and result is in the audit log. `install.sh --phase app` reports
 whether it found radclient; if it lives somewhere unusual set
 `radclient = /path/to/radclient` in `/etc/radius-admin/radius-admin.conf`.
+
+**Sessions that never ended.** A switch that reboots, loses an Accounting-Stop or starts a new
+accounting session when it re-authenticates a port leaves the old record open. Every 5 minutes
+the monitoring service closes an open record once the same device (MAC) has started a newer
+session on the same switch, and one whose switch sent interim updates but none for 24 hours;
+the 30-day view shows them as "Closed: newer session from this device" / "Closed: no
+accounting update for a day". A session action the switch refuses with
+`Session-Context-Not-Found` closes its record too ("Closed: the switch no longer has it").
+Records from a switch that sends no interim updates are only closed by those two events, so
+turn on periodic interim accounting updates on the switches where the firmware offers it.
 
 ### 6.5 Alerts
 
@@ -981,8 +1008,9 @@ FIPS indicator.
 
 ### 9.3 Updates from the portal (signed builds)
 
-Every push to `main`, `testing` or `dev` that passes CI becomes a signed build on GitHub
-(a release `v<version>`). A server follows one of those branches, its **channel**, and
+Every push to `main` or `testing` that passes CI becomes a signed build on GitHub (a release
+`v<version>`); `dev` builds are published only on request (below), so the release list stays
+short. A server follows one of those branches, its **channel**, and
 installs only builds whose signature verifies with the public key it was installed with.
 
 **One-time setup for the repository (maintainer).** On a trusted machine, not a server:
@@ -1002,7 +1030,10 @@ person approves every published build.
 **Releasing.** Bump `VERSION` on `dev` right after a release (for example `0.2.0`), describe
 changes under `## Unreleased` in `CHANGELOG.md`, and when releasing rename that section to
 `## 0.2.0 — <date>`. `dev` builds are `0.2.0-dev.N`, `testing` builds `0.2.0-rc.N`, and the
-merge to `main` publishes `0.2.0`. A push to `main` without a `VERSION` change publishes
+merge to `main` publishes `0.2.0`. To publish a `dev` build (for a test server on the dev
+channel), open Actions → **Release** → **Run workflow**, choose the branch `dev` and run it; it
+builds the newest commit on `dev` once CI has passed for it. testing and dev keep their
+newest 3 builds. A push to `main` without a `VERSION` change publishes
 nothing; the Release run then shows the warning "No release published". Rename
 `## Unreleased` before the merge to `main`, or the run warns "Empty release notes" and the
 release is published without notes.

@@ -5,7 +5,33 @@ Each release has a section here. `main` builds are the stable releases (`0.2.0`)
 show the "Unreleased" section plus their commits. Bump `VERSION` on `dev` right after a
 release, so previews sort after it.
 
-## Unreleased
+## 0.2.3 - 2026-11-19
+
+### Added
+- Session actions for several sessions at once: tick the sessions (or the whole page) and choose
+  Re-authenticate, Bounce port or Disconnect in the bar above the table.
+- **Session actions** in the menu: every request of the last 90 days with its result, filters,
+  and a page per request with the switch's answer and the request's details.
+
+### Changed
+- dev builds are no longer published on every push: start one from Actions → Release → Run
+  workflow on `dev`. testing and dev keep their newest 3 builds instead of 10.
+- A session action no longer opens a page of its own. The session's row shows "Sending…" and
+  then Done or Failed, linked to the details.
+- "Last 30 days, including ended" offers the actions for sessions that are still up.
+- Going back to a list keeps its filters and page: Back and Cancel links and the return after a
+  row action, on Sessions, Session actions, the authentication log, RADIUS clients, MAB devices,
+  unknown devices and alerts. The menu links still open the plain list.
+- When a switch does not answer a session action, the other requests waiting for that switch are
+  marked "Not sent" right away instead of each waiting for its own timeout.
+
+### Fixed
+- Session actions (Re-authenticate, Bounce port, Disconnect) work on Catalyst 1300 switches. The
+  switch refused them with "CoA-NAK: Session-Context-Not-Found" because the request also named
+  the accounting session id; it now names the session by the device's MAC and port (the
+  session id only when there is no MAC).
+
+## 0.2.2 — 2026-11-04
 
 ### Changed
 - Pages that wait for something no longer reload every few seconds: Check now and Install on

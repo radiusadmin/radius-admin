@@ -395,9 +395,40 @@ def _truthy(v):
     raise PolicyInputError("Invalid boolean setting value.")
 
 
+def _append_group_hex(indent):
+    """Unlang that appends ",<hex>" of &control:Tmp-String-9[0] to &control:Tmp-String-3
+    unless the list already holds that name, then drops the item.
+
+    rlm_ldap caches a group once per lookup it runs (the user object's memberOf and the
+    membership_filter search), so every direct group arrives twice. Names compare
+    byte-for-byte, as hex. The hex goes through &control:Tmp-String-2, cleared first: if
+    the hex xlat fails (name longer than 1023 bytes) the item is empty, the list gets an
+    empty entry and the list check that follows turns it into "x" (no match), as before.
+    """
+    t = "\t" * indent
+    return (
+        t + "update control {\n"
+        + t + "\t&Tmp-String-2 !* ANY\n"
+        + t + "}\n"
+        + t + "update control {\n"
+        + t + '\t&Tmp-String-2 := "%{hex:control:Tmp-String-9[0]}"\n'
+        + t + "}\n"
+        + t + 'if ("%{control:Tmp-String-3}," !~ /,%{control:Tmp-String-2},/) {\n'
+        + t + "\tupdate control {\n"
+        + t + '\t\t&Tmp-String-3 := "%{control:Tmp-String-3},%{control:Tmp-String-2}"\n'
+        + t + "\t}\n"
+        + t + "}\n"
+        + t + "update control {\n"
+        + t + "\t&Tmp-String-9[0] !* ANY\n"
+        + t + "\t&Tmp-String-2 !* ANY\n"
+        + t + "}\n"
+    )
+
+
 # The directory groups that the inner site copied to &control:Tmp-String-9, as the hex list
-# radius_admin_vlan_rule_hex() takes (attribute copy + %{hex:...} per item, like EAP-TLS);
-# "x" (no match) when a group name is too long for the hex xlat. Two tabs of indent.
+# radius_admin_vlan_rule_hex() takes (attribute copy + %{hex:...} per item, like EAP-TLS,
+# each name once); "x" (no match) when a group name is too long for the hex xlat. Two tabs
+# of indent.
 _DIRECTORY_GROUPS_HEX = (
     "\t\tupdate control {\n"
     '\t\t\t&Tmp-String-3 := ""\n'
@@ -407,12 +438,7 @@ _DIRECTORY_GROUPS_HEX = (
     "\t\t\t&Tmp-String-7 += &control:Tmp-String-9[*]\n"
     "\t\t}\n"
     "\t\tforeach &control:Tmp-String-7 {\n"
-    "\t\t\tupdate control {\n"
-    '\t\t\t\t&Tmp-String-3 := "%{control:Tmp-String-3},%{hex:control:Tmp-String-9[0]}"\n'
-    "\t\t\t}\n"
-    "\t\t\tupdate control {\n"
-    "\t\t\t\t&Tmp-String-9[0] !* ANY\n"
-    "\t\t\t}\n"
+    + _append_group_hex(3) +
     "\t\t}\n"
     "\t\tif (\"%{control:Tmp-String-3}\" !~ /^(,[0-9a-f]+)*$/) {\n"
     "\t\t\tupdate control {\n"
@@ -935,6 +961,7 @@ def render_policy(custom=""):
         "\t\t# as a string, so backslashes/quotes stay literal). Case-insensitive compare\n"
         "\t\t# happens in SQL. No length limit on the list (dynamic buffers); one group name\n"
         "\t\t# longer than 1023 bytes would fail the hex xlat -> list check below -> reject.\n"
+        "\t\t# Each name once: rlm_ldap caches direct groups twice (memberOf + filter search).\n"
         "\t\tupdate control {\n"
         '\t\t\t&Tmp-String-3 := ""\n'
         "\t\t\t&Tmp-String-9 !* ANY\n"
@@ -943,12 +970,7 @@ def render_policy(custom=""):
         "\t\t\t&Tmp-String-9 += &control:LDAP-Group[*]\n"
         "\t\t}\n"
         "\t\tforeach &control:LDAP-Group {\n"
-        "\t\t\tupdate control {\n"
-        '\t\t\t\t&Tmp-String-3 := "%{control:Tmp-String-3},%{hex:control:Tmp-String-9[0]}"\n'
-        "\t\t\t}\n"
-        "\t\t\tupdate control {\n"
-        "\t\t\t\t&Tmp-String-9[0] !* ANY\n"
-        "\t\t\t}\n"
+        + _append_group_hex(3) +
         "\t\t}\n"
         "\t\tif (&NAS-Port-Type && &NAS-Port-Type == Ethernet) {\n"
         "\t\t\tupdate control {\n"

@@ -483,7 +483,12 @@ clients and custom policy keep the validate → apply → restart flow.
   - `radius_admin_admin_source_ok(src text) -> boolean` (setting admin_subnet)
   - `radius_admin_priv15() -> boolean` (setting admin_priv15)
 - FreeRADIUS: ldap `group { cacheable_name = 'yes' }` so the computer's groups (incl.
-  nested via membership_filter) are in `&control:LDAP-Group[*]`; sql `auto_escape = yes`
+  nested via membership_filter) are in `&control:LDAP-Group[*]`. rlm_ldap adds the names from
+  both lookups (`memberOf` and the membership_filter search) without merging them, so each
+  direct group arrives twice; the policy hex-encodes each name and appends it to the list only
+  if it is not there yet (byte-for-byte), for computers and directory users alike, so the list
+  passed to the matcher and logged in `radpostauth.ad_groups_hex` holds each name once. The
+  authentication detail page also shows each name once for rows logged before this; sql `auto_escape = yes`
   (PQescapeStringConn instead of mime-encoding, so group names with spaces/&/() survive);
   the generated policy calls the functions via `%{sql:SELECT ...}`; empty/NULL → reject
   (fail closed if the DB is down).
@@ -603,7 +608,9 @@ CSV columns (header row required, exact names, any order tolerated by name):
   post-auth insert turns an Accept into a Reject).
 - Monitor service (`snmp_poller.py`, unit `radius-admin-snmp`): heartbeat every 5 s; CoA queue every
   tick (`coa.py`: radclient from the FreeRADIUS build, `-S` secret file, validated attributes, Cisco
-  AV-pairs reauthenticate / bounce-host-port, Disconnect-Request); alerts every 60 s (`alerts.py`:
+  AV-pairs reauthenticate / bounce-host-port, Disconnect-Request; the session is named by
+  Calling-Station-Id + NAS-Port-Id with NAS-IP-Address and Event-Timestamp, Acct-Session-Id only
+  when the record has no MAC, since a Catalyst 1300 then finds no session); alerts every 60 s (`alerts.py`:
   reject spike with hysteresis, switch_down after N failed polls, radius_down after 2 failed helper
   `status` checks — the helper now reports `listening`; portal_down after 2 checks in which the
   helper reports the nginx site enabled but nginx not active or not on TCP 443, switch
@@ -615,7 +622,7 @@ CSV columns (header row required, exact names, any order tolerated by name):
   (`clients._port_rows`), the native VLAN only as a labelled fallback, and "—" without a device.
   Quoted SNMP values spanning lines (-Ox wraps hex at 16 bytes) are joined; hourly housekeeping (mab_pending
   30 d, coa_request 90 d, snmp_test 7 d, resolved alerts 400 d).
-- UI: Sessions (`views/sessions.py`; accounting coverage per switch; CoA queue + result page),
+- UI: Sessions (`views/sessions.py`; accounting coverage per switch; CoA queue + result page; reworked in section 24),
   auth-log detail (`/auth-log/<id>`, `insight.py` reason hints, cert expiry, group decode, NAS→client),
   Alerts (+ settings, admin + step-up; SMTP password AES-256-GCM, AAD `radius-admin/alert_settings/smtp`),
   MAB expiry / vendor (`oui.py`, package `ieee-data`) / unknown-device queue with one-click approve and
@@ -765,8 +772,9 @@ CSV columns (header row required, exact names, any order tolerated by name):
   has an `## Unreleased` section and one `## X.Y.Z — date` section per release. On main the
   release job warns when `vX.Y.Z` already exists (nothing is published) and when
   `CHANGELOG.md` has no `## X.Y.Z` section (the release would have no notes).
-- **Releases** (`.github/workflows/release.yml`, after CI passes on a push to main, testing
-  or dev; job in the `release` environment): builds the FreeRADIUS package and the bundle
+- **Releases** (`.github/workflows/release.yml`, job in the `release` environment): main and
+  testing after CI passes on a push; dev only when started by hand (`workflow_dispatch` on
+  `dev`; the job refuses a commit without a successful CI push run): builds the FreeRADIUS package and the bundle
   (`make-bundle.sh --channel`, which writes `BUILD.json`), then `tools/release/make-release.sh`
   writes `manifest.json` `{format: 1, product, version, channel, commit, created,
   restarts_freeradius, bundle: {name, size, sha384}, notes}` and `manifest.json.sig`
@@ -775,7 +783,7 @@ CSV columns (header row required, exact names, any order tolerated by name):
   assets. The key is the `UPDATE_SIGNING_KEY` secret; the script refuses a key that is not
   P-384 or does not match `deploy/keys/update-signing.pem`, the public key servers pin.
   Without the secret or the pinned key the job warns and publishes nothing. main publishes
-  only when `VERSION` changes; testing and dev keep their newest 10 releases.
+  only when `VERSION` changes; testing and dev keep their newest 3 releases.
   `restarts_freeradius` is true when `freeradius/`, `tools/package/` or
   `tools/lib/fr-release.sh` changed since the previous release on the channel (or there is
   none). Notes: the release's CHANGELOG section; previews get `Unreleased` plus the
@@ -1042,7 +1050,7 @@ meta refresh stays only inside `<noscript>`, so every page still works without J
   | Updates, Check now | `/updates/status?wait=check` (admin; no helper call) | `ui.update_check.checked_at` ≥ `update_check_requested`, or 5 min passed (the page then says the check did not finish; forgotten after 1 h) |
   | Updates, install | `/updates/status?wait=install` (admin) | the helper's state is not queued/installing; a helper that does not answer is "not done" |
   | SNMP test | `/switch-monitoring/test/<id>/status` (signed in) | `ui.snmp_test.done_at` set |
-  | Session action (CoA) | `/sessions/coa/<id>/status` (signed in) | `ui.coa_request.done_at` set |
+  | Session action (CoA), its own page | `/sessions/coa/<id>/status` (signed in) | `ui.coa_request.done_at` set (rows of the sessions page: section 24) |
   | Switch monitoring, Refresh now | `/switch-monitoring/refresh/status` (operator) | every switch has `ui.switch_status.polled_at` ≥ `refresh_requested_at`, or 3 min passed |
   | Alerts, Send test alert | `/alerts/test/status` (admin) | a `test` alert opened at or after `test_requested_at`, or 2 min passed |
 
@@ -1066,3 +1074,85 @@ meta refresh stays only inside `<noscript>`, so every page still works without J
   button (`requestSubmit`), so validation and the busy spinner still apply.
 - Polling counts as activity for the idle session timeout while it runs (bounded by `limit`:
   30 min for an install, at most 5 min elsewhere).
+
+## 24. Change (2026-11-10): session actions in place, several at once; lists keep their filters
+
+- **One POST for one or many.** `POST /sessions/coa` (operator; replaces `/sessions/<id>/coa`)
+  takes `action` (`reauth`/`bounce`/`disconnect`) and `sid` once per session (`radacct.radacctid`,
+  digits only, at most 50 = one page; anything else is 400). Each session that is still open, on
+  an enabled RADIUS client and without a request already waiting gets its own `ui.coa_request`
+  row and its own `coa.request` audit event (detail gains `selected`, the number of sessions
+  named in the POST). The others are skipped with a reason (ended, switch unknown or disabled,
+  request waiting, record gone). Nothing selected is not an error status: the answer says so.
+  - Browser form: redirect to the sessions list as it was last shown, with the summary as a
+    flash message.
+  - `Accept: application/json` (the page script): `{"action", "label", "message", "queued":
+    [{"sid", "id", "url"}], "skipped": [{"sid", "name", "reason"}]}`.
+- **Open sessions in the 30-day view.** Tick boxes and the Actions menu appear for every row
+  with no stop time and a known switch, in both views; ended rows have neither. The server
+  decides again on every request.
+- **State in the row.** `ui.coa_request.radacct_id` (`sql/97-session-actions.sql`: nullable
+  bigint, partial index, additive; no foreign key because accounting rows are owned by
+  FreeRADIUS and pruned separately) names the session. The sessions page joins the latest
+  request per session and shows it in the row while it waits and for 15 minutes after it was
+  requested: spinner and "Sending…", then Done or Failed, always a link to the request's page.
+  `GET /sessions/coa/status?id=1&id=2…` (signed in, at most 200 ids, unknown ids left out) →
+  `{"requests": [{"id", "state": "waiting"|"ok"|"failed", "message"}]}`; `app.js` asks every
+  2 s for all waiting rows of the page at once and stops after 5 minutes ("No answer yet").
+  With JavaScript the POST is sent with `fetch` and nothing reloads; without it the page comes
+  back with the same row states and a `<noscript>` refresh every 5 s while a request waits.
+  The confirmation dialog takes its question from the pressed button when that has
+  `data-confirm` (the bulk buttons: "<Action> N sessions?").
+- **Session actions page.** `GET /sessions/actions` (signed in; menu item under Monitoring):
+  every request, newest first, 50 per page, filters `q` (user, MAC, port, requester),
+  `switch`, `action`, `result` (`ok`/`failed`/`waiting`). Each row links to
+  `/sessions/coa/<id>`, which shows the result, the advice for a failure and the request's
+  details (who, when, switch, port, user, station and vendor, accounting session id and
+  whether that session is still open). The "recent requests" table on the sessions page is gone.
+- **Monitor.** In one pass over the queue (10 requests), after a switch gave no reply the other
+  requests for that switch are answered "Not sent: <switch> did not answer the request before
+  this one" without waiting for each to time out; the next pass tries the switch again.
+- **Lists keep their filters** (`listnav.py`). The sessions list, session actions, the
+  authentication log, RADIUS clients, MAB devices, unknown devices and alerts remember the
+  query arguments they were last shown with (the names in `listnav.LISTS`, values cut to 100
+  characters). `list_url(endpoint)` (Python and templates) builds the list's URL with them; it
+  is used by "Back to …" and Cancel links and by the redirects after editing, deleting or
+  acting on a row. Adding or importing entries still opens the plain list, where the new entry
+  is. Opening a list without arguments (the menu) forgets its filters. The state is a session
+  cookie `__Host-radius_admin_lists` (Secure, HttpOnly, SameSite=Strict; base64 JSON, at most
+  3000 characters, deleted at sign-out), per browser rather than per tab. It is display state
+  and is not trusted: only the listed argument names are read, as text, and only to build the
+  URL of the same list, whose view validates them like any query string.
+
+## 25. Change (2026-11-19): accounting records without an Accounting-Stop are closed
+
+- **Why.** A switch that reboots without Accounting-On, loses a Stop packet, or starts a new
+  accounting session each time it re-authenticates a port (802.1X ↔ MAB) leaves the old
+  `radacct` row open. The sessions page listed every such row as up, each with the port's live
+  state ("Authorized" came from the device's current session), and session actions on them
+  failed with `Session-Context-Not-Found`.
+- **`sql/98-stale-sessions.sql`** (idempotent, additive): partial index
+  `radacct_open_csi_idx (callingstationid, nasipaddress) WHERE acctstoptime IS NULL` and two
+  `SECURITY DEFINER` functions owned by `radius_owner`, `search_path` pinned, executable only by
+  `radius_admin` (the web app's role still has `SELECT` only on `radacct`):
+  - `radius_admin_close_stale_sessions(p_stale_hours integer DEFAULT 24, OUT superseded,
+    OUT stale)`: closes an open record when a later accounting session started for the same
+    Calling-Station-Id on the same NAS address (stop = the later start, cause `Superseded`),
+    then open records that had interim updates and none for `p_stale_hours` (at least 24;
+    stop = last update, session time kept from it, cause `Stale-Session`). Records that never
+    had an interim update are left open. Takes no request data.
+  - `radius_admin_close_after_coa(p_request_id bigint) → boolean`: closes the record named by
+    `ui.coa_request.radacct_id` only when that request is finished, not ok and its message
+    contains `Session-Context-Not-Found`, and only if the record is still open (stop = last
+    update, else now; cause `Session-Not-Found`).
+  A real Accounting-Stop that arrives later still overwrites the row (the stock stop query's
+  last fallback has no `AcctStopTime IS NULL`); an Interim-Update for a closed row is ignored.
+- **Monitor.** `close_stale_sessions()` runs every 5 minutes (`CLOSE_SESSIONS_EVERY`) and
+  writes a syslog line when it closed anything. After a CoA/Disconnect request is refused with
+  `Session-Context-Not-Found` for a request that names a session, `run_coa` calls
+  `radius_admin_close_after_coa` and appends "The switch no longer has this session; its
+  accounting record was marked as ended." to the request's message.
+- **UI.** The 30-day view and the request page show the three causes as "Closed: newer
+  session from this device", "Closed: no accounting update for a day" and "Closed: the switch
+  no longer has it". The request page explains `Session-Context-Not-Found` instead of the
+  dynamic-authorization checklist.

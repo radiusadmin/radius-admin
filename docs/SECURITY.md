@@ -198,6 +198,10 @@ without a FreeRADIUS restart. Security properties:
   `radius_admin_admin_source_ok_hex` and `radius_admin_priv15`, and still has no
   rights on schema `ui`. The web app gets the text-argument matcher for its
   parameterized "Test a match" tool; both use the same core matcher.
+  The monitoring service closes accounting records that never got an Accounting-Stop only
+  through `radius_admin_close_stale_sessions` and `radius_admin_close_after_coa` (SPEC §25);
+  `radius_admin` still has no write access to `radacct`, and neither function takes session
+  data from the caller.
 * **Fail closed.** If PostgreSQL is unavailable, EAP-TLS, EAP-TTLS, switch-admin and MAB requests
   are rejected; service recovers by itself once the database returns (sql pool
   `retry_delay`, 30 s). PostgreSQL is now a hard dependency of every 802.1X login.
@@ -388,7 +392,10 @@ secret exactly "radsec"). Anything else is refused before `radiusd -XC`.
 
 **Other fixes.** Database sessions run in UTC (timestamps labelled UTC were in the host's zone);
 a request no longer holds a lock on its own session row (removed a deadlock between two admins
-changing each other's accounts). The colour-theme cookie is a display hint only.
+changing each other's accounts). The colour-theme cookie is a display hint only. So is the cookie
+that remembers each list's filters (`__Host-radius_admin_lists`, deleted at sign-out): only known
+argument names are read from it, and only to build the URL of that same list, where they are
+validated like any query string.
 
 **802.1X with a username and password (EAP-TTLS/PAP, local users).** Off by default
 (Settings, admin + step-up, audited).

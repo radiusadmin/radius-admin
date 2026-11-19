@@ -86,7 +86,7 @@
   <label class="check"><input type="checkbox" name="enabled" value="1" {{ 'checked' if c.enabled else '' }}> Enabled</label>
   {{ m.field_error(errors, 'enabled') }}
   <div class="actions"><button type="submit" class="btn btn-primary">{{ 'Add client' if is_new else 'Save client' }}</button>
-  <a class="btn btn-quiet" href="{{ url_for('clients.index') }}">Cancel</a></div>
+  <a class="btn btn-quiet" href="{{ list_url('clients.index') }}">Cancel</a></div>
 </form>
 </section>
 {% if not is_new %}

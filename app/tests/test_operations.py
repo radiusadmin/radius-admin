@@ -54,6 +54,9 @@ def test_insight_helpers():
     assert insight.decode_groups(_hexgroups("Wired-Support", "R&D Lab (Bldg-2)", "Guests,Wired-Support")) == [
         "Wired-Support", "R&D Lab (Bldg-2)", "Guests,Wired-Support"]
     assert insight.decode_groups(",zz,") == ["<undecodable: zz…>"]
+    # rows logged before the policy de-duplicated the list: each name once, in first-seen order
+    assert insight.decode_groups(_hexgroups("Wired-Office", "Wireless-Main", "Wireless-Main", "Wired-Office",
+                                            "wired-office")) == ["Wired-Office", "Wireless-Main", "wired-office"]
     exp = insight.cert_expiry("271231235959Z")
     assert exp == datetime.datetime(2027, 12, 31, 23, 59, 59, tzinfo=datetime.timezone.utc)
     assert insight.cert_expiry("20271231235959Z") == exp and insight.cert_expiry("garbage") is None
@@ -312,8 +315,9 @@ def test_coa_request_queue_and_rbac(app, browser, superconn, logged_in):
     sid = _session(superconn)
     ended = _session(superconn, 60, True, "3C-22-FB-00-00-02", "host/pc2")
     logged_in("viewer")
-    r = browser.post("/sessions/%d/coa" % sid, {"action": "reauth"}, csrf_page="/sessions/")
+    r = browser.post("/sessions/coa", {"sid": sid, "action": "reauth"}, csrf_page="/sessions/")
     assert r.status_code == 403
+    assert q(superconn, "SELECT count(*) FROM ui.coa_request")[0][0] == 0
     browser.cookies = {}
 
 
@@ -323,17 +327,21 @@ def test_coa_request_operator(app, browser, superconn, logged_in):
     ended = _session(superconn, 60, True, "3C-22-FB-00-00-02", "host/pc2")
     logged_in("operator")
     assert "Actions" in browser.text(browser.get("/sessions/"))
-    assert browser.post("/sessions/%d/coa" % sid, {"action": "explode"}, csrf_page="/sessions/").status_code == 400
-    r = browser.post("/sessions/%d/coa" % sid, {"action": "bounce"}, csrf_page="/sessions/")
-    assert r.status_code == 302 and "/sessions/coa/" in r.headers["Location"]
+    assert browser.post("/sessions/coa", {"sid": sid, "action": "explode"}, csrf_page="/sessions/").status_code == 400
+    r = browser.post("/sessions/coa", {"sid": sid, "action": "bounce"}, csrf_page="/sessions/")
+    assert r.status_code == 302 and r.headers["Location"].endswith("/sessions/")     # back on the list, no result page
     row = q(superconn, "SELECT action, acct_session_id, calling_station_id, host(nas_ip), nas_port_id, requested_by,"
-                       " done_at FROM ui.coa_request")[0]
-    assert row == ("bounce", "0000002A", "3C-22-FB-00-00-01", "192.0.2.10", "gi1/0/4", "operator1", None)
-    t = browser.text(browser.get(r.headers["Location"]))
+                       " done_at, radacct_id FROM ui.coa_request")[0]
+    assert row == ("bounce", "0000002A", "3C-22-FB-00-00-01", "192.0.2.10", "gi1/0/4", "operator1", None, sid)
+    t = browser.text(browser.get("/sessions/"))
+    assert "Bounce port requested for host/pc1.example.net on sw1 gi1/0/4." in t
+    assert 'data-coa-waiting="1"' in t and "/sessions/coa/1" in t and "Sending" in t
+    t = browser.text(browser.get("/sessions/coa/1"))
     assert "Bounce port" in t and "Sending" in t
     assert q(superconn, "SELECT detail->>'action' FROM ui.audit_log WHERE action='coa.request'")[0][0] == "bounce"
-    r = browser.post("/sessions/%d/coa" % ended, {"action": "disconnect"}, csrf_page="/sessions/")
+    r = browser.post("/sessions/coa", {"sid": ended, "action": "disconnect"}, csrf_page="/sessions/")
     assert r.status_code == 302 and q(superconn, "SELECT count(*) FROM ui.coa_request")[0][0] == 1
+    assert "the session has already ended" in browser.text(browser.get("/sessions/"))
 
 
 def _radclient():
@@ -378,8 +386,58 @@ def test_monitor_sends_coa_with_radclient(app, superconn):
         assert [g["code"] for g in got] == ["CoA-Request", "Disconnect-Request"]
         assert all(g["auth_ok"] and g["msg_auth_ok"] for g in got)
         assert got[0]["cisco"] == ["subscriber:command=reauthenticate"] and got[1]["cisco"] == []
-        assert got[0]["attrs"]["Acct-Session-Id"] == "0000002A" and got[0]["attrs"]["NAS-IP-Address"] == "127.0.0.1"
+        assert got[0]["attrs"]["Calling-Station-Id"] == "AA-BB-CC-00-00-01" and got[0]["attrs"]["NAS-IP-Address"] == "127.0.0.1"
+        assert got[0]["attrs"]["NAS-Port-Id"] == "gi1/0/4" and "Acct-Session-Id" not in got[0]["attrs"]
         assert q(superconn, "SELECT count(*) FROM ui.audit_log WHERE action='coa.result' AND success")[0][0] == 2
+    finally:
+        sw.close()
+
+
+def test_coa_request_identifies_the_session_by_mac_and_port():
+    """Switches match the session by station MAC and port; the Catalyst 1300 finds none when
+    the request also names an Acct-Session-Id. The session id is used only without a MAC."""
+    from radius_admin import coa
+    for action in ("reauth", "bounce", "disconnect"):
+        req = coa.build_request(action, "192.0.2.10", "0000002A", "AA-BB-CC-00-00-01", "gi1/0/4")
+        names = [ln.split(" = ")[0] for ln in req.splitlines()]
+        assert names[:4] == ["Calling-Station-Id", "NAS-Port-Id", "NAS-IP-Address", "Event-Timestamp"], action
+        assert "Acct-Session-Id" not in names and names[-1] == "Message-Authenticator"
+        assert 'NAS-IP-Address = 192.0.2.10' in req
+    req = coa.build_request("bounce", "192.0.2.10", "0000002A", "", "gi1/0/4")      # no MAC: session id
+    assert 'Acct-Session-Id = "0000002A"' in req and "Calling-Station-Id" not in req
+    req = coa.build_request("reauth", "192.0.2.10", 'bad"id', "AA-BB-CC-00-00-01")    # unused: not checked
+    assert "Acct-Session-Id" not in req
+    with pytest.raises(coa.CoaError):
+        coa.build_request("reauth", "192.0.2.10", 'bad"id', "")
+    with pytest.raises(coa.CoaError):
+        coa.build_request("reauth", "192.0.2.10", "", "")
+
+
+def test_monitor_coa_reaches_a_switch_that_matches_by_mac(app, superconn):
+    """All three actions against a switch that answers like the Catalyst 1300 seen in the field."""
+    from fake_coa import FakeSwitch
+    from radius_admin import db, snmp_poller
+    rc, dd = _radclient()
+    if not rc:
+        pytest.skip("radclient not available (set RADIUS_ADMIN_TEST_FR_PREFIX to a FreeRADIUS install prefix)")
+    sw = FakeSwitch("Plaintext-Key-0001-abcdef", match_by_mac=True)
+    try:
+        cid = _client(superconn, ip="127.0.0.1")
+        q(superconn, "UPDATE ui.snmp_profile SET coa_port = %s", (sw.port,))
+        for action in ("reauth", "bounce", "disconnect"):
+            q(superconn, "INSERT INTO ui.coa_request (client_id, action, acct_session_id, calling_station_id, nas_ip,"
+                         " nas_port_id, username, requested_by) VALUES (%s, %s, '0000002B', 'AA-BB-CC-00-00-02',"
+                         " '127.0.0.1', 'gi1/0/4', '', 'op')", (cid, action))
+        conn = db.connect(APP_DSN)
+        try:
+            snmp_poller.run_coa(conn, {"radclient": rc, "radius_dict_dir": dd}, snmp_poller.load_profile(conn))
+            conn.commit()
+        finally:
+            conn.close()
+        res = q(superconn, "SELECT action, ok, message FROM ui.coa_request ORDER BY id")
+        assert [r[:2] for r in res] == [("reauth", True), ("bounce", True), ("disconnect", True)], res
+        assert [g["error_cause"] for g in sw.requests] == [None, None, None]
+        assert sw.requests[1]["cisco"] == ["subscriber:command=bounce-host-port"]
     finally:
         sw.close()
 

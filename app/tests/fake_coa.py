@@ -3,6 +3,10 @@
 Verifies the Request Authenticator and Message-Authenticator with the shared secret,
 records the decoded attributes, and answers ACK (or NAK when told to). MD5 here is the
 RADIUS protocol's own packet integrity check; the test sandbox is not in FIPS mode.
+
+match_by_mac=True answers like the Catalyst 1300 seen in the field: it needs
+Calling-Station-Id and NAS-IP-Address (else NAK Missing-Attribute) and finds no session
+when the request also names an Acct-Session-Id (NAK Session-Context-Not-Found).
 """
 import hashlib
 import hmac
@@ -29,9 +33,10 @@ def _attrs(data):
 
 
 class FakeSwitch:
-    def __init__(self, secret, host="127.0.0.1", nak=False):
+    def __init__(self, secret, host="127.0.0.1", nak=False, match_by_mac=False):
         self.secret = secret.encode()
         self.nak = nak
+        self.match_by_mac = match_by_mac
         self.requests = []
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.bind((host, 0))
@@ -81,10 +86,18 @@ class FakeSwitch:
         self.requests.append(rec)
         if not rec["auth_ok"]:
             return      # a real switch silently drops packets with a bad authenticator
-        rcode = (NAK if self.nak else ACK)[code]
+        cause = 503 if self.nak else None                    # Session-Context-Not-Found
+        if self.match_by_mac:
+            a = rec["attrs"]
+            if "Calling-Station-Id" not in a or "NAS-IP-Address" not in a:
+                cause = 402                                  # Missing-Attribute
+            elif "Acct-Session-Id" in a:
+                cause = 503
+        rec["error_cause"] = cause
+        rcode = (NAK if cause else ACK)[code]
         rattrs = b""
-        if self.nak:
-            rattrs += struct.pack("!BBI", 101, 6, 503)      # Error-Cause = Session-Context-Not-Found
+        if cause:
+            rattrs += struct.pack("!BBI", 101, 6, cause)
         rlen = 20 + len(rattrs)
         hdr = struct.pack("!BBH", rcode, ident, rlen)
         resp_auth = hashlib.md5(hdr + req_auth + rattrs + self.secret).digest()

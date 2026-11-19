@@ -51,7 +51,7 @@
   <label for="mail_to">To (comma separated)</label><input id="mail_to" name="mail_to" value="{{ s.mail_to }}" placeholder="netops@example.net"{{ m.described(errors, 'mail_to') }}>{{ m.field_error(errors, 'mail_to') }}
   <p class="small muted">The monitoring service may only reach the management subnet. A relay outside it needs one firewall exception on the server (RUNBOOK §6.5).</p>
   <div class="actions"><button type="submit" class="btn btn-primary">Save alert settings</button>
-  <a class="btn btn-quiet" href="{{ url_for('alerts.index') }}">Cancel</a></div>
+  <a class="btn btn-quiet" href="{{ list_url('alerts.index') }}">Cancel</a></div>
 </section>
 </form>
 {% endblock %}
