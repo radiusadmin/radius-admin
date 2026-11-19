@@ -21,7 +21,7 @@
   {{ m.field_error(errors, 'expires') }}
   <label class="check"><input type="checkbox" name="enabled" value="1" {{ 'checked' if d.enabled else '' }}> Enabled</label>
   <div class="actions"><button type="submit" class="btn btn-primary">{{ 'Add device' if is_new else 'Save device' }}</button>
-  <a class="btn btn-quiet" href="{{ url_for('mab.index') }}">Cancel</a></div>
+  <a class="btn btn-quiet" href="{{ list_url('mab.index') }}">Cancel</a></div>
 </form>
 </section>
 {% endblock %}

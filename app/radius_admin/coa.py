@@ -10,6 +10,11 @@ Actions (Catalyst 1300 firmware 4.1.3.36+, Cisco AV-pair commands):
   reauth      CoA-Request   Cisco-AVPair = "subscriber:command=reauthenticate"
   bounce      CoA-Request   Cisco-AVPair = "subscriber:command=bounce-host-port"
   disconnect  Disconnect-Request
+
+The session is named by Calling-Station-Id (the device's MAC) and NAS-Port-Id, with the
+switch's NAS-IP-Address and an Event-Timestamp. Acct-Session-Id is sent only when the
+accounting record has no MAC: a Catalyst 1300 finds no session when the request names one
+(CoA-NAK Session-Context-Not-Found) and needs NAS-IP-Address (else Missing-Attribute).
 """
 import ipaddress
 import os
@@ -36,6 +41,9 @@ ACTIONS = {
     "bounce": ("coa", 'Cisco-AVPair = "subscriber:command=bounce-host-port"'),
     "disconnect": ("disconnect", None),
 }
+
+
+NO_REPLY = "No reply from the switch"       # start of the message when every try timed out
 
 
 class CoaError(Exception):
@@ -77,20 +85,20 @@ def build_request(action, nas_ip, acct_session_id="", calling_station_id="", nas
     except ValueError:
         raise CoaError("bad NAS address") from None
     lines = []
-    if acct_session_id:
-        if not _SESSION_RE.match(acct_session_id):
-            raise CoaError("accounting session id has unexpected characters")
-        lines.append('Acct-Session-Id = "%s"' % acct_session_id)
     if calling_station_id:
         if not _STATION_RE.match(calling_station_id):
             raise CoaError("station id is not a MAC address")
         lines.append('Calling-Station-Id = "%s"' % calling_station_id)
+    elif acct_session_id:       # no MAC in the accounting record: the session id is all there is
+        if not _SESSION_RE.match(acct_session_id):
+            raise CoaError("accounting session id has unexpected characters")
+        lines.append('Acct-Session-Id = "%s"' % acct_session_id)
+    else:
+        raise CoaError("the session has neither an accounting session id nor a station MAC")
     if nas_port_id:
         if not _PORT_RE.match(nas_port_id):
             raise CoaError("port id has unexpected characters")
         lines.append('NAS-Port-Id = "%s"' % nas_port_id)
-    if not (acct_session_id or calling_station_id):
-        raise CoaError("the session has neither an accounting session id nor a station MAC")
     lines.append(("NAS-IPv6-Address = %s" if ip.version == 6 else "NAS-IP-Address = %s") % ip)
     lines.append("Event-Timestamp = %d" % int(time.time()))
     extra = ACTIONS[action][1]
@@ -107,7 +115,7 @@ def parse_reply(out, host=""):
         if "sendto failed: Operation not permitted" in out:
             return False, blocked_message(host)
         if "No reply from server" in out or "no response" in out.lower():
-            return False, "No reply from the switch (dynamic authorization not configured, wrong key, or UDP blocked)."
+            return False, NO_REPLY + " (dynamic authorization not configured, wrong key, or UDP blocked)."
         last = [ln for ln in out.strip().splitlines() if ln.strip()]
         return False, ("radclient: " + last[-1].strip())[:300] if last else "No reply from the switch."
     kind = m.group(1)

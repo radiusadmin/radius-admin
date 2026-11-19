@@ -65,6 +65,8 @@ def create_app(config_path=None, overrides=None):
 
     from .flashing import install_flash
     install_flash(app)
+    from .listnav import install_listnav
+    install_listnav(app)
 
     from .views import (account, admins, alerts as alerts_v, apply as apply_v, auth, clients, dashboard, dot1x_users, logs,
                         mab, reports, rules, sessions, settings as settings_v, setup, snmp as snmp_v,

@@ -5,7 +5,7 @@
 {% block content %}
 <header class="page-head"><div><h1>SNMP test · <span class="mono">{{ t.name }}</span></h1>
 <p class="lede mono">{{ t.ipaddr }}</p></div>
-<a class="btn btn-quiet" href="{{ url_for('clients.index') }}">Back to clients</a></header>
+<a class="btn btn-quiet" href="{{ list_url('clients.index') }}">Back to clients</a></header>
 <section class="panel narrow">
 {% if not t.done_at %}
   {% if not p.enabled %}<p class="flash flash-info" role="status">Switch monitoring is disabled, but the test still runs if credentials are set.</p>{% endif %}

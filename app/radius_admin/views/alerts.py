@@ -8,6 +8,7 @@ from flask import Blueprint, current_app, g, jsonify, redirect, render_template,
 from .. import db
 from ..alerts import LABELS
 from ..flashing import flash
+from ..listnav import list_url
 from ..security import login_required, role_required, stepup_required
 from . import ev, form_bool, form_str
 
@@ -116,7 +117,7 @@ def settings():
             ev("alert.settings", object_type="alert_settings", object_id=1,
                detail={"changed": changed, "smtp_login_key_updated": bool(password), "smtp_login_key_removed": clear_pass})
             flash("Alert settings saved.", "success")
-            return redirect(url_for("alerts.index"))
+            return redirect(list_url("alerts.index"))
     return render_template("alerts/settings.html", s=form, errors=errors), (400 if errors else 200)
 
 
