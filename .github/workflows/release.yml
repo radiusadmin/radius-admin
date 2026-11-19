@@ -1,21 +1,23 @@
 name: Release
 
-# A signed build for the update channel of each branch (SPEC section 16): after CI passes on a
-# push to main, testing or dev, build the bundle (portal + FreeRADIUS package), sign its
-# manifest with the ECDSA P-384 key in the UPDATE_SIGNING_KEY secret and publish it as a
-# GitHub release. main publishes only when VERSION changes; testing and dev publish every
-# push and keep their newest 10 builds.
+# A signed build for the update channel of each branch (SPEC section 16): build the bundle
+# (portal + FreeRADIUS package), sign its manifest with the ECDSA P-384 key in the
+# UPDATE_SIGNING_KEY secret and publish it as a GitHub release. main and testing publish after
+# CI passes on a push (main only when VERSION changes); dev publishes only when started by
+# hand (Actions -> Release -> Run workflow on dev), for a commit whose CI passed. testing and
+# dev keep their newest 3 builds.
 on:
   workflow_run:
     workflows: [CI]
     types: [completed]
-    branches: [main, testing, dev]
+    branches: [main, testing]
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: release-${{ github.event.workflow_run.head_branch }}
+  group: release-${{ github.event.workflow_run.head_branch || github.ref_name }}
   cancel-in-progress: false
 
 defaults:
@@ -25,21 +27,34 @@ defaults:
 jobs:
   release:
     name: Signed build
-    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'
+    if: >-
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success'
+       && github.event.workflow_run.event == 'push')
+      || (github.event_name == 'workflow_dispatch' && github.ref_name == 'dev')
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     environment: release
     permissions:
       contents: write
+      actions: read
     env:
-      CHANNEL: ${{ github.event.workflow_run.head_branch }}
-      SHA: ${{ github.event.workflow_run.head_sha }}
+      CHANNEL: ${{ github.event.workflow_run.head_branch || github.ref_name }}
+      SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ github.event.workflow_run.head_sha }}
+          ref: ${{ env.SHA }}
           fetch-depth: 0
+      - name: CI passed for this commit
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          n=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$SHA&event=push&status=success" \
+              --jq .total_count)
+          if [ "${n:-0}" -lt 1 ]; then
+            echo "::error title=No build published::CI has not passed for $SHA on a push to $CHANNEL; wait for it or fix it, then run this again."
+            exit 1
+          fi
       - name: Version
         id: v
         run: |
@@ -101,10 +116,10 @@ jobs:
           gh release create "v$v" --repo "$GITHUB_REPOSITORY" --target "$SHA" \
               --title "radius-admin $v" --notes-file "$OUT/notes.md" "${flags[@]}" \
               "$OUT/radius-admin-$v.tar.gz" "$OUT/manifest.json" "$OUT/manifest.json.sig"
-      - name: Keep the newest 10 builds of this channel
+      - name: Keep the newest 3 builds of this channel
         if: steps.key.outputs.ok == 'true' && env.CHANNEL != 'main'
         run: |
           suffix=$([ "$CHANNEL" = testing ] && echo rc || echo dev)
           gh release list --repo "$GITHUB_REPOSITORY" --limit 200 --json tagName --jq '.[].tagName' \
-            | grep -- "-$suffix\." | sort -V -r | tail -n +11 \
+            | grep -- "-$suffix\." | sort -V -r | tail -n +4 \
             | while read -r t; do gh release delete "$t" --repo "$GITHUB_REPOSITORY" --cleanup-tag -y; done
