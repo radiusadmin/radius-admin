@@ -14,6 +14,8 @@ release, so previews sort after it.
   and a page per request with the switch's answer and the request's details.
 
 ### Changed
+- dev builds are no longer published on every push: start one from Actions → Release → Run
+  workflow on `dev`. testing and dev keep their newest 3 builds instead of 10.
 - A session action no longer opens a page of its own. The session's row shows "Sending…" and
   then Done or Failed, linked to the details.
 - "Last 30 days, including ended" offers the actions for sessions that are still up.

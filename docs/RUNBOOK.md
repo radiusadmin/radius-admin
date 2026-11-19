@@ -1008,8 +1008,9 @@ FIPS indicator.
 
 ### 9.3 Updates from the portal (signed builds)
 
-Every push to `main`, `testing` or `dev` that passes CI becomes a signed build on GitHub
-(a release `v<version>`). A server follows one of those branches, its **channel**, and
+Every push to `main` or `testing` that passes CI becomes a signed build on GitHub (a release
+`v<version>`); `dev` builds are published only on request (below), so the release list stays
+short. A server follows one of those branches, its **channel**, and
 installs only builds whose signature verifies with the public key it was installed with.
 
 **One-time setup for the repository (maintainer).** On a trusted machine, not a server:
@@ -1029,7 +1030,10 @@ person approves every published build.
 **Releasing.** Bump `VERSION` on `dev` right after a release (for example `0.2.0`), describe
 changes under `## Unreleased` in `CHANGELOG.md`, and when releasing rename that section to
 `## 0.2.0 — <date>`. `dev` builds are `0.2.0-dev.N`, `testing` builds `0.2.0-rc.N`, and the
-merge to `main` publishes `0.2.0`. A push to `main` without a `VERSION` change publishes
+merge to `main` publishes `0.2.0`. To publish a `dev` build (for a test server on the dev
+channel), open Actions → **Release** → **Run workflow**, choose the branch `dev` and run it; it
+builds the newest commit on `dev` once CI has passed for it. testing and dev keep their
+newest 3 builds. A push to `main` without a `VERSION` change publishes
 nothing; the Release run then shows the warning "No release published". Rename
 `## Unreleased` before the merge to `main`, or the run warns "Empty release notes" and the
 release is published without notes.
