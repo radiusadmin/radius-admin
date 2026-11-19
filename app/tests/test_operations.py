@@ -54,6 +54,9 @@ def test_insight_helpers():
     assert insight.decode_groups(_hexgroups("Wired-Support", "R&D Lab (Bldg-2)", "Guests,Wired-Support")) == [
         "Wired-Support", "R&D Lab (Bldg-2)", "Guests,Wired-Support"]
     assert insight.decode_groups(",zz,") == ["<undecodable: zz…>"]
+    # rows logged before the policy de-duplicated the list: each name once, in first-seen order
+    assert insight.decode_groups(_hexgroups("Wired-Office", "Wireless-Main", "Wireless-Main", "Wired-Office",
+                                            "wired-office")) == ["Wired-Office", "Wireless-Main", "wired-office"]
     exp = insight.cert_expiry("271231235959Z")
     assert exp == datetime.datetime(2027, 12, 31, 23, 59, 59, tzinfo=datetime.timezone.utc)
     assert insight.cert_expiry("20271231235959Z") == exp and insight.cert_expiry("garbage") is None
