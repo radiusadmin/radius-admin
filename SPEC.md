@@ -483,7 +483,12 @@ clients and custom policy keep the validate → apply → restart flow.
   - `radius_admin_admin_source_ok(src text) -> boolean` (setting admin_subnet)
   - `radius_admin_priv15() -> boolean` (setting admin_priv15)
 - FreeRADIUS: ldap `group { cacheable_name = 'yes' }` so the computer's groups (incl.
-  nested via membership_filter) are in `&control:LDAP-Group[*]`; sql `auto_escape = yes`
+  nested via membership_filter) are in `&control:LDAP-Group[*]`. rlm_ldap adds the names from
+  both lookups (`memberOf` and the membership_filter search) without merging them, so each
+  direct group arrives twice; the policy hex-encodes each name and appends it to the list only
+  if it is not there yet (byte-for-byte), for computers and directory users alike, so the list
+  passed to the matcher and logged in `radpostauth.ad_groups_hex` holds each name once. The
+  authentication detail page also shows each name once for rows logged before this; sql `auto_escape = yes`
   (PQescapeStringConn instead of mime-encoding, so group names with spaces/&/() survive);
   the generated policy calls the functions via `%{sql:SELECT ...}`; empty/NULL → reject
   (fail closed if the DB is down).

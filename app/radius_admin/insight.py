@@ -106,13 +106,18 @@ def clean_reason(reason):
 
 
 def decode_groups(hexlist):
-    """',<hex>,<hex>' -> ['Group A', 'Group B'] (undecodable items are shown as such)."""
+    """',<hex>,<hex>' -> ['Group A', 'Group B'] (undecodable items are shown as such).
+
+    Each name once, first occurrence kept: rows logged before the policy listed each
+    group once hold every direct group twice (memberOf + membership_filter)."""
     out = []
     if not hexlist:
         return out
+    seen = set()
     for item in hexlist.split(","):
-        if not item:
+        if not item or item in seen:
             continue
+        seen.add(item)
         try:
             out.append(bytes.fromhex(item).decode("utf-8"))
         except (ValueError, UnicodeDecodeError):

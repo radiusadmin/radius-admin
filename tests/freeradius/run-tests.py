@@ -524,6 +524,8 @@ def peap_cases(eapol_test, bench, prefix):
     groups = [bytes.fromhex(h).decode() for h in row[3].split(",")[1:]] if len(row) == 4 else []
     record("radpostauth: directory PEAP Accept logs the inner user, peap-ldap, VLAN and the directory groups",
            row[:3] == ["jroe", "peap-ldap", "500"] and "Wired-Office" in groups, str(row[:3] + groups))
+    record("radpostauth: directory PEAP Accept logs each directory group once",
+           bool(groups) and len(groups) == len(set(groups)), str(groups))
     record("radpostauth: directory PEAP wrong password logs the inner user and peap-ldap",
            psql("SELECT username||'|'||authmethod FROM radpostauth WHERE reply='Access-Reject'"
                 " AND reason LIKE '%%directory refused%%' AND authmethod='peap-ldap' ORDER BY id LIMIT 1")
@@ -635,6 +637,8 @@ def ttls_cases(eapol_test, bench, prefix, logname):
     groups = [bytes.fromhex(h).decode() for h in row[3].split(",")[1:]] if len(row) == 4 else []
     record("radpostauth: directory EAP-TTLS Accept logs the inner user, ttls-ldap, VLAN and the directory groups",
            row[:3] == ["jroe", "ttls-ldap", "500"] and "Wired-Office" in groups, str(row[:3] + groups))
+    record("radpostauth: directory EAP-TTLS Accept logs each directory group once",
+           bool(groups) and len(groups) == len(set(groups)), str(groups))
     row = psql("SELECT username||'|'||authmethod FROM radpostauth WHERE reply='Access-Reject'"
                " AND reason LIKE '%%directory refused%%' ORDER BY id LIMIT 1")
     record("radpostauth: directory wrong password logs the inner user and ttls-ldap", row == "jroe|ttls-ldap", row)
@@ -1018,6 +1022,8 @@ def postauth_checks():
             groups = ["<bad hex>"]
     record("radpostauth detail: AD groups recorded (hex list decodes to group names)",
            any(g.lower() == "wired-office" or g.lower().startswith("wired") for g in groups), str(groups[:5]))
+    record("radpostauth detail: each AD group recorded once (memberOf + membership_filter)",
+           bool(groups) and len(groups) == len(set(groups)), str(groups))
 
     def reason(user, reply="Access-Reject"):
         return psql("SELECT coalesce(reason,'') FROM radpostauth WHERE username=%s AND reply=%s ORDER BY id DESC"
