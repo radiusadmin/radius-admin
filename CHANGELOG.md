@@ -5,6 +5,17 @@ Each release has a section here. `main` builds are the stable releases (`0.2.0`)
 show the "Unreleased" section plus their commits. Bump `VERSION` on `dev` right after a
 release, so previews sort after it.
 
+## Unreleased
+
+### Changed
+- **Licence: from the GNU AGPL to the Business Source License 1.1 (source available).**
+  Free for personal use, for organizations with fewer than 50 people and for a 60-day trial;
+  organizations with 50 or more people need a commercial licence for production use. Every
+  feature stays in the same public code. Each version becomes GNU AGPL (version 3 or later)
+  four years after it is published; 0.2.5 and earlier stay under the GNU AGPL. See
+  `LICENSING.md`, which also lists the commercial licence prices. Contributor License
+  Agreement version 1.1 (section 4).
+
 ## 0.2.5 - 2026-11-20
 
 ### Added

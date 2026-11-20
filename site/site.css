@@ -400,6 +400,11 @@ pre.diff span { display: block; padding: 0 1rem; white-space: pre; min-width: ma
 .wrap.split h2 { margin-bottom: 1rem; font-size: 1.6rem; }
 .wrap.split p { max-width: 34rem; }
 @media (max-width: 720px) { .split { grid-template-columns: minmax(0, 1fr); } }
+.prices { width: 100%; max-width: 34rem; border-collapse: collapse; margin: 0 0 .75rem; font-size: .95rem; }
+.prices caption { text-align: left; font-weight: 600; padding-bottom: .5rem; }
+.prices th, .prices td { text-align: left; padding: .45rem .75rem .45rem 0; border-bottom: 1px solid var(--line); }
+.prices thead th { color: var(--ink-soft); font-size: .85rem; border-bottom-color: var(--line-strong); }
+.prices th:last-child, .prices td:last-child { text-align: right; padding-right: 0; font-variant-numeric: tabular-nums; }
 .note { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-m); padding: 1.25rem 1.4rem; }
 .note h3 { margin-bottom: .6rem; }
 .note p, .note li { color: var(--ink-soft); font-size: 1rem; }

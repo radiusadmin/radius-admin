@@ -9,7 +9,7 @@
 ![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-4169E1?logo=postgresql&logoColor=white)
 ![FIPS mode](https://img.shields.io/badge/FIPS%20mode-optional-informational)
-[![licence](https://img.shields.io/badge/licence-AGPL--3.0--or--later-blue)](LICENSE)
+[![licence](https://img.shields.io/badge/licence-BSL%201.1%20(source%20available)-blue)](LICENSING.md)
 ![made with love](https://img.shields.io/badge/made%20with-%E2%9D%A4%EF%B8%8F-red)
 
 **A secure web console for FreeRADIUS: 802.1X, MAB, RadSec and switch logins, managed in one place.**
@@ -202,13 +202,24 @@ Being a young project, some parts are still to come:
 
 Copyright © 2026 Collin Linde.
 
-radius-admin is free software: you can redistribute it and/or modify it under the terms of the
-[GNU Affero General Public License](LICENSE) as published by the Free Software Foundation,
-either version 3 of the License, or (at your option) any later version. It is free to use, at
-home and in organizations. If you run a modified version for others over a network, the AGPL
-asks you to offer them its source code (section 13). radius-admin is distributed in the hope
-that it will be useful, but WITHOUT ANY WARRANTY; see the licence for details. Other licensing
-terms may be available from the copyright holder.
+radius-admin is **source available** under the [Business Source License 1.1](LICENSE). Every
+feature is in the same public code, with nothing locked behind a licence key.
+
+- **Free** for personal use (home networks and labs), for organizations with **fewer than 50**
+  people (employees and contractors, affiliates included), and for any organization during its
+  first 60 days of production use. Testing, development and evaluation are always free.
+- **Organizations with 50 or more people need a commercial licence** for production use after
+  the 60-day trial. So does running radius-admin for a customer that has 50 or more people.
+- Each version becomes available under the GNU Affero General Public License, version 3 or
+  later, four years after it is published. Versions up to and including 0.2.5 are under the
+  GNU AGPL already.
+
+Commercial licences are annual, per organization, by headcount: USD 1,000 (50–249 people),
+USD 4,000 (250–999), USD 10,000 (1,000–4,999), on request from 5,000. Every tier includes every
+feature and unlimited servers. These are list prices; deployments with special requirements are
+quoted individually. [LICENSING.md](LICENSING.md) explains how to count the
+headcount, the rules for service providers and how to get a licence.
+radius-admin is provided WITHOUT ANY WARRANTY; see the licence for details.
 
 The release bundle also contains the `radius-admin-freeradius` package: FreeRADIUS, a separate
 program under its own licence (GNU GPL version 2 or later; parts under the LGPL). Its upstream

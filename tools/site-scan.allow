@@ -14,7 +14,10 @@ mods-available/ldap:[0-9]+:\s*(identity|password) = \$\{modules\.ldap\.(identity
 # the copyright holder named in the licence notices and the CLA (maintainer, 2026-11-03)
 CLA\.md:[0-9]+:.*Collin Linde(,| transfers)
 README\.md:[0-9]+:Copyright © 2026 Collin Linde\.$
+# the licensor in the Business Source License parameters
+LICENSE:[0-9]+:Licensor: +Collin Linde$
+LICENSE:[0-9]+: +The Licensed Work is \(c\) 2026 Collin Linde\.$
 CONTRIBUTING\.md:[0-9]+:.*Copyright is held by Collin Linde\.$
 CHANGELOG\.md:[0-9]+:- Licence: GNU AGPL version 3 or later \(copyright Collin Linde\)
 # the same copyright notice on the project site (licence section and footer)
-site/index\.html:[0-9]+:.*Copyright © 2026 Collin Linde( ·|\. radius-admin is free software)
+site/index\.html:[0-9]+:.*Copyright © 2026 Collin Linde( ·|\. radius-admin is source available)
