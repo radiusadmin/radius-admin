@@ -33,7 +33,7 @@ jobs:
           sudo apt-get install -y -q shellcheck >/dev/null
           shellcheck -S warning deploy/*.sh tests/freeradius/*.sh tests/migration/*.sh \
               tests/installer/*.sh tests/package/*.sh tests/release/*.sh tools/*.sh tools/ci/*.sh \
-              tools/lib/*.sh tools/package/*.sh tools/release/*.sh
+              tools/lib/*.sh tools/package/*.sh tools/release/*.sh integrations/*/*.sh
       - name: Site-data scan
         env:
           SITE_TERMS_CONTENT: ${{ secrets.SITE_TERMS }}
@@ -84,6 +84,8 @@ jobs:
         run: cd "$REPO" && sudo bash tests/installer/test_update_install.sh | tee "$LOGS/update-install.log"
       - name: Integration install checks
         run: cd "$REPO" && sudo bash tests/installer/test_integration_install.sh | tee "$LOGS/integration-install.log"
+      - name: Duo install checks
+        run: cd "$REPO" && sudo bash tests/installer/test_duo_install.sh | tee "$LOGS/duo-install.log"
       - name: nginx.service drop-in
         run: cd "$REPO" && bash tests/installer/test_nginx_dropin.sh | tee "$LOGS/nginx-dropin.log"
       - name: nginx security floor
@@ -95,7 +97,7 @@ jobs:
         if: always()
         run: |
           tools/ci/test-counts.py "$LOGS/helper.log" "$LOGS/installer.log" "$LOGS/live-settings.log" "$LOGS/ad-join.log" \
-              "$LOGS/ldap-carry-over.log" "$LOGS/eap-carry-over.log" "$LOGS/update-install.log" "$LOGS/integration-install.log" "$LOGS/nginx-dropin.log" "$LOGS/nginx-update.log" "$LOGS/release.log" | tee -a "$GITHUB_OUTPUT"
+              "$LOGS/ldap-carry-over.log" "$LOGS/eap-carry-over.log" "$LOGS/update-install.log" "$LOGS/integration-install.log" "$LOGS/duo-install.log" "$LOGS/nginx-dropin.log" "$LOGS/nginx-update.log" "$LOGS/release.log" | tee -a "$GITHUB_OUTPUT"
 
   package:
     name: FreeRADIUS package

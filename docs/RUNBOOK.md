@@ -857,6 +857,18 @@ as `radius-admin-integration-install@<provider>` with the log in
 `/var/log/radius-admin/integration-<provider>-<time>.log`. A checkout (not a release bundle) has no
 signed catalog: builds then need the SHA-256 entered, and nothing installs in FIPS mode.
 
+**Duo on this server** (SPEC section 29.2). The install builds Duo's source as the unprivileged
+user `radius-admin-build` (about two minutes; build packages are added when missing), runs Duo's
+installer into `/opt/duoauthproxy` (service user `duo_authproxy_svc`, unit `duoauthproxy.service`,
+hardened by a radius-admin drop-in) and leaves the proxy stopped until its configuration is
+applied. Applying changes writes `/opt/duoauthproxy/conf/authproxy.cfg` (never edit it by hand: the
+next apply replaces it) and restarts the proxy before FreeRADIUS; if the proxy does not come up its
+previous configuration returns and FreeRADIUS is not touched. Duo's own log is
+`/opt/duoauthproxy/log/authproxy.log`. Removing Duo is refused while FreeRADIUS still sends logins
+to it: turn the Duo provider off and apply first; the removal keeps a copy of the configuration in
+`/var/backups/radius-admin/`. Outbound HTTPS from the proxy to `api-*.duosecurity.com:443` must be
+allowed.
+
 Maintainers add a build with `tools/integrations/catalog.py add duo X.Y.Z <downloaded file>
 --vendor-sha256 <value from the vendor's checksum page>` (refused unless both agree), mark it
 FIPS-capable only after the FIPS VM check (`catalog.py fips duo X.Y.Z <platform>`), and withdraw a

@@ -11,6 +11,9 @@
   record-update --version V --result R [--from F] [--message M] [--actor A]
                                                             audit the outcome of an update install
                                                             (run by radius-admin-update-install)
+  record-integration --id ID --action install|remove --result R [--version V] [--message M] [--actor A]
+                                                            audit the outcome of a provider install or
+                                                            removal (run by radius-admin-integration-install)
 """
 import argparse
 import os
@@ -169,6 +172,19 @@ def cmd_record_update(cfg, args):
     return 0
 
 
+def cmd_record_integration(cfg, args):
+    conn = _conn(cfg)
+    try:
+        audit.write("integration.%s" % args.action, success=args.result in ("done", "removed"),
+                    actor=args.actor or "radius-admin-integration-install", object_type="integration",
+                    object_id=args.id, detail={"version": args.version[:40], "result": args.result,
+                                               "message": args.message[:500]}, conn=conn)
+        conn.commit()
+    finally:
+        conn.close()
+    return 0
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="python3 -m radius_admin.cli", description="radius-admin tools")
     p.add_argument("--config", help="config file (default: $RADIUS_ADMIN_CONFIG or /etc/radius-admin/radius-admin.conf)")
@@ -194,6 +210,13 @@ def main(argv=None):
     ru.add_argument("--result", required=True, choices=["done", "failed", "rolled_back"])
     ru.add_argument("--message", default="")
     ru.add_argument("--actor", default="")
+    ri = sub.add_parser("record-integration", help="audit the outcome of a provider install or removal")
+    ri.add_argument("--id", required=True, choices=["duo"])
+    ri.add_argument("--action", required=True, choices=["install", "remove"])
+    ri.add_argument("--result", required=True, choices=["done", "removed", "failed"])
+    ri.add_argument("--version", default="")
+    ri.add_argument("--message", default="")
+    ri.add_argument("--actor", default="")
     args = p.parse_args(argv)
     try:
         cfg = load_config(args.config)
@@ -206,7 +229,8 @@ def main(argv=None):
         return 3
     return {"create-admin": cmd_create_admin, "reset-password": cmd_reset_password,
             "unlock": cmd_unlock, "reset-mfa": cmd_reset_mfa, "render": cmd_render, "verify-audit": cmd_verify_audit,
-            "check-fips": cmd_check_fips, "record-update": cmd_record_update}[args.cmd](cfg, args)
+            "check-fips": cmd_check_fips, "record-update": cmd_record_update,
+            "record-integration": cmd_record_integration}[args.cmd](cfg, args)
 
 
 if __name__ == "__main__":

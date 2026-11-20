@@ -1,6 +1,7 @@
 #!/bin/bash
-# radius-admin-integration-install ID -- install a checked second-factor provider build
-# (SPEC section 29).
+# radius-admin-integration-install ID           -- install a checked second-factor provider build
+# radius-admin-integration-install --remove ID  -- remove an installed provider
+# (SPEC sections 29.1, 29.2).
 #
 # Started only by the root helper (systemctl start radius-admin-integration-install@ID),
 # after the helper copied the build into its own root-only directory and checked it against
@@ -10,11 +11,15 @@
 #   2. runs the provider's installer from this release, <opt>/integrations/<ID>/install.sh
 #      (root-owned), with request.json and the build
 #   3. records the outcome in the helper's integration-state.json
+# --remove runs <opt>/integrations/<ID>/remove.sh instead (the helper checked first that
+# FreeRADIUS no longer uses the provider).
 # The full log goes to /var/log/radius-admin/integration-<ID>-<time>.log.
 set -Eeuo pipefail
 umask 077
 export LC_ALL=C PATH=/usr/sbin:/usr/bin:/sbin:/bin
 
+MODE=install
+if [[ ${1:-} == --remove ]]; then MODE=remove; shift; fi
 ID=${1:-}
 [[ $ID =~ ^[a-z][a-z0-9-]{0,31}$ ]] || { echo "invalid integration '$ID'" >&2; exit 2; }
 HW=${RA_HELPER_WORK:-/var/lib/radius-admin-helper}
@@ -44,7 +49,7 @@ for kv in sys.argv[3:]:
     s[k] = v
 now = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
 s["updated"] = now
-if s.get("state") in ("done", "failed"):
+if s.get("state") in ("done", "failed", "removed"):
     s["finished"] = now
 st[pid] = s
 fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".integration-state.")
@@ -59,14 +64,45 @@ field() { # field FILE KEY : print a JSON value
 d = json.load(open(sys.argv[1]))
 print(d.get(sys.argv[2], "") if isinstance(d, dict) else "")' "$1" "$2"
 }
+audit() { # audit RESULT MESSAGE : record the outcome in the portal's audit log
+    [[ -n ${RA_NO_AUDIT:-} ]] && return 0
+    runuser -u radius-admin -- env -i PATH=/usr/bin:/bin LANG=C.UTF-8 \
+        RADIUS_ADMIN_CONFIG=/etc/radius-admin/radius-admin.conf PYTHONPATH=$OPT/app PYTHONDONTWRITEBYTECODE=1 \
+        python3 -m radius_admin.cli record-integration --id "$ID" --action "$MODE" --result "$1" \
+        --version "${VERSION:-}" --message "$2" --actor "${ACTOR:-}" || echo "warning: could not write the audit record"
+}
 finish() { # finish STATE MESSAGE
     state "state=$1" "message=$2"
+    audit "$1" "$2"
     echo "== $1: $2"
     rm -rf "$W"
-    if [[ $1 == "done" ]]; then exit 0; fi
+    if [[ $1 == "done" || $1 == "removed" ]]; then exit 0; fi
     exit 1
 }
 trap 'finish failed "unexpected error (line $LINENO); see $LOG"' ERR
+ACTOR=$(python3 -I -c 'import json, sys
+try:
+    print(json.load(open(sys.argv[1])).get(sys.argv[2], {}).get("actor", ""))
+except Exception:
+    print("")' "$STATE" "$ID")
+VERSION=""
+
+check_script() { # check_script PATH : root-owned, writable only by root, not a symlink
+    [[ -f $1 && ! -L $1 ]] || return 1
+    [[ $(stat -c %u "$1") == 0 && $(( 0$(stat -c %a "$1") & 022 )) == 0 ]] \
+        || finish failed "$1 must be owned by root and writable only by root"
+}
+
+if [[ $MODE == remove ]]; then
+    state state=removing "message=removing" "log=$LOG" "started=$TS"
+    echo "radius-admin integration remove: $ID ($(date -u))"
+    REMOVER=$OPT/integrations/$ID/remove.sh
+    check_script "$REMOVER" || finish failed "this release has no remover for $ID"
+    if bash "$REMOVER"; then
+        finish removed "removed"
+    fi
+    finish failed "removing $ID failed; see $LOG"
+fi
 
 state state=installing "message=checking the copy" "log=$LOG" "started=$TS"
 echo "radius-admin integration install: $ID ($(date -u))"
@@ -82,11 +118,7 @@ VERSION=$(field "$REQ" version)
 echo "build $FILE ($VERSION), $(field "$REQ" verified), SHA-256 $(field "$REQ" sha256)"
 
 INSTALLER=$OPT/integrations/$ID/install.sh
-if [[ ! -f $INSTALLER || -L $INSTALLER ]]; then
-    finish failed "this release has no installer for $ID"
-fi
-[[ $(stat -c %u "$INSTALLER") == 0 && $(( 0$(stat -c %a "$INSTALLER") & 022 )) == 0 ]] \
-    || finish failed "$INSTALLER must be owned by root and writable only by root"
+check_script "$INSTALLER" || finish failed "this release has no installer for $ID"
 state "message=installing $VERSION"
 if bash "$INSTALLER" "$REQ" "$W/$FILE"; then
     finish "done" "installed $VERSION"

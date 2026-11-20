@@ -347,3 +347,68 @@ def test_fips_mode_hides_remote_servers(app, browser, superconn, logged_in):
     r = browser.post("/integrations/policy", {"directory_enabled": "1", "directory_provider": "nps",
                                               "local_scope": "all", "directory_scope": "all", "exempt": ""})
     assert r.status_code == 400 and "not available in FIPS mode" in browser.text(r)
+
+
+# ------------------------------------------------------------------ Duo configuration (SPEC section 29.2)
+DUO_SETTINGS = dict(ikey="DIAAAAAAAAAAAAAAAAAA", skey="a" * 40, api_host="api-00000000.duosecurity.com",
+                    secret=PROXY_SECRET, primary_secret=PRIMARY_SECRET)
+
+
+def test_duo_config_rendering():
+    txt = unlang.render_duo_config(DUO_SETTINGS)
+    assert txt == unlang.render_duo_config(dict(DUO_SETTINGS))          # deterministic
+    assert txt.startswith("; radius-admin")
+    for line in ("host=127.0.0.1", "port=18121", "secret=" + PRIMARY_SECRET, "pass_through_attr_names=Class",
+                 "radius_ip_1=127.0.0.1", "radius_secret_1=" + PROXY_SECRET, "interface=127.0.0.1", "port=18120",
+                 "client=radius_client", "failmode=secure", "factors=auto",
+                 "pass_through_attr_names=Message-Authenticator", "force_message_authenticator=true"):
+        assert line + "\n" in txt, line
+    assert "fips_mode" not in txt and "FIPS" not in txt
+
+
+def test_duo_config_fips_mode():
+    txt = unlang.render_duo_config(dict(DUO_SETTINGS, failmode="safe"), fips=True)
+    assert "fips_mode=true\n" in txt and "failmode=secure\n" in txt
+
+
+@pytest.mark.parametrize("bad,msg", [
+    (dict(ikey="DI123"), "Integration key"),
+    (dict(ikey="XXAAAAAAAAAAAAAAAAAA"), "Integration key"),
+    (dict(skey="short"), "Secret key"),
+    (dict(api_host="api-x.duosecurity.com.example.net"), "API hostname"),
+    (dict(api_host="evil.example.net"), "API hostname"),
+    (dict(secret="has;semicolon0123456"), "Duo proxy secret"),
+    (dict(primary_secret="short"), "Password check secret"),
+    (dict(failmode="open"), "Fail mode"),
+    (dict(factors="sms"), "Factors"),
+    (dict(factors="push,push"), "Factors"),
+])
+def test_duo_settings_refused(bad, msg):
+    with pytest.raises(unlang.PolicyInputError) as e:
+        unlang.render_duo_config(dict(DUO_SETTINGS, **bad))
+    assert msg in str(e.value)
+
+
+def test_duo_config_matches_the_helper_grammar():
+    import importlib.machinery
+    import importlib.util
+    import os
+    path = os.path.join(os.path.dirname(__file__), "..", "..", "helper", "radius-admin-helper")
+    loader = importlib.machinery.SourceFileLoader("ra_helper_for_test", path)
+    spec = importlib.util.spec_from_loader("ra_helper_for_test", loader)
+    h = importlib.util.module_from_spec(spec)
+    loader.exec_module(h)
+    for fips in (False, True):
+        found = h.check_duo_config(unlang.render_duo_config(dict(DUO_SETTINGS, factors="push,phone"), fips).encode(), fips)
+        assert found["radius_server_auto"]["factors"] == "push,phone"
+
+
+def test_cli_records_integration_outcome(app, superconn, monkeypatch):
+    from radius_admin import cli
+    monkeypatch.setenv("RADIUS_ADMIN_CONFIG", "")
+    monkeypatch.setattr(cli, "load_config", lambda path: dict(app.config["RA"]))
+    assert cli.main(["record-integration", "--id", "duo", "--action", "install", "--result", "done",
+                     "--version", "6.8.1", "--message", "installed 6.8.1", "--actor", "alice"]) == 0
+    row = q(superconn, "SELECT action, success, actor, object_id, detail::text FROM ui.audit_log"
+                       " WHERE action = 'integration.install'")[0]
+    assert row[:4] == ("integration.install", True, "alice", "duo") and json.loads(row[4])["version"] == "6.8.1"

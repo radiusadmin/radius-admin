@@ -21,6 +21,10 @@ release, so previews sort after it.
   checked, signed with the update key. The root helper can download a provider build, check it
   against the catalog (or, outside FIPS mode, a SHA-256 the admin enters) and hand it to an install
   unit; FIPS mode accepts only builds the catalog lists as FIPS-capable. The install pages follow.
+- **Duo Authentication Proxy installer.** Builds Duo's source as an unprivileged user, installs it
+  with a hardened systemd unit and configures it from the portal: applying changes writes Duo's
+  configuration and restarts it before FreeRADIUS, restoring both if either fails. Removal and
+  Duo's connectivity check through the root helper. Checked with Duo 6.8.1.
 
 ### Changed
 - **Licence: from the GNU AGPL to the Business Source License 1.1 (source available).**

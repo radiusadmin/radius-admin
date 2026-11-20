@@ -10,7 +10,7 @@ trap 'rm -rf "$W"' EXIT
 fails=0
 pass() { echo "PASS: $1"; }
 fail() { echo "FAIL: $1"; fails=$((fails + 1)); }
-export RA_HELPER_WORK=$W/helper RA_OPT=$W/opt RA_INTEGRATION_LOG_DIR=$W/logs
+export RA_HELPER_WORK=$W/helper RA_OPT=$W/opt RA_INTEGRATION_LOG_DIR=$W/logs RA_NO_AUDIT=1
 mkdir -p "$RA_HELPER_WORK" "$RA_OPT/integrations/duo"
 FILE=duoauthproxy-6.7.0-src.tgz
 
@@ -65,6 +65,14 @@ prepare
 bash "$SCRIPT" duo >/dev/null 2>&1
 [[ $(st message) == *"writable only by root"* ]] && pass "a writable installer is not run" || fail "writable: $(st message)"
 chmod 0755 "$RA_OPT/integrations/duo/install.sh"
+
+# --remove runs the release's remover and records "removed"
+bash "$SCRIPT" --remove duo >/dev/null 2>&1
+[[ $? -ne 0 && $(st state) == failed && $(st message) == *"no remover for duo"* ]] \
+    && pass "a release without a remover fails cleanly" || fail "no remover: $(st message)"
+printf '#!/bin/bash\necho removing\n' > "$RA_OPT/integrations/duo/remove.sh"; chmod 0755 "$RA_OPT/integrations/duo/remove.sh"
+bash "$SCRIPT" --remove duo >/dev/null 2>&1
+[[ $? -eq 0 && $(st state) == removed ]] && pass "--remove runs the provider's remover" || fail "remove: $(st state) $(st message)"
 
 # bad arguments
 bash "$SCRIPT" '../x' >/dev/null 2>&1; [[ $? -eq 2 ]] && pass "an invalid id is refused" || fail "invalid id"

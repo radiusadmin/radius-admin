@@ -423,6 +423,16 @@ tokens and RADIUS secrets are never logged; the helper redacts `secret = …` an
   root-only directory (O_NOFOLLOW, single link, owner and size checked) and hashes that copy; the
   install unit checks it again and runs only the release's root-owned installer. The provider id is
   the only thing the request chooses; file names, URLs, services and ports are fixed in the helper.
+- **Duo install** (section 29.2). Duo's source is unpacked with Python's tarfile `data` filter and
+  built by a dedicated unprivileged user; the tree is made root-owned and read-only before Duo's
+  installer runs as root, so nothing the build user can change afterwards runs with privileges.
+  The proxy runs as `duo_authproxy_svc` under a radius-admin systemd drop-in (ProtectSystem=strict,
+  write access only to its log, run and conf directories and its secret store). Its configuration
+  holds the Duo secret key (owner: the service user, 0640) and is written only by the helper from a
+  whitelist grammar; it listens and talks only on 127.0.0.1. New outbound traffic: the proxy to
+  `api-*.duosecurity.com:443`. Duo bundles its own Python and an OpenSSL FIPS module
+  (`pkgs/fips_modules`); whether that module counts as validated on a given platform is checked per
+  build before the catalog marks it FIPS-capable.
 
 ## Universal edition additions (SPEC section 14)
 

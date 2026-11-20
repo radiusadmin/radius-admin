@@ -1586,3 +1586,65 @@ installer itself follow in the next step).
   writable by others), records `installing` / `done` / `failed` with the log path in
   `integration-state.json`, and removes the copy.
 - **Units.** The helper unit may read `/var/lib/radius-admin/integrations`.
+
+### 29.2 Duo Authentication Proxy: installer, configuration, removal
+
+Checked against Duo Authentication Proxy 6.8.1 (source read, built and run in the lab: the
+FreeRADIUS → Duo → radius-admin-mfa-primary round trip with Class and Message-Authenticator works;
+the second factor itself needs a Duo account and was replaced by `failmode=safe` with the Duo API
+unreachable). The portal pages that drive this follow.
+
+- **Installer** (`integrations/duo/install.sh REQUEST BUILD`, run by the install dispatcher):
+  build packages `build-essential libffi-dev zlib1g-dev perl` (missing ones only, apt,
+  `NEEDRESTART_SUSPEND=1`); extraction as the system user `radius-admin-build` (created when
+  missing) with Python's tarfile `data` filter, and only when every member is under
+  `duoauthproxy-<version>-src/`; plain `make` (Duo's Makefile is not safe for `-j`) as that user;
+  then the tree becomes `root:root`, `go-w`, before Duo's installer runs as root:
+  `duoauthproxy-build/install --install-dir /opt/duoauthproxy --service-user duo_authproxy_svc
+  --log-group duo_authproxy_grp --create-init-script yes --enable-selinux no --silent` (it creates
+  the user and group, writes and enables `/etc/systemd/system/duoauthproxy.service`, Type=forking,
+  twistd started as root dropping to the service user; `conf/authproxy.cfg` owned by the service
+  user, 0640). A running proxy is stopped first. Drop-in
+  `duoauthproxy.service.d/radius-admin.conf`: `ProtectSystem=strict` with write access to
+  `log`, `run`, `conf` and `-/etc/duoauthproxy` (Duo's secret storage), private /tmp and devices,
+  protected kernel and cgroups, `RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK`,
+  no namespaces, no SUID/SGID, locked personality. `/opt/duoauthproxy/.radius-admin` (root 0644):
+  version, sha256, verified, fips, installed. The proxy is (re)started only when `authproxy.cfg`
+  starts with `; radius-admin` (an applied configuration), otherwise left stopped.
+- **Removal** (`integrations/duo/remove.sh`, `radius-admin-integration-install --remove duo`,
+  unit `radius-admin-integration-remove@.service`): only an install with `.radius-admin`; the
+  configuration is copied to `/var/backups/radius-admin/duoauthproxy-authproxy.cfg-<time>` (0600),
+  the service stopped, Duo's `uninstall --no-prompt` run, the drop-in removed.
+- **Outcome audit.** The dispatcher records `integration.install` / `integration.remove` (result
+  done, removed or failed; version; message; the actor from the state) with
+  `python3 -m radius_admin.cli record-integration`.
+- **Configuration** (`unlang.render_duo_config(settings, fips)`, deterministic):
+  `[main] log_auth_events=true` (+ `fips_mode=true` in FIPS mode); `[radius_client] host=127.0.0.1,
+  port=18121, secret=<password-check secret>, pass_through_attr_names=Class`; `[radius_server_auto]
+  ikey, skey, api_host, radius_ip_1=127.0.0.1, radius_secret_1=<proxy secret>, interface=127.0.0.1,
+  port=18120, client=radius_client, failmode (secure|safe; FIPS: secure), factors (auto, push, phone,
+  passcode), pass_through_attr_names=Message-Authenticator, force_message_authenticator=true`.
+  Duo's RADIUS client adds Message-Authenticator to its request only when the incoming request's is
+  passed through, and its server adds one to replies only when forced: both are needed because the
+  loopback client and the home server require it. Settings: ikey `DI` + 18 upper-case letters or
+  digits, skey 40 letters or digits, `api-<1-16>.duosecurity.com`, secrets 16–128 letters or
+  digits (the INI format has comment characters).
+- **Helper.** Staged file `provider-duo` (optional; same rules as the other staged files).
+  Grammar (`check_duo_config`): first line `; radius-admin`; sections `main`, `radius_client`,
+  `radius_server_auto` once each; only the keys above, values as above (hosts and interface
+  127.0.0.1, ports 1024–65535, `client=radius_client`); in FIPS mode `fips_mode=true` and
+  `failmode=secure` are required. `validate` checks it (and that Duo is installed). `apply` with a
+  staged Duo file backs up the live `authproxy.cfg` too (`duo_managed` in the backup), installs it
+  keeping its owner, group and mode, restarts `duoauthproxy.service` and waits for 127.0.0.1:18120
+  (`restart_wait`) before touching FreeRADIUS; a proxy that does not come up gets its previous file
+  back and FreeRADIUS is left unchanged; a FreeRADIUS failure restores both. An unchanged Duo file
+  does not restart the proxy. Responses and the state carry `duo_sha256`. `rollback` restores a
+  backed-up Duo file that radius-admin wrote; Duo's own sample is not restored (the restored
+  FreeRADIUS files do not use Duo). With a changed Duo file the worst case of apply exceeds the
+  120 s the portal waits; a failing proxy is the rare path.
+- **Actions.** `integration_remove {"id", "actor"?}`: refused unless radius-admin installed it, while
+  the live clients file still has the `radius-admin-mfa-primary` listener ("turn the provider off
+  and apply first") or an install/removal runs; state `queued` with `action: remove`; starts
+  `<integration_remove_unit>@<id>.service`. `integration_test {"id"}`: runs Duo's
+  `usr/local/bin/authproxy_connectivity_tool` (root-owned, writable only by root) for at most
+  120 s; `{passed, output}` with lines naming skey, secret or password redacted.

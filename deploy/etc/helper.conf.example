@@ -49,6 +49,7 @@ radius_port = 1812
 # integration_catalog = /opt/radius-admin/integrations/catalog.json
 # integration_fetch_unit = radius-admin-integration-fetch
 # integration_install_unit = radius-admin-integration-install
+# integration_remove_unit = radius-admin-integration-remove
 # integration_max_mib = 128
 # integration_log_dir = /var/log/radius-admin
 # duo_dir = /opt/duoauthproxy

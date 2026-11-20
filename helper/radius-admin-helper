@@ -58,7 +58,8 @@ BACKUP_ID_RE = re.compile(r"^\d{8}T\d{6}Z\Z")
 SAFE_ENV = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C", "LC_ALL": "C"}
 ACTIONS = ("status", "validate", "apply", "rollback", "update_status", "update_check",
            "update_install", "update_log", "integration_status", "integration_catalog",
-           "integration_preflight", "integration_fetch", "integration_install", "integration_log")
+           "integration_preflight", "integration_fetch", "integration_install", "integration_log",
+           "integration_remove", "integration_test")
 UPDATE_VERSION_RE = re.compile(r"^(\d{1,4})\.(\d{1,4})\.(\d{1,4})(?:-(dev|rc)\.(\d{1,6}))?\Z")
 UPDATE_CHANNELS = ("main", "testing", "dev")
 UPDATE_LOG_RE = re.compile(r"^update-\d{1,4}\.\d{1,4}\.\d{1,4}(?:-(?:dev|rc)\.\d{1,6})?-\d{8}T\d{6}Z\.log\Z")
@@ -123,6 +124,7 @@ CONFIG_DEFAULTS = {
     "integration_catalog": "/opt/radius-admin/integrations/catalog.json",
     "integration_fetch_unit": "radius-admin-integration-fetch",
     "integration_install_unit": "radius-admin-integration-install",
+    "integration_remove_unit": "radius-admin-integration-remove",
     "integration_max_mib": "128",
     "integration_log_dir": "/var/log/radius-admin",
     "duo_dir": "/opt/duoauthproxy",
@@ -183,7 +185,7 @@ def load_config(path):
         raise HelperError("helper.conf: invalid update_check_unit")
     if not re.match(r"^[A-Za-z0-9_-]{1,100}$", cfg["update_install_unit"]):
         raise HelperError("helper.conf: invalid update_install_unit")
-    for key in ("integration_fetch_unit", "integration_install_unit"):
+    for key in ("integration_fetch_unit", "integration_install_unit", "integration_remove_unit"):
         if not re.match(r"^[A-Za-z0-9_-]{1,100}$", cfg[key]):
             raise HelperError("helper.conf: invalid %s" % key)
     for key in ("radius_port", "portal_port", "restart_wait", "restart_timeout", "validate_timeout",
@@ -608,6 +610,71 @@ def _check_mfa_ref(node, kind, key, known):
         raise HelperError("clients line %d: %s %s must name its own %s" % (lineno, kind, node["arg"], key))
 
 
+# The Duo Authentication Proxy's authproxy.cfg (SPEC section 29.2), exactly as rendered by
+# app/radius_admin/unlang.py: three sections, every key known, every value pinned or patterned.
+_DUO_SECRET = r"[A-Za-z0-9]{16,128}"
+_DUO_KEYS = {
+    "main": {"log_auth_events": r"true|false", "fips_mode": r"true"},
+    "radius_client": {"host": r"127\.0\.0\.1", "port": r"[0-9]{4,5}", "secret": _DUO_SECRET,
+                      "pass_through_attr_names": r"Class"},
+    "radius_server_auto": {"ikey": r"DI[A-Z0-9]{18}", "skey": r"[A-Za-z0-9]{40}",
+                           "api_host": r"api-[a-z0-9]{1,16}\.duosecurity\.com", "radius_ip_1": r"127\.0\.0\.1",
+                           "radius_secret_1": _DUO_SECRET, "interface": r"127\.0\.0\.1", "port": r"[0-9]{4,5}",
+                           "client": r"radius_client", "failmode": r"secure|safe",
+                           "factors": r"(auto|push|phone|passcode)(,(auto|push|phone|passcode)){0,3}",
+                           "pass_through_attr_names": r"Message-Authenticator",
+                           "force_message_authenticator": r"true"},
+}
+_DUO_REQUIRED = {"main": set(), "radius_client": {"host", "port", "secret", "pass_through_attr_names"},
+                 "radius_server_auto": {"ikey", "skey", "api_host", "radius_ip_1", "radius_secret_1", "interface",
+                                        "port", "client", "failmode", "pass_through_attr_names",
+                                        "force_message_authenticator"}}
+
+
+def check_duo_config(data, fips):
+    """Whitelist grammar for authproxy.cfg; in FIPS mode fips_mode=true and failmode=secure."""
+    text = check_text(data, "Duo configuration")
+    lines = text.split("\n")
+    if not lines[0].startswith("; radius-admin"):
+        raise HelperError("Duo configuration: the first line must be the radius-admin header")
+    found, cur = {}, None
+    for lineno, line in enumerate(lines, 1):
+        s = line.strip()
+        if not s or s.startswith(";") or s.startswith("#"):
+            continue
+        m = re.fullmatch(r"\[([a-z_]{1,32})\]", s)
+        if m:
+            cur = m.group(1)
+            if cur not in _DUO_KEYS:
+                raise HelperError("Duo configuration line %d: section [%s] not allowed" % (lineno, cur))
+            if cur in found:
+                raise HelperError("Duo configuration line %d: duplicate section [%s]" % (lineno, cur))
+            found[cur] = {}
+            continue
+        m = re.fullmatch(r"([a-z_0-9]{1,40})=(.*)", s)
+        if not m or cur is None:
+            raise HelperError("Duo configuration line %d: expected [section] or key=value" % lineno)
+        key, val = m.group(1), m.group(2)
+        rx = _DUO_KEYS[cur].get(key)
+        if rx is None:
+            raise HelperError("Duo configuration line %d: key %s not allowed in [%s]" % (lineno, key, cur))
+        if key in found[cur]:
+            raise HelperError("Duo configuration line %d: duplicate key %s" % (lineno, key))
+        if not re.fullmatch(rx, val) or (key == "port" and not 1024 <= int(val) <= 65535):
+            raise HelperError("Duo configuration line %d: invalid value for %s" % (lineno, key))
+        found[cur][key] = val
+    for sec, req in _DUO_REQUIRED.items():
+        if sec != "main" and sec not in found:
+            raise HelperError("Duo configuration: section [%s] missing" % sec)
+        missing = req - set(found.get(sec, {}))
+        if missing:
+            raise HelperError("Duo configuration: [%s] needs %s" % (sec, ", ".join(sorted(missing))))
+    if fips and (found.get("main", {}).get("fips_mode") != "true"
+                 or found["radius_server_auto"]["failmode"] != "secure"):
+        raise HelperError("Duo configuration: FIPS mode needs fips_mode=true and failmode=secure")
+    return found
+
+
 def check_clients(data, cert_dir="/etc/freeradius/certs/site"):
     """Whitelist grammar: comments, blank lines, `client NAME {` ... `}` blocks with
     whitelisted `key = value` pairs, one per line; optionally one RadSec `listen {}`
@@ -689,51 +756,76 @@ def check_clients(data, cert_dir="/etc/freeradius/certs/site"):
 
 # --------------------------------------------------------------------------- staging
 
-def read_staged(cfg):
-    """Read both staged files without following symlinks. Returns (policy, clients) bytes."""
+STAGED_PROVIDERS = {"duo": "provider-duo"}     # SPEC section 29.2
+
+
+def _staging_dirfd(cfg):
     try:
         dfd = os.open(cfg["staging_dir"], os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
                       | os.O_CLOEXEC)
     except OSError as e:
         raise HelperError("staging directory unavailable: %s" % e.strerror)
+    st = os.fstat(dfd)
+    if st.st_uid not in (0, cfg["staging_uid"]) or st.st_mode & 0o022:
+        os.close(dfd)
+        raise HelperError("staging directory has unsafe ownership or permissions")
+    return dfd
+
+
+def _read_staged_file(cfg, dfd, name, optional=False):
+    """One staged file, opened without following symlinks: a regular, single-linked file of
+    the staging owner, <= 1 MiB. None when optional and absent."""
     try:
-        st = os.fstat(dfd)
-        if st.st_uid not in (0, cfg["staging_uid"]) or st.st_mode & 0o022:
-            raise HelperError("staging directory has unsafe ownership or permissions")
-        out = []
-        for name in (STAGED_POLICY, STAGED_CLIENTS):
-            try:
-                fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
-                             | getattr(os, "O_NOCTTY", 0), dir_fd=dfd)
-            except OSError as e:
-                if e.errno == errno.ELOOP:
-                    raise HelperError("staged %s is a symlink" % name)
-                raise HelperError("staged %s missing: %s" % (name, e.strerror))
-            try:
-                fst = os.fstat(fd)
-                if not stat.S_ISREG(fst.st_mode):
-                    raise HelperError("staged %s is not a regular file" % name)
-                if fst.st_uid != cfg["staging_uid"]:
-                    raise HelperError("staged %s is not owned by %s" % (name, cfg["staging_owner"]))
-                if fst.st_nlink != 1:
-                    raise HelperError("staged %s has multiple hard links" % name)
-                if fst.st_size > MAX_STAGED:
-                    raise HelperError("staged %s exceeds 1 MiB" % name)
-                chunks = []
-                remaining = MAX_STAGED + 1
-                while remaining > 0:
-                    b = os.read(fd, min(65536, remaining))
-                    if not b:
-                        break
-                    chunks.append(b)
-                    remaining -= len(b)
-                data = b"".join(chunks)
-                if len(data) > MAX_STAGED:
-                    raise HelperError("staged %s exceeds 1 MiB" % name)
-                out.append(data)
-            finally:
-                os.close(fd)
-        return out[0], out[1]
+        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
+                     | getattr(os, "O_NOCTTY", 0), dir_fd=dfd)
+    except FileNotFoundError:
+        if optional:
+            return None
+        raise HelperError("staged %s missing: %s" % (name, os.strerror(errno.ENOENT)))
+    except OSError as e:
+        if e.errno == errno.ELOOP:
+            raise HelperError("staged %s is a symlink" % name)
+        raise HelperError("staged %s missing: %s" % (name, e.strerror))
+    try:
+        fst = os.fstat(fd)
+        if not stat.S_ISREG(fst.st_mode):
+            raise HelperError("staged %s is not a regular file" % name)
+        if fst.st_uid != cfg["staging_uid"]:
+            raise HelperError("staged %s is not owned by %s" % (name, cfg["staging_owner"]))
+        if fst.st_nlink != 1:
+            raise HelperError("staged %s has multiple hard links" % name)
+        if fst.st_size > MAX_STAGED:
+            raise HelperError("staged %s exceeds 1 MiB" % name)
+        chunks = []
+        remaining = MAX_STAGED + 1
+        while remaining > 0:
+            b = os.read(fd, min(65536, remaining))
+            if not b:
+                break
+            chunks.append(b)
+            remaining -= len(b)
+        data = b"".join(chunks)
+        if len(data) > MAX_STAGED:
+            raise HelperError("staged %s exceeds 1 MiB" % name)
+        return data
+    finally:
+        os.close(fd)
+
+
+def read_staged(cfg):
+    """Read both staged files without following symlinks. Returns (policy, clients) bytes."""
+    dfd = _staging_dirfd(cfg)
+    try:
+        return (_read_staged_file(cfg, dfd, STAGED_POLICY), _read_staged_file(cfg, dfd, STAGED_CLIENTS))
+    finally:
+        os.close(dfd)
+
+
+def read_staged_duo(cfg):
+    """The staged Duo Authentication Proxy configuration (provider-duo), or None."""
+    dfd = _staging_dirfd(cfg)
+    try:
+        return _read_staged_file(cfg, dfd, STAGED_PROVIDERS["duo"], optional=True)
     finally:
         os.close(dfd)
 
@@ -1066,7 +1158,11 @@ def list_backups(bdir):
     return sorted(names, reverse=True)
 
 
-def make_backup(cfg, bdir, reason):
+def duo_cfg_path(cfg):
+    return os.path.join(cfg["duo_dir"], "conf", "authproxy.cfg")
+
+
+def make_backup(cfg, bdir, reason, duo_managed=False):
     for _ in range(3):
         bid = utc_id()
         path = os.path.join(bdir, bid)
@@ -1077,9 +1173,12 @@ def make_backup(cfg, bdir, reason):
             time.sleep(1.05)
     else:
         raise HelperError("could not allocate a backup id")
-    meta = {"id": bid, "reason": reason, "files": {}}
-    for key, name in (("policy_target", "policy"), ("clients_target", "clients")):
-        data = read_root_file(cfg[key])
+    meta = {"id": bid, "reason": reason, "files": {}, "duo_managed": bool(duo_managed)}
+    sources = [(cfg["policy_target"], "policy"), (cfg["clients_target"], "clients")]
+    if duo_managed:     # this apply changes the Duo Authentication Proxy's configuration too
+        sources.append((duo_cfg_path(cfg), "duo"))
+    for src, name in sources:
+        data = read_root_file(src)
         if data is None:
             meta["files"][name] = None
         else:
@@ -1105,8 +1204,8 @@ def load_backup(bdir, bid):
     if raw is None:
         raise HelperError("backup %s is incomplete" % bid)
     meta = json.loads(raw.decode())
-    files = {}
-    for name in ("policy", "clients"):
+    files = {"duo_managed": meta.get("duo_managed") is True}
+    for name in ("policy", "clients") + (("duo",) if files["duo_managed"] else ()):
         if meta["files"].get(name) is None:
             files[name] = None
             continue
@@ -1178,34 +1277,104 @@ def act_validate(cfg, req):
     _, vroot = ensure_work_dirs(cfg)
     with Lock(cfg):
         policy, clients = read_staged(cfg)
+        duo = read_staged_duo(cfg)
+        if duo is not None:
+            if not _duo_ready(cfg):
+                raise HelperError("a Duo configuration is staged, but the Duo Authentication Proxy is not installed")
+            check_duo_config(duo, fips_on(cfg))
         ok, out, n = validate_candidate(cfg, vroot, policy, clients)
-    return {"ok": ok, "message": ("configuration valid (%d clients)" % n) if ok
+    resp = {"ok": ok, "message": ("configuration valid (%d clients)" % n) if ok
             else "radiusd -XC reported errors", "output": out,
             "policy_sha256": sha256(policy), "clients_sha256": sha256(clients)}
+    if duo is not None:
+        resp["duo_sha256"] = sha256(duo)
+    return resp
 
 
-def _deploy(cfg, bdir, vroot, policy, clients, reason, extra):
-    """Shared by apply and rollback: validate, back up, install, restart, auto-rollback."""
+def _duo_ready(cfg):
+    return bool(_installed(cfg, "duo")) and os.path.isdir(os.path.join(cfg["duo_dir"], "conf"))
+
+
+def install_duo_config(cfg, data):
+    """authproxy.cfg, keeping the owner, group and mode the Duo installer gave it (the service
+    user reads it); root:root 0640 when there is none yet."""
+    path = duo_cfg_path(cfg)
+    try:
+        st = os.lstat(path)
+        uid, gid, mode = st.st_uid, st.st_gid, stat.S_IMODE(st.st_mode) & 0o640
+    except FileNotFoundError:
+        uid, gid, mode = 0, 0, 0o640
+    atomic_write(path, data, uid, gid, mode or 0o600)
+
+
+def restart_duo(cfg):
+    prov = INTEGRATIONS["duo"]
+    rc, out = run([cfg["systemctl"], "restart", prov["unit"]], cfg["restart_timeout"])
+    deadline = time.monotonic() + cfg["restart_wait"]
+    while True:
+        active = unit_state(cfg, prov["unit"]) == "active"
+        if active and _udp_bound(cfg, prov["listen"]):
+            return True, "%s active and listening on %s" % (prov["unit"], prov["listen"])
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(0.5)
+    if rc != 0:
+        return False, "systemctl restart exited %d: %s" % (rc, tail(out, 5))
+    return False, "%s not active" % prov["unit"] if not active else "%s not listening" % prov["listen"]
+
+
+def _deploy(cfg, bdir, vroot, policy, clients, reason, extra, duo=None):
+    """Shared by apply and rollback: validate, back up, install, restart, auto-rollback.
+    With `duo` (the Duo Authentication Proxy's configuration, SPEC section 29.2) that file is
+    installed and the proxy restarted first; a failure of either service restores both."""
     if policy is None or clients is None:
         raise HelperError("both policy and clients files are required")
+    if duo is not None:
+        if not _duo_ready(cfg):
+            raise HelperError("a Duo configuration is staged, but the Duo Authentication Proxy is not installed")
+        check_duo_config(duo, fips_on(cfg))
     ok, out, n = validate_candidate(cfg, vroot, policy, clients)
     if not ok:
         return dict(extra, ok=False, rolled_back=False, output=out,
                     message="validation failed; nothing changed")
-    bid = make_backup(cfg, bdir, reason)
+    bid = make_backup(cfg, bdir, reason, duo_managed=duo is not None)
     prev = load_backup(bdir, bid)
+    duo_changed = duo is not None and duo != prev.get("duo")
+    duo_info = {"duo_sha256": sha256(duo)} if duo is not None else {}
+    why_d = ""
+
+    def restore_duo():
+        if duo_changed and prev.get("duo") is not None:
+            install_duo_config(cfg, prev["duo"])
+            restart_duo(cfg)
+
+    if duo_changed:
+        try:
+            install_duo_config(cfg, duo)
+        except Exception as e:
+            restore_duo()
+            raise HelperError("installing the Duo configuration failed (%s); previous files restored" % e)
+        started_d, why_d = restart_duo(cfg)
+        if not started_d:
+            log(syslog.LOG_ERR, "%s: duoauthproxy did not start (%s); restoring backup %s" % (reason, why_d, bid))
+            restore_duo()
+            return dict(extra, ok=False, rolled_back=True, rollback_ok=True, backup_id=bid, output=out,
+                        message="the Duo Authentication Proxy did not start with the new configuration (%s);"
+                                " its previous configuration was restored and FreeRADIUS was not changed" % why_d)
     try:
         install_files(cfg, policy, clients)
     except Exception as e:
         install_files(cfg, prev["policy"], prev["clients"])
+        restore_duo()
         raise HelperError("install failed (%s); previous files restored" % e)
     started, why = restart_and_wait(cfg)
     if started:
         return dict(extra, ok=True, rolled_back=False, backup_id=bid, output=out,
-                    policy_sha256=sha256(policy), clients_sha256=sha256(clients),
-                    message="%s; %s" % (reason, why))
+                    policy_sha256=sha256(policy), clients_sha256=sha256(clients), **duo_info,
+                    message="%s; %s%s" % (reason, why, ("; " + why_d) if why_d else ""))
     log(syslog.LOG_ERR, "%s: restart failed (%s); restoring backup %s" % (reason, why, bid))
     install_files(cfg, prev["policy"], prev["clients"])
+    restore_duo()
     restarted, why2 = restart_and_wait(cfg)
     return dict(extra, ok=False, rolled_back=True, rollback_ok=restarted, backup_id=bid,
                 output=out, message="restart failed (%s); previous configuration restored%s"
@@ -1219,6 +1388,7 @@ def _record(cfg, action, resp):
              "backup_id": resp.get("backup_id"),
              "policy_sha256": resp.get("policy_sha256"),
              "clients_sha256": resp.get("clients_sha256"),
+             "duo_sha256": resp.get("duo_sha256"),
              "rolled_back": bool(resp.get("rolled_back")), "message": resp.get("message", "")}
     if resp.get("restored"):
         entry["restored"] = resp["restored"]
@@ -1232,7 +1402,7 @@ def act_apply(cfg, req):
     bdir, vroot = ensure_work_dirs(cfg)
     with Lock(cfg):
         policy, clients = read_staged(cfg)
-        resp = _deploy(cfg, bdir, vroot, policy, clients, "apply", {})
+        resp = _deploy(cfg, bdir, vroot, policy, clients, "apply", {}, duo=read_staged_duo(cfg))
         _record(cfg, "apply", resp)
         prune_backups(cfg, bdir)
     return resp
@@ -1245,8 +1415,14 @@ def act_rollback(cfg, req):
     bdir, vroot = ensure_work_dirs(cfg)
     with Lock(cfg):
         files = load_backup(bdir, bid)
+        # The Duo configuration in the backup is restored when radius-admin wrote it; Duo's own
+        # sample (before the first apply that configured Duo) is not: the restored FreeRADIUS
+        # files send nothing to Duo, so the current file stays (SPEC section 29.2).
+        duo = files.get("duo") if files["duo_managed"] else None
+        if duo is not None and not duo.startswith(b"; radius-admin"):
+            duo = None
         resp = _deploy(cfg, bdir, vroot, files["policy"], files["clients"],
-                       "rollback to %s" % bid, {"restored": bid})
+                       "rollback to %s" % bid, {"restored": bid}, duo=duo)
         _record(cfg, "rollback", resp)
         prune_backups(cfg, bdir, protect=(bid,))
     return resp
@@ -1563,6 +1739,7 @@ INTEGRATIONS = {
     },
 }
 DPKG_QUERY = "/usr/bin/dpkg-query"
+INTEGRATION_ACTIVE = ("queued", "installing", "removing")
 OS_RELEASE = "/etc/os-release"
 
 
@@ -1708,8 +1885,9 @@ def write_integration_state(cfg, st):
     atomic_write(integration_state_path(cfg), json.dumps(st, sort_keys=True).encode(), 0, 0, 0o600)
 
 
-def integration_unit(cfg, pid):
-    return "%s@%s.service" % (cfg["integration_install_unit"], pid)
+def integration_unit(cfg, pid, action="install"):
+    key = "integration_remove_unit" if action == "remove" else "integration_install_unit"
+    return "%s@%s.service" % (cfg[key], pid)
 
 
 def current_integration_state(cfg):
@@ -1717,9 +1895,10 @@ def current_integration_state(cfg):
     st = read_integration_state(cfg)
     changed = False
     for pid, s in st.items():
-        if s.get("state") in UPDATE_ACTIVE and unit_state(cfg, integration_unit(cfg, pid)) not in ("active", "activating"):
+        unit = integration_unit(cfg, pid, s.get("action", "install"))
+        if s.get("state") in INTEGRATION_ACTIVE and unit_state(cfg, unit) not in ("active", "activating"):
             s.update(state="failed", finished=utc_now(),
-                     message="the install stopped without finishing (journalctl -u %s)" % integration_unit(cfg, pid))
+                     message="the %s stopped without finishing (journalctl -u %s)" % (s.get("action", "install"), unit))
             changed = True
     if changed:
         write_integration_state(cfg, st)
@@ -1867,8 +2046,9 @@ def act_integration_install(cfg, req):
     with Lock(cfg, "integration.lock", "another integration install"):
         st = read_integration_state(cfg)
         cur = st.get(pid) or {}
-        if cur.get("state") in UPDATE_ACTIVE and unit_state(cfg, unit) in ("active", "activating"):
-            raise HelperError("an install of %s is already running" % prov["label"])
+        if cur.get("state") in INTEGRATION_ACTIVE and unit_state(
+                cfg, integration_unit(cfg, pid, cur.get("action", "install"))) in ("active", "activating"):
+            raise HelperError("an install or removal of %s is already running" % prov["label"])
         cat = load_catalog(cfg)
         try:
             dirfd = os.open(cfg["integration_dir"], os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
@@ -1923,8 +2103,8 @@ def act_integration_install(cfg, req):
             raise
         finally:
             os.close(dirfd)
-        st[pid] = {"state": "queued", "version": version, "sha256": h, "verified": verified, "actor": actor,
-                   "requested": utc_now(), "message": "queued", "log": ""}
+        st[pid] = {"state": "queued", "action": "install", "version": version, "sha256": h, "verified": verified,
+                   "actor": actor, "requested": utc_now(), "message": "queued", "log": ""}
         write_integration_state(cfg, st)
         rc, out = run([cfg["systemctl"], "start", "--no-block", unit], 15)
         if rc != 0:
@@ -1933,6 +2113,60 @@ def act_integration_install(cfg, req):
             raise HelperError("could not start %s: %s" % (unit, tail(out, 5)))
     return {"ok": True, "message": "install of %s %s started" % (prov["label"], version), "version": version,
             "verified": verified, "sha256": h}
+
+
+MFA_LISTEN_MARKER = re.compile(r"(?m)^[ \t]*virtual_server[ \t]*=[ \t]*radius-admin-mfa-primary[ \t]*$")
+
+
+def act_integration_remove(cfg, req):
+    """Start the removal of an installed provider. Refused while FreeRADIUS still sends
+    logins to it (the live clients file has the Duo listener) or an install runs."""
+    pid, prov = _integration(req)
+    actor = req.get("actor") if isinstance(req.get("actor"), str) and ACTOR_RE.match(req["actor"]) else ""
+    if not _installed(cfg, pid):
+        raise HelperError("%s is not installed by radius-admin" % prov["label"])
+    live = read_root_file(cfg["clients_target"]) or b""
+    if MFA_LISTEN_MARKER.search(live.decode("utf-8", "replace")):
+        raise HelperError("FreeRADIUS still uses %s: turn the provider off and apply the changes first" % prov["label"])
+    ensure_work_dirs(cfg)
+    with Lock(cfg, "integration.lock", "another integration install"):
+        st = read_integration_state(cfg)
+        cur = st.get(pid) or {}
+        if cur.get("state") in INTEGRATION_ACTIVE and unit_state(
+                cfg, integration_unit(cfg, pid, cur.get("action", "install"))) in ("active", "activating"):
+            raise HelperError("an install or removal of %s is already running" % prov["label"])
+        st[pid] = {"state": "queued", "action": "remove", "actor": actor, "requested": utc_now(),
+                   "message": "removal queued", "log": "", "version": (_installed(cfg, pid) or {}).get("version", "")}
+        write_integration_state(cfg, st)
+        unit = integration_unit(cfg, pid, "remove")
+        rc, out = run([cfg["systemctl"], "start", "--no-block", unit], 15)
+        if rc != 0:
+            st[pid].update(state="failed", finished=utc_now(), message="could not start %s" % unit)
+            write_integration_state(cfg, st)
+            raise HelperError("could not start %s: %s" % (unit, tail(out, 5)))
+    return {"ok": True, "message": "removal of %s started" % prov["label"]}
+
+
+_TEST_REDACT = re.compile(r"(?i)(skey|secret|password)[^\n]*")
+
+
+def act_integration_test(cfg, req):
+    """Duo's own connectivity tool (reads the applied configuration, tests the Duo API and
+    the primary authentication server). Output with secret-looking lines redacted."""
+    pid, prov = _integration(req)
+    if not _duo_ready(cfg):
+        raise HelperError("%s is not installed" % prov["label"])
+    tool = os.path.join(cfg["duo_dir"], "usr", "local", "bin", "authproxy_connectivity_tool")
+    try:
+        st = os.stat(tool)
+    except OSError:
+        raise HelperError("the connectivity tool of %s is missing" % prov["label"])
+    if not stat.S_ISREG(st.st_mode) or st.st_uid != 0 or st.st_mode & 0o022:
+        raise HelperError("the connectivity tool must be a root-owned file only root can change")
+    rc, out = run([tool], 120)
+    text = _TEST_REDACT.sub(lambda m: m.group(1) + " [redacted]", tail(out, 200))
+    return {"ok": True, "message": "the connectivity check passed" if rc == 0 else "the connectivity check found problems",
+            "passed": rc == 0, "output": text}
 
 
 def act_integration_log(cfg, req):
@@ -1954,7 +2188,8 @@ HANDLERS = {"status": act_status, "validate": act_validate, "apply": act_apply,
             "update_log": act_update_log, "integration_status": act_integration_status,
             "integration_catalog": act_integration_catalog, "integration_preflight": act_integration_preflight,
             "integration_fetch": act_integration_fetch, "integration_install": act_integration_install,
-            "integration_log": act_integration_log}
+            "integration_log": act_integration_log, "integration_remove": act_integration_remove,
+            "integration_test": act_integration_test}
 
 
 # --------------------------------------------------------------------------- request I/O

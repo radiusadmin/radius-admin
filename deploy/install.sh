@@ -1037,7 +1037,7 @@ phase_app() {
     for u in radius-admin.service radius-admin-helper.socket radius-admin-helper@.service \
              radius-admin-update-check.service radius-admin-update-check.timer \
              radius-admin-update-install@.service radius-admin-integration-install@.service \
-             radius-admin-integration-fetch@.service; do
+             radius-admin-integration-fetch@.service radius-admin-integration-remove@.service; do
         if put "$HERE/systemd/$u" "/etc/systemd/system/$u" root:root 0644; then reload=1; fi
     done
     if put "$HERE/firewall/radius-admin-firewall.service" /etc/systemd/system/radius-admin-firewall.service root:root 0644; then reload=1; fi
