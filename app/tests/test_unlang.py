@@ -44,7 +44,8 @@ def test_no_rules_or_settings_rendered():
     p = render()
     for word in ("Wired-Support", "Example_", "192.0.2", "LDAP-Group =="):
         assert word not in p
-    with pytest.raises(TypeError):
+    # the pre-section-10 call (settings, rules, custom) must still fail, not render
+    with pytest.raises((TypeError, PolicyInputError)):
         unlang.render_policy({"admin_subnet": "192.0.2.0/24"}, [], "")
 
 

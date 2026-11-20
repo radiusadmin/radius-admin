@@ -1,0 +1,113 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block title %}{{ 'New device profile' if is_new else 'Device profile ' ~ f.id }}{% endblock %}
+{% block content %}
+{% set ro = '' if editable else ' disabled' %}
+<header class="page-head"><div><h1>{{ 'New device profile' if is_new else f.label }}</h1>
+{% if not is_new %}<p class="lede"><span class="mono">{{ f.id }}</span> ·
+  {{ 'Built-in profile' if builtin else 'Custom profile' }} ·
+  used by {{ used }} client{{ '' if used == 1 else 's' }}{% if is_default %}, and the default profile{% endif %}</p>{% endif %}</div>
+{% if not is_new %}<div class="head-actions">
+  <a class="btn btn-quiet" href="{{ url_for('profiles.export', pid=f.id) }}">Export JSON</a>
+  {% if has_role('admin') %}<a class="btn btn-quiet" href="{{ url_for('profiles.new', **{'from': f.id}) }}">Copy to a new profile</a>{% endif %}
+  {% if report_url %}<a class="btn btn-quiet" href="{{ report_url }}" target="_blank" rel="noopener noreferrer">Report a problem<span class="sr-only"> (opens GitHub)</span></a>{% endif %}
+</div>{% endif %}
+</header>
+{% if error %}<p class="flash flash-error" role="alert">{{ error }}</p>{% endif %}
+{% if errors.form %}<p class="flash flash-error" role="alert">{{ errors.form }}</p>{% endif %}
+{% if builtin %}<p class="flash flash-info">Built-in profiles cannot be changed. Copy this one to make a custom profile{% if report_url %}, or <a href="{{ report_url }}" target="_blank" rel="noopener noreferrer">report a problem</a> if it does not work with your device (opens an issue form on GitHub; do not include secrets, host names or addresses){% endif %}.</p>
+{% elif not editable %}<p class="flash flash-info">Only administrators can change device profiles.</p>{% endif %}
+<section class="panel narrow">
+<form method="post" class="stack" action="{{ url_for('profiles.new') if is_new else url_for('profiles.view', pid=f.id) }}">
+  {{ m.csrf() }}
+  <h2>Name</h2>
+  <label for="id">Id</label>
+  <input id="id" name="id" value="{{ f.id }}" required maxlength="32" pattern="[a-z0-9][a-z0-9\-]{0,31}" class="mono"{{ m.described(errors, 'id', True) }}{{ '' if is_new else ' disabled' }}>
+  <p id="id-hint" class="small muted">Lower-case letters, digits and '-'; how clients, the CSV import and exported files name the profile.{% if not is_new %} It cannot be changed.{% endif %}</p>
+  {{ m.field_error(errors, 'id') }}
+  <label for="label">Label</label>
+  <input id="label" name="label" value="{{ f.label }}" required maxlength="64"{{ m.described(errors, 'label') }}{{ ro }}>
+  {{ m.field_error(errors, 'label') }}
+  <label for="description">Description</label>
+  <input id="description" name="description" value="{{ f.description }}" maxlength="300"{{ m.described(errors, 'description') }}{{ ro }}>
+  {{ m.field_error(errors, 'description') }}
+
+  <h2>Attributes sent to the device</h2>
+  <p class="small muted">One attribute per line: <span class="mono">Attribute := value</span> replaces, <span class="mono">Attribute += value</span> adds. Attribute names must exist in the FreeRADIUS dictionary. Values: printable characters without <span class="mono">" \ % $ ` { }</span>.</p>
+  <label for="reply_vlan">VLAN assignment</label>
+  <textarea id="reply_vlan" name="reply_vlan" rows="3" class="mono" spellcheck="false"{{ m.described(errors, 'reply_vlan', True) }}{{ ro }}>{{ f.reply_vlan }}</textarea>
+  <p id="reply_vlan-hint" class="small muted">Sent with every accepted 802.1X and MAB login. One value must be <span class="mono">{vlan}</span>, the VLAN of the matching rule or MAB device.</p>
+  {{ m.field_error(errors, 'reply_vlan') }}
+  <label for="reply_admin">Full admin rights</label>
+  <textarea id="reply_admin" name="reply_admin" rows="2" class="mono" spellcheck="false"{{ m.described(errors, 'reply_admin', True) }}{{ ro }}>{{ f.reply_admin }}</textarea>
+  <p id="reply_admin-hint" class="small muted">Added to a switch-admin login when Settings → “Grant full admin rights” is on. At least one attribute.</p>
+  {{ m.field_error(errors, 'reply_admin') }}
+  <label for="reply_role">Role <span class="muted">(optional)</span></label>
+  <textarea id="reply_role" name="reply_role" rows="2" class="mono" spellcheck="false"{{ m.described(errors, 'reply_role', True) }}{{ ro }}>{{ f.reply_role }}</textarea>
+  <p id="reply_role-hint" class="small muted">Added to an 802.1X login when the matching access rule has a role; one value must be <span class="mono">{role}</span>. Leave empty if the device has no roles.</p>
+  {{ m.field_error(errors, 'reply_role') }}
+
+  <h2>MAC authentication (MAB)</h2>
+  <fieldset><legend class="sr-only">Accept MAB from</legend>
+    <label class="check"><input type="checkbox" name="mab_ethernet" value="1" {{ 'checked' if f.mab_ethernet }}{{ ro }}> Wired ports (NAS-Port-Type Ethernet)</label>
+    <label class="check"><input type="checkbox" name="mab_wireless" value="1" {{ 'checked' if f.mab_wireless }}{{ ro }}> Access points and controllers (NAS-Port-Type Wireless-802.11)</label>
+  </fieldset>
+  {{ m.field_error(errors, 'mab') }}
+
+  <h2>Session actions</h2>
+  <div class="grid-2">
+    <div><label for="coa_port">Default port (UDP)</label>
+      <input id="coa_port" name="coa_port" value="{{ f.coa_port }}" required inputmode="numeric" maxlength="5"{{ m.described(errors, 'coa_port', True) }}{{ ro }}>
+      <p id="coa_port-hint" class="small muted">RFC 5176 uses 3799. A client can set its own.</p>
+      {{ m.field_error(errors, 'coa_port') }}</div>
+    <div><label for="coa_identify">Name the session by</label>
+      <select id="coa_identify" name="coa_identify"{{ m.described(errors, 'coa_identify') }}{{ ro }}>
+        <option value="session-and-mac" {{ 'selected' if f.coa_identify == 'session-and-mac' }}>Accounting session id and MAC (RFC 5176)</option>
+        <option value="mac-then-session" {{ 'selected' if f.coa_identify == 'mac-then-session' }}>MAC only; session id when there is no MAC</option>
+      </select>
+      {{ m.field_error(errors, 'coa_identify') }}</div>
+  </div>
+  <label class="check"><input type="checkbox" name="coa_send_port" value="1" {{ 'checked' if f.coa_send_port }}{{ ro }}> Also send the port (NAS-Port-Id)</label>
+  {% for key, label in (('reauth', 'Re-authenticate'), ('bounce', 'Bounce port'), ('disconnect', 'Disconnect')) %}
+  <fieldset>
+    <legend>{{ label }}</legend>
+    <label for="coa_{{ key }}_packet" class="sr-only">{{ label }}: packet</label>
+    <select id="coa_{{ key }}_packet" name="coa_{{ key }}_packet"{{ ro }}>
+      <option value="" {{ 'selected' if not f['coa_' ~ key ~ '_packet'] }}>Not supported (not offered)</option>
+      <option value="coa" {{ 'selected' if f['coa_' ~ key ~ '_packet'] == 'coa' }}>CoA-Request</option>
+      <option value="disconnect" {{ 'selected' if f['coa_' ~ key ~ '_packet'] == 'disconnect' }}>Disconnect-Request</option>
+    </select>
+    <label for="coa_{{ key }}_attrs">Extra attributes, one <span class="mono">Attribute = value</span> per line</label>
+    <textarea id="coa_{{ key }}_attrs" name="coa_{{ key }}_attrs" rows="2" class="mono" spellcheck="false"{{ m.described(errors, 'coa_' ~ key) }}{{ ro }}>{{ f['coa_' ~ key ~ '_attrs'] }}</textarea>
+    {{ m.field_error(errors, 'coa_' ~ key) }}
+  </fieldset>
+  {% endfor %}
+
+  <h2>Port names</h2>
+  <label for="port_rules">SNMP interface name → port name in RADIUS</label>
+  <textarea id="port_rules" name="port_rules" rows="3" class="mono" spellcheck="false"{{ m.described(errors, 'port_rules', True) }}{{ ro }}>{{ f.port_rules }}</textarea>
+  <p id="port_rules-hint" class="small muted">One rule per line, <span class="mono">regular-expression =&gt; format</span>, optionally followed by <span class="mono">(ignore case)</span>. The first rule matching the whole interface name renames it; <span class="mono">{1}</span>, <span class="mono">{1:lower}</span>, <span class="mono">{1:upper}</span> insert a group. Example: <span class="mono">(gi|te)([0-9]+) =&gt; {1:lower}1/0/{2} (ignore case)</span>. Empty: names are used as reported.</p>
+  {{ m.field_error(errors, 'port_rules') }}
+
+  <h2>Setup commands shown in the portal</h2>
+  <label for="setup_accounting">Turn on RADIUS accounting <span class="muted">(optional)</span></label>
+  <textarea id="setup_accounting" name="setup_accounting" rows="2" class="mono" spellcheck="false"{{ m.described(errors, 'setup_accounting') }}{{ ro }}>{{ f.setup_accounting }}</textarea>
+  {{ m.field_error(errors, 'setup_accounting') }}
+  <label for="setup_coa">Turn on dynamic authorization (session actions) <span class="muted">(optional)</span></label>
+  <textarea id="setup_coa" name="setup_coa" rows="3" class="mono" spellcheck="false"{{ m.described(errors, 'setup_coa') }}{{ ro }}>{{ f.setup_coa }}</textarea>
+  {{ m.field_error(errors, 'setup_coa') }}
+
+  {% if editable %}
+  {% if need_stepup %}
+  <fieldset class="stepup-inline"><legend>Confirm it's you</legend>
+    {% with pfx = 'stepup_' %}{% include "auth/_stepup_fields.html" %}{% endwith %}
+  </fieldset>
+  {% endif %}
+  <div class="actions"><button type="submit" class="btn btn-primary">{{ 'Create profile' if is_new else 'Save profile' }}</button>
+  <a class="btn btn-quiet" href="{{ url_for('profiles.index') }}">Cancel</a></div>
+  {% else %}
+  <div class="actions"><a class="btn btn-quiet" href="{{ url_for('profiles.index') }}">Back to profiles</a></div>
+  {% endif %}
+</form>
+</section>
+{% endblock %}

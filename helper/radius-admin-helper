@@ -264,7 +264,7 @@ POLICY_FORBIDDEN = [
 _CLIENT_OPEN = re.compile(r"^client[ \t]+([A-Za-z0-9._-]{1,63})[ \t]*\{$")
 _PAIR = re.compile(r"^([a-z_0-9]+)[ \t]*=[ \t]*(.*?)$")
 _CLIENT_KEYS = {"ipaddr", "ipv4addr", "ipv6addr", "secret", "shortname", "nas_type",
-                "require_message_authenticator", "limit_proxy_state"}
+                "require_message_authenticator", "limit_proxy_state", "radius_admin_profile"}
 _YNA = {"yes", "no", "auto"}
 
 
@@ -334,6 +334,11 @@ def _check_client_value(key, raw, lineno):
         if not re.match(r"^[A-Za-z0-9_-]{1,32}$", v):
             raise HelperError("clients line %d: invalid nas_type" % lineno)
         return
+    if key == "radius_admin_profile":
+        # vendor profile id (SPEC section 26), read by the policy as %{client:radius_admin_profile}
+        if quoted or not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,31}", v):
+            raise HelperError("clients line %d: invalid radius_admin_profile" % lineno)
+        return
     if key in ("require_message_authenticator", "limit_proxy_state"):
         if v not in _YNA:
             raise HelperError("clients line %d: %s must be yes, no or auto" % (lineno, key))
@@ -348,7 +353,7 @@ _ADDR_KEYS = {"ipaddr", "ipv4addr", "ipv6addr"}
 # name the site certificate files that mods-available/eap uses.
 RADSEC_SECTION = "radius_admin_radsec"
 _TLS_CLIENT_KEYS = {"ipaddr", "ipv4addr", "ipv6addr", "proto", "secret", "shortname", "nas_type",
-                    "radsec_peer_name"}
+                    "radsec_peer_name", "radius_admin_profile"}
 _PEER_NAME = re.compile(r'^"[A-Za-z0-9*][A-Za-z0-9 ._*-]{0,252}"$|^""$')
 _OCSP_URL = re.compile(r'^"https?://[A-Za-z0-9.-]{1,253}(:[0-9]{1,5})?(/[A-Za-z0-9._~/-]{0,200})?"$')
 

@@ -5,6 +5,41 @@ Each release has a section here. `main` builds are the stable releases (`0.2.0`)
 show the "Unreleased" section plus their commits. Bump `VERSION` on `dev` right after a
 release, so previews sort after it.
 
+## 0.2.4 - 2026-11-19
+
+### Added
+- **Vendor profiles.** Each RADIUS client has a device profile that decides the reply
+  attributes for the VLAN, full admin rights and an optional role, the MAB port types, the CoA
+  port, attributes and session naming, and the SNMP port-name rules. Built-in profiles:
+  `cisco-c1300` (the default; output unchanged from 0.2.3) and `generic-rfc` (RFC 3580 VLAN,
+  Filter-Id role, Service-Type admin rights, MAB from wired ports and access points, Disconnect
+  on UDP 3799).
+- **Device profiles** pages (admins, with step-up): list, view, create by copying, edit, delete
+  (refused while in use), JSON export and import, and a dictionary check of attribute names.
+  Settings has a default device profile; the RADIUS client CSV import takes an optional
+  `vendor_profile` column.
+- A role per access rule, sent with the role attributes of the client's profile, and MAB from
+  wireless access points for profiles that allow it.
+- A CoA port per RADIUS client. A CoA port changed under the old single setting is copied to
+  the existing clients once.
+
+### Changed
+- The Administration group in the side panel is replaced by a single **Settings** button at the
+  bottom of the panel (admins only; it carries the update badge). It opens an overview of the
+  settings pages by category: RADIUS and switches, Console access, Notifications (alert
+  settings, previously reachable only from the Alerts page) and Maintenance.
+- The Sessions page offers only the actions the session's device supports.
+
+### Fixed
+- Form fields carried `aria-describedby` twice, so screen readers lost the error message of an
+  invalid field.
+
+### Security
+- nginx security floor: preflight warns when nginx is older than `1.24.0-2ubuntu7.20` (Ubuntu's
+  fix for the HTTP/2 and TLS 1.3 vulnerabilities of 2026-11-18, CVE-2026-123007,
+  CVE-2026-123633, CVE-2026-118899), and the new installer phase `nginx-update`, which updates
+  also run when needed, upgrades nginx from the package mirror and restarts it.
+
 ## 0.2.3 - 2026-11-19
 
 ### Added

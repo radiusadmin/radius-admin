@@ -3,6 +3,7 @@ import ipaddress
 
 from flask import Blueprint, g, redirect, render_template, request, url_for
 
+from .. import vendors
 from ..crypto import sha256_hex
 from ..flashing import flash
 from ..security import SESSION_LIMITS, cfg, role_required, stepup_required
@@ -32,6 +33,9 @@ def index():
             else:
                 limits[k] = int(v)
         subnet = request.form.get("admin_subnet", "").strip()
+        default_profile = request.form.get("default_vendor_profile", s["default_vendor_profile"])
+        if default_profile not in vendors.catalog():
+            errors["default_vendor_profile"] = "Choose a device profile from the list."
         priv15 = form_bool("admin_priv15")
         ttls = form_bool("dot1x_ttls")
         ttls_dir = form_bool("dot1x_ttls_directory")
@@ -57,6 +61,10 @@ def index():
             if subnet != s["admin_subnet"]:
                 set_setting("admin_subnet", subnet)
                 changed["admin_subnet"] = {"from": s["admin_subnet"], "to": subnet}
+            if default_profile != s["default_vendor_profile"]:
+                # rendered into the policy and the clients file: takes effect at the next Apply
+                set_setting("default_vendor_profile", default_profile)
+                changed["default_vendor_profile"] = {"from": s["default_vendor_profile"], "to": default_profile}
             if priv15 != s["admin_priv15"]:
                 set_setting("admin_priv15", "true" if priv15 else "false")
                 changed["admin_priv15"] = {"from": s["admin_priv15"], "to": priv15}
@@ -85,11 +93,12 @@ def index():
             ev("settings.update", object_type="setting", detail=changed)
             flash("Settings saved." if changed else "No changes.", "success" if changed else "info")
             return redirect(url_for("settings.index"))
-        s = dict(s, admin_subnet=subnet, admin_priv15=priv15, dot1x_ttls=ttls,
+        s = dict(s, admin_subnet=subnet, admin_priv15=priv15, dot1x_ttls=ttls, default_vendor_profile=default_profile,
                  dot1x_ttls_directory=ttls_dir, dot1x_peap=peap,
                  dot1x_peap_directory=peap_dir, banner_text=banner, display_timezone=zone,
                  limits=dict(s["limits"], **{k: request.form.get(k, "") for k in SESSION_LIMITS}))
-    return render_template("settings/index.html", s=s, errors=errors, zones=timezones()), (400 if errors else 200)
+    return render_template("settings/index.html", s=s, errors=errors, zones=timezones(),
+                           vendor_choices=vendors.choices(vendors.catalog())), (400 if errors else 200)
 
 
 @bp.route("/custom-policy", methods=["GET", "POST"])
@@ -142,3 +151,10 @@ def policy_preview():
     except Exception as e:
         policy, error = None, str(e)
     return render_template("settings/preview.html", policy=policy, error=error)
+
+
+@bp.route("/settings/overview")
+@role_required("admin")
+def overview():
+    """The page behind the Settings button: every admin settings page, by category."""
+    return render_template("settings/overview.html")

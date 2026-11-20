@@ -13,6 +13,12 @@ RA_PG_VERSION=${RA_PG_VERSION:-16}
 RA_PG_CLUSTER=${RA_PG_CLUSTER:-main}
 # interpreter for the app/CLI (Ubuntu 24.04: /usr/bin/python3 = 3.12, matches apt modules)
 RA_PYTHON=${RA_PYTHON:-/usr/bin/python3}
+# Oldest nginx package that carries the security fixes relevant to the portal's site
+# (deploy/nginx/radius-admin.conf). 2026-11-18, nginx 1.30.7/1.31.9 release: HTTP/2
+# CVE-2026-123007 and CVE-2026-123633, TLS 1.3 CVE-2026-118899; Ubuntu 24.04 fixed them in
+# 1.24.0-2ubuntu7.20 (USN-9159-1). Raise this when a later nginx advisory affects the site:
+# preflight then warns and the installer's nginx-update phase (and update.sh) upgrades nginx.
+RA_NGINX_MIN_VERSION=${RA_NGINX_MIN_VERSION:-1.24.0-2ubuntu7.20}
 
 if [[ -t 1 ]]; then
     C_RED=$'\e[31m'; C_GRN=$'\e[32m'; C_YEL=$'\e[33m'; C_BLD=$'\e[1m'; C_OFF=$'\e[0m'
@@ -162,6 +168,27 @@ detect_resolvers() {
     fi
     r=${r%% }
     [[ -n $r ]] && printf '%s\n' "$r"
+}
+
+# Installed nginx package version (empty + status 1 if nginx is not installed).
+nginx_installed_version() {
+    local s
+    s=$(dpkg-query -W -f='${Status} ${Version}' nginx 2>/dev/null || true)
+    [[ $s == "install ok installed "* ]] || return 1
+    printf '%s\n' "${s##* }"
+}
+
+# nginx version apt would install from the configured mirror (empty + status 1 if none).
+nginx_candidate_version() {
+    local c
+    c=$(apt-cache policy nginx 2>/dev/null | awk '/Candidate:/ {print $2}' || true)
+    [[ -n $c && $c != "(none)" ]] || return 1
+    printf '%s\n' "$c"
+}
+
+# nginx_version_ok VERSION: true if that nginx package version is RA_NGINX_MIN_VERSION or later.
+nginx_version_ok() {
+    [[ -n ${1:-} ]] && dpkg --compare-versions "$1" ge "$RA_NGINX_MIN_VERSION"
 }
 
 # Which host firewall is in charge: ufw | nftables | iptables | none

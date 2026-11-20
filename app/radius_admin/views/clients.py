@@ -4,7 +4,7 @@ import psycopg2.errors
 from flask import Blueprint, Response, abort, current_app, g, redirect, render_template, request, url_for
 
 from .. import client_import as ci
-from .. import db
+from .. import db, vendors
 from ..crypto import generate_radius_secret
 from ..flashing import flash
 from ..listnav import list_url
@@ -16,6 +16,21 @@ from .auth import inline_stepup
 from .sessions import AUTH_JOIN
 
 bp = Blueprint("clients", __name__, url_prefix="/clients")
+
+
+@bp.context_processor
+def _vendor_ctx():
+    """Vendor profiles for the client pages (SPEC section 26)."""
+    default_id = get_settings()["default_vendor_profile"]
+    cat = vendors.catalog()
+
+    def vendor_profile(pid):
+        try:
+            return vendors.resolve(pid, default_id, cat)
+        except vendors.ProfileError:
+            return None
+    return {"vendor_choices": vendors.choices(cat), "default_profile": vendors.resolve(None, default_id, cat),
+            "vendor_profile": vendor_profile}
 
 
 def _radsec_settings():
@@ -45,6 +60,7 @@ def _get(cid):
 
 LIST_COLS = ("c.id, c.name, c.ipaddr, c.require_ma, c.limit_proxy_state, c.nas_type, c.description, c.enabled,"
              " c.updated_at, c.key_status, c.key_scope, c.dot1x_ports, c.is_switch, c.transport, c.radsec_peer_name,"
+             " c.vendor_profile, c.coa_port,"
              " s.polled_at AS snmp_polled_at, s.reachable AS snmp_reachable, s.error AS snmp_error,"
              " s.sys_name AS snmp_sys_name, s.sys_descr AS snmp_sys_descr, s.dot1x_supported AS snmp_dot1x_supported,"
              " s.dot1x_ports AS snmp_dot1x_ports, s.radius_servers AS snmp_radius_servers")
@@ -81,7 +97,16 @@ def _parse_form(existing=None):
         "dot1x_ports": form_str("dot1x_ports", maxlen=2000),
         "transport": form_str("transport") or "udp",
         "radsec_peer_name": form_str("radsec_peer_name", maxlen=300),
+        "vendor_profile": form_str("vendor_profile", maxlen=32) or None,
+        "coa_port": form_str("coa_port", maxlen=5) or None,
     }
+    if data["vendor_profile"] is not None and data["vendor_profile"] not in vendors.catalog():
+        errors["vendor_profile"] = "Choose a device profile from the list."
+    if data["coa_port"] is not None:
+        if data["coa_port"].isascii() and data["coa_port"].isdigit() and 1 <= int(data["coa_port"]) <= 65535:
+            data["coa_port"] = int(data["coa_port"])
+        else:
+            errors["coa_port"] = "Enter a UDP port from 1 to 65535, or leave it empty for the profile's port."
     if data["transport"] not in TRANSPORTS:
         errors["transport"] = "Choose UDP or RadSec."
     secret_mode = request.form.get("secret_mode", "keep" if existing else "generate")
@@ -168,17 +193,18 @@ def new():
             row = db.execute_returning(
                 "INSERT INTO ui.radius_client (name, ipaddr, secret, require_ma, limit_proxy_state,"
                 " nas_type, description, enabled, key_status, key_scope, dot1x_ports, is_switch,"
-                " transport, radsec_peer_name)"
-                " VALUES (%s,%s,%s,%s,%s,%s,%s,%s,'ok',%s,%s,%s,%s,%s) RETURNING id",
+                " transport, radsec_peer_name, vendor_profile, coa_port)"
+                " VALUES (%s,%s,%s,%s,%s,%s,%s,%s,'ok',%s,%s,%s,%s,%s,%s,%s) RETURNING id",
                 (data["name"], data["ipaddr"], data["secret"] or "", data["require_ma"],
                  data["limit_proxy_state"], data["nas_type"], data["description"], data["enabled"],
                  data["key_scope"], data["dot1x_ports"], data["is_switch"], data["transport"],
-                 data["radsec_peer_name"]))
+                 data["radsec_peer_name"], data["vendor_profile"], data["coa_port"]))
             ev("client.create", object_type="radius_client", object_id=row["id"],
                detail={"name": data["name"], "ipaddr": data["ipaddr"], "require_ma": data["require_ma"],
                        "limit_proxy_state": data["limit_proxy_state"], "nas_type": data["nas_type"],
                        "enabled": data["enabled"], "secret_mode": mode, "transport": data["transport"],
-                       "radsec_peer_name": data["radsec_peer_name"]})
+                       "radsec_peer_name": data["radsec_peer_name"], "vendor_profile": data["vendor_profile"],
+                       "coa_port": data["coa_port"]})
             if mode == "generate":
                 # The creator needs the generated secret once to configure the NAS.
                 flash("Client %s added. Apply changes to make it live." % data["name"], "success")
@@ -214,11 +240,11 @@ def edit(cid):
                         "UPDATE ui.radius_client SET name=%s, ipaddr=%s, secret=%s, require_ma=%s,"
                         " limit_proxy_state=%s, nas_type=%s, description=%s, enabled=%s, key_status=%s,"
                         " key_scope=%s, dot1x_ports=%s, is_switch=%s, transport=%s, radsec_peer_name=%s,"
-                        " updated_at=now() WHERE id=%s",
+                        " vendor_profile=%s, coa_port=%s, updated_at=now() WHERE id=%s",
                         (data["name"], data["ipaddr"], secret, data["require_ma"], data["limit_proxy_state"],
                          data["nas_type"], data["description"], data["enabled"], data["key_status"],
                          data["key_scope"], data["dot1x_ports"], data["is_switch"], data["transport"],
-                         data["radsec_peer_name"], cid))
+                         data["radsec_peer_name"], data["vendor_profile"], data["coa_port"], cid))
                     cur.execute("RELEASE SAVEPOINT client_edit")
             except psycopg2.errors.CheckViolation:
                 db.execute("ROLLBACK TO SAVEPOINT client_edit")
@@ -228,7 +254,7 @@ def edit(cid):
                                        tristate=TRISTATE, nas_types=NAS_TYPES, key_labels=KEY_LABELS), 400
             changed = {k: data[k] for k in ("name", "ipaddr", "require_ma", "limit_proxy_state", "nas_type",
                                              "description", "enabled", "key_status", "key_scope", "dot1x_ports", "is_switch",
-                                             "transport", "radsec_peer_name")
+                                             "transport", "radsec_peer_name", "vendor_profile", "coa_port")
                        if data[k] != existing[k]}
             ev("client.update", object_type="radius_client", object_id=cid,
                detail={"name": data["name"], "changed": changed,
@@ -258,9 +284,14 @@ def _port_rows(client, status):
     rows = db.query("SELECT a.nasportid, pa.vlan FROM radacct a" + AUTH_JOIN +
                     " WHERE a.acctstoptime IS NULL AND a.nasportid IS NOT NULL AND a.nasipaddress <<= %s::inet"
                     " ORDER BY a.acctstarttime NULLS FIRST, a.radacctid", (str(client["ipaddr"]),))
+    try:
+        profile = vendors.resolve(client.get("vendor_profile"), get_settings()["default_vendor_profile"],
+                                  vendors.catalog())
+    except vendors.ProfileError:
+        profile = None
     for r in rows:          # oldest first: the newest session on a port wins
         if r["vlan"]:
-            in_use[cli_port_name(r["nasportid"]).lower()] = r["vlan"]
+            in_use[cli_port_name(r["nasportid"], profile).lower()] = r["vlan"]
     out = []
     for p in ports:
         p = dict(p)
@@ -379,14 +410,14 @@ def _import_options(form):
 
 
 def _existing_clients():
-    return db.query("SELECT id, name, ipaddr, secret, enabled, key_status, key_scope, dot1x_ports, is_switch"
+    return db.query("SELECT id, name, ipaddr, secret, enabled, key_status, key_scope, dot1x_ports, is_switch, vendor_profile"
                     " FROM ui.radius_client ORDER BY id")
 
 
 def _build_plan(text, opts, with_mode=False):
     """Parse + plan. Returns (items, errors) or, with_mode, (items, errors, header_found)."""
     try:
-        rows = ci.parse_csv(text, unlang())
+        rows = ci.parse_csv(text, unlang(), vendors.catalog())
     except ci.ImportError_ as e:
         return (None, e.errors, None) if with_mode else (None, e.errors)
     items, errors = ci.plan(rows, _existing_clients(), opts["existing"] == "update", opts["require_ma"],
@@ -475,20 +506,23 @@ def import_confirm():
                 if it["action"] == "new":
                     cur.execute(
                         "INSERT INTO ui.radius_client (name, ipaddr, secret, require_ma, nas_type, enabled,"
-                        " key_status, key_scope, dot1x_ports, is_switch) VALUES (%s,%s,%s,%s,'other',%s,%s,%s,%s,%s)",
+                        " key_status, key_scope, dot1x_ports, is_switch, vendor_profile)"
+                        " VALUES (%s,%s,%s,%s,'other',%s,%s,%s,%s,%s,%s)",
                         (it["hostname"], it["ip"], it["secret"] or "", it["require_ma"], it["enabled"],
-                         it["key_status"], it["key_scope"], it["dot1x_ports"], it["is_switch"]))
+                         it["key_status"], it["key_scope"], it["dot1x_ports"], it["is_switch"], it.get("vendor_profile")))
                     created.append(it["hostname"])
                 elif it["action"] == "update":
                     if it["secret"] is not None:
                         cur.execute("UPDATE ui.radius_client SET name=%s, ipaddr=%s, key_scope=%s, dot1x_ports=%s,"
-                                    " is_switch=%s, secret=%s, key_status='ok', updated_at=now() WHERE id=%s",
+                                    " is_switch=%s, vendor_profile=%s, secret=%s, key_status='ok', updated_at=now()"
+                                    " WHERE id=%s",
                                     (it["hostname"], it["ip"], it["key_scope"], it["dot1x_ports"], it["is_switch"],
-                                     it["secret"], it["id"]))
+                                     it.get("vendor_profile"), it["secret"], it["id"]))
                     else:
                         cur.execute("UPDATE ui.radius_client SET name=%s, ipaddr=%s, key_scope=%s, dot1x_ports=%s,"
-                                    " is_switch=%s, updated_at=now() WHERE id=%s",
-                                    (it["hostname"], it["ip"], it["key_scope"], it["dot1x_ports"], it["is_switch"], it["id"]))
+                                    " is_switch=%s, vendor_profile=%s, updated_at=now() WHERE id=%s",
+                                    (it["hostname"], it["ip"], it["key_scope"], it["dot1x_ports"], it["is_switch"],
+                                     it.get("vendor_profile"), it["id"]))
                     updated.append(it["hostname"])
             cur.execute("RELEASE SAVEPOINT client_import")
     except psycopg2.Error as e:

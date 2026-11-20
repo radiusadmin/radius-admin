@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}Settings{% endblock %}
+{% block content %}
+<header class="page-head"><div><h1>Settings</h1>
+<p class="lede">Settings for this server and console, by category.</p></div></header>
+<div class="settings-groups">
+  <section class="panel" aria-labelledby="sg-radius">
+    <h2 id="sg-radius">RADIUS and switches</h2>
+    <ul class="settings-links">
+      <li><a href="{{ url_for('settings.index') }}">General settings</a>
+        <p class="small muted">Management subnet and privilege for switch admin logins, 802.1X with a username and password.</p></li>
+    </ul>
+  </section>
+  <section class="panel" aria-labelledby="sg-console">
+    <h2 id="sg-console">Console access</h2>
+    <ul class="settings-links">
+      <li><a href="{{ url_for('admins.index') }}">UI admins</a>
+        <p class="small muted">Accounts that sign in to this console, their roles, MFA and password resets.</p></li>
+      <li><a href="{{ url_for('sso.settings') }}">Single sign-on</a>
+        <p class="small muted">SAML identity provider and the directory groups that map to console roles.</p></li>
+      <li><a href="{{ url_for('settings.index') }}">Sign-in notice, sessions and time zone</a>
+        <p class="small muted">Notice and consent text, sign-out and re-confirmation times, and the time zone pages show. Part of General settings.</p></li>
+    </ul>
+  </section>
+  <section class="panel" aria-labelledby="sg-notify">
+    <h2 id="sg-notify">Notifications</h2>
+    <ul class="settings-links">
+      <li><a href="{{ url_for('alerts.settings') }}">Alert notifications</a>
+        <p class="small muted">Syslog and email delivery, SMTP server, and the conditions that raise an alert.</p></li>
+    </ul>
+  </section>
+  <section class="panel" aria-labelledby="sg-maint">
+    <h2 id="sg-maint">Maintenance</h2>
+    <ul class="settings-links">
+      <li><a href="{{ url_for('updates.index') }}">Updates</a>{% if nav_counts and nav_counts.update_version %} <span class="tag">Update available: {{ nav_counts.update_version }}</span>{% endif %}
+        <p class="small muted">Check for, verify and install signed releases.</p></li>
+      <li><a href="{{ url_for('setup.index') }}">Setup checklist</a>
+        <p class="small muted">The steps that get a new server ready, with their status.</p></li>
+    </ul>
+  </section>
+</div>
+{% endblock %}

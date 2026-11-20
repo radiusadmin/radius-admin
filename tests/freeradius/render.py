@@ -9,7 +9,7 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "..", "app"))
-from radius_admin import unlang  # noqa: E402
+from radius_admin import unlang, vendors  # noqa: E402
 
 SEED_RULES = [  # (id, priority, connection, ssid, ad_group, vlan) - SPEC section 8
     (1, 10, "wired", None, "Wired-Support", 510),
@@ -26,6 +26,20 @@ TEST_CLIENTS = [
     # A switch registered OUTSIDE the admin subnet, to prove the subnet check.
     ("sw-outside-10", "198.51.100.10", "TestSwitchOutSecret01234567", "auto"),
 ]
+# A device with the Generic RFC vendor profile (SPEC section 26): the clients file names it
+# with radius_admin_profile and the policy branches on %{client:radius_admin_profile}.
+# Any 127/8 address works on loopback without an alias.
+GENERIC_CLIENT = dict(name="sw-generic", ipaddr="127.0.0.2", secret="TestGenericSecret0123456789",
+                      require_ma="auto", limit_proxy_state="auto", nas_type="other", enabled=True,
+                      vendor_profile="generic-rfc")
+# A custom profile as the portal stores it (SPEC section 26), with vendor-specific attributes:
+# they must pass radiusd -XC and reach the reply. Bench-only test data, not a supported profile.
+CUSTOM_PROFILE = dict(vendors.builtin("generic-rfc"), id="test-vsa", label="Bench VSA profile", status="unverified",
+                      reply={"vlan": vendors.builtin("generic-rfc")["reply"]["vlan"],
+                             "admin_full": [{"attr": "Aruba-Admin-Role", "op": ":=", "value": "root"}],
+                             "role": [{"attr": "Aruba-User-Role", "op": ":=", "value": "{role}"}]})
+CUSTOM_CLIENT = dict(GENERIC_CLIENT, name="sw-custom", ipaddr="127.0.0.3", secret="TestCustomSecret01234567890",
+                     vendor_profile="test-vsa")
 # RadSec: an access point at 127.0.0.1 (radsecproxy in the bench) that must present the
 # certificate named pc1.example.net; revocation checked against the bench OCSP responder.
 RADSEC_CLIENT = dict(name="ap-radsec", ipaddr="127.0.0.1", transport="radsec",
@@ -38,9 +52,9 @@ def main():
     clients = [dict(name=n, ipaddr=a, secret=s, require_ma=m, limit_proxy_state="auto",
                     nas_type="other", enabled=True) for n, a, s, m in TEST_CLIENTS]
     with open(pos[0], "w") as fh:
-        fh.write(unlang.render_policy(""))
+        fh.write(unlang.render_policy("", vendors.default(), [vendors.builtin("generic-rfc"), CUSTOM_PROFILE]))
     with open(pos[1], "w") as fh:
-        fh.write(unlang.render_clients(clients + [RADSEC_CLIENT], RADSEC))
+        fh.write(unlang.render_clients(clients + [GENERIC_CLIENT, CUSTOM_CLIENT, RADSEC_CLIENT], RADSEC))
 
 
 if __name__ == "__main__":

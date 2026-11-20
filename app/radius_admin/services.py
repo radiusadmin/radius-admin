@@ -8,7 +8,7 @@ import zoneinfo
 
 from flask import current_app, g
 
-from . import db
+from . import db, vendors
 from .crypto import sha256_hex
 
 SETTING_KEYS = ("admin_subnet", "admin_priv15", "custom_policy", "banner_text", "mab_default_vlan",
@@ -19,7 +19,7 @@ SETTING_KEYS = ("admin_subnet", "admin_priv15", "custom_policy", "banner_text", 
                 "session_idle_minutes", "session_absolute_hours", "stepup_minutes",
                 "update_channel", "update_mode", "update_window_day", "update_window_hour",
                 "update_check_requested", "display_timezone", "dot1x_ttls",
-                "dot1x_ttls_directory", "dot1x_peap", "dot1x_peap_directory")
+                "dot1x_ttls_directory", "dot1x_peap", "dot1x_peap_directory", "default_vendor_profile")
 RADSEC_KEYS = ("enabled", "listen", "port", "max_connections", "idle_timeout", "ocsp", "ocsp_url")
 SAML_KEYS = ("enabled", "idp_metadata", "entity_id", "group_attribute", "name_attribute", "local_login")
 DEFAULT_BANNER = ("This system is for authorized use only. Activity on this system is "
@@ -37,7 +37,12 @@ def unlang():
 def get_settings(conn=None):
     rows = db.query("SELECT key, value FROM ui.setting", conn=conn)
     raw = {r["key"]: r["value"] for r in rows}
+    default_profile = raw.get("default_vendor_profile", "")
+    if default_profile not in vendors.builtin_ids() and default_profile not in vendors.custom_profiles(conn):
+        default_profile = vendors.DEFAULT_ID
     return {
+        # vendor profile of clients that do not name one (SPEC section 26)
+        "default_vendor_profile": default_profile,
         "admin_subnet": raw.get("admin_subnet", "192.0.2.0/24"),
         "admin_priv15": raw.get("admin_priv15", "false").lower() == "true",
         "custom_policy": raw.get("custom_policy", ""),
@@ -142,9 +147,9 @@ def set_setting(key, value, conn=None):
 
 
 # --------------------------------------------------------------- rendering
-RULE_COLS = "id, priority, connection, ssid, ad_group, vlan, enabled, description"
+RULE_COLS = "id, priority, connection, ssid, ad_group, vlan, enabled, description, role"
 CLIENT_COLS = ("id, name, ipaddr, secret, require_ma, limit_proxy_state, nas_type, enabled, description,"
-               " key_status, transport, radsec_peer_name")
+               " key_status, transport, radsec_peer_name, vendor_profile")
 
 
 def load_rules(conn=None):
@@ -159,18 +164,29 @@ def render_all(conn=None):
     """Return (policy_text, clients_text) rendered from the current DB state.
 
     SPEC section 10: access rules and settings are evaluated live by FreeRADIUS through
-    SQL functions, so the policy file depends only on the custom policy body.
+    SQL functions, so the policy file depends only on the custom policy body and on the
+    vendor profiles in use (SPEC section 26).
     """
     u = unlang()
     settings = get_settings(conn)
+    default_id = settings["default_vendor_profile"]
+    cat = vendors.catalog(conn)
     clients = [dict(c) for c in load_clients(conn)]
+    others = {}
     for c in clients:
         # SPEC section 11: a client without a usable plaintext key is never rendered
         # (the DB CHECK already forbids enabling it; this is belt and braces).
         if c.get("key_status", "ok") != "ok":
             c["enabled"] = False
         c.pop("key_status", None)
-    return u.render_policy(settings["custom_policy"]), u.render_clients(clients, settings["radsec"])
+        pid = c.get("vendor_profile")
+        if c["enabled"] and pid and pid != default_id and pid not in others:
+            if pid not in cat:
+                raise u.PolicyInputError("Client %s uses vendor profile %s, which this server does not have."
+                                         % (c["name"], pid))
+            others[pid] = cat[pid]
+    return (u.render_policy(settings["custom_policy"], cat[default_id], list(others.values())),
+            u.render_clients(clients, settings["radsec"], default_id))
 
 
 LIVE_POLICY_MARKERS = ("radius_admin_vlan_hex(", "radius_admin_vlan_rule_hex(")

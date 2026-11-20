@@ -366,7 +366,7 @@ def test_monitor_sends_coa_with_radclient(app, superconn):
     sw = FakeSwitch("Plaintext-Key-0001-abcdef")
     try:
         cid = _client(superconn, ip="127.0.0.1")
-        q(superconn, "UPDATE ui.snmp_profile SET coa_port = %s", (sw.port,))
+        q(superconn, "UPDATE ui.radius_client SET coa_port = %s", (sw.port,))   # per client (SPEC section 26)
         for action in ("reauth", "disconnect"):
             q(superconn, "INSERT INTO ui.coa_request (client_id, action, acct_session_id, calling_station_id, nas_ip,"
                          " nas_port_id, username, requested_by) VALUES (%s, %s, '0000002A', 'AA-BB-CC-00-00-01',"
@@ -423,7 +423,7 @@ def test_monitor_coa_reaches_a_switch_that_matches_by_mac(app, superconn):
     sw = FakeSwitch("Plaintext-Key-0001-abcdef", match_by_mac=True)
     try:
         cid = _client(superconn, ip="127.0.0.1")
-        q(superconn, "UPDATE ui.snmp_profile SET coa_port = %s", (sw.port,))
+        q(superconn, "UPDATE ui.radius_client SET coa_port = %s", (sw.port,))   # per client (SPEC section 26)
         for action in ("reauth", "bounce", "disconnect"):
             q(superconn, "INSERT INTO ui.coa_request (client_id, action, acct_session_id, calling_station_id, nas_ip,"
                          " nas_port_id, username, requested_by) VALUES (%s, %s, '0000002B', 'AA-BB-CC-00-00-02',"
