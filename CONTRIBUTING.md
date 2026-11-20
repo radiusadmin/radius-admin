@@ -4,16 +4,19 @@ Thank you for helping. Bug reports, fixes, vendor profiles and documentation are
 
 ## Licence and the CLA
 
-radius-admin is licensed under the GNU Affero General Public License, version 3 or later
-([LICENSE](LICENSE)). Copyright is held by Collin Linde.
+radius-admin is source available under the Business Source License 1.1 ([LICENSE](LICENSE);
+plain-language summary in [LICENSING.md](LICENSING.md)). Each version becomes available under
+the GNU Affero General Public License, version 3 or later, four years after it is published.
+Versions up to 0.2.5 are under the GNU AGPL. Copyright is held by Collin Linde.
 
 Before a contribution can be merged, its author must accept the
 [Contributor License Agreement](CLA.md). You keep the copyright in your work; the CLA lets the
 project offer its code under other terms as well (for example a commercial licence), while
-everything that is merged also stays available under the open-source licence. To accept it,
+everything that is merged is also published under the project's public licence and becomes
+open source on the Change Date. To accept it,
 tick the box in the pull request template and include this sentence in the pull request:
 
-> I have read CLA.md (version 1.0) and I agree to it for my contributions to radius-admin.
+> I have read CLA.md (version 1.1) and I agree to it for my contributions to radius-admin.
 
 If you contribute as part of your job, make sure your employer agrees (CLA section 5), and
 name the organization in the pull request.
