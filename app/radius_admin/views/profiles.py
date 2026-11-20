@@ -24,10 +24,12 @@ BOOL_FIELDS = ("mab_ethernet", "mab_wireless", "coa_send_port")
 
 
 def _usage():
-    """{profile id: number of clients naming it}, and the default profile's id."""
-    rows = db.query("SELECT vendor_profile AS id, count(*) AS n FROM ui.radius_client"
-                    " WHERE vendor_profile IS NOT NULL GROUP BY vendor_profile")
-    return {r["id"]: r["n"] for r in rows}, get_settings()["default_vendor_profile"]
+    """{profile id: number of clients using it}, and the default profile's id. A client that
+    names no profile uses the default one, so it counts for the default."""
+    default_id = get_settings()["default_vendor_profile"]
+    rows = db.query("SELECT coalesce(vendor_profile, %s) AS id, count(*) AS n FROM ui.radius_client"
+                    " GROUP BY 1", (default_id,))
+    return {r["id"]: r["n"] for r in rows}, default_id
 
 
 def _get(pid):

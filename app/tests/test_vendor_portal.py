@@ -73,6 +73,31 @@ def test_list_and_builtin_profiles_are_read_only(app, browser, superconn, logged
         assert browser.get(path).status_code == 403
 
 
+def _used(text, pid):
+    """The "N clients" cell of a profile's row on the list page."""
+    return int(re.search(r'href="/profiles/%s".*?<td>(\d+) clients?' % pid, text, re.S).group(1))
+
+
+def test_clients_on_the_default_profile_count_as_using_it(app, browser, superconn, logged_in):
+    """A client that names no profile uses the default one, and is counted for it."""
+    logged_in("viewer")
+    _client(superconn, name="sw-default", ip="192.0.2.11")                      # no profile: the default
+    q(superconn, "UPDATE ui.radius_client SET vendor_profile = 'cisco-c1300' WHERE id = %s",
+      (_client(superconn, name="sw-named", ip="192.0.2.12"),))
+    q(superconn, "UPDATE ui.radius_client SET vendor_profile = 'generic-rfc' WHERE id = %s",
+      (_client(superconn, name="sw-generic", ip="192.0.2.13"),))
+    t = browser.text(browser.get("/profiles/"))
+    assert _used(t, "cisco-c1300") == 2 and _used(t, "generic-rfc") == 1
+    assert "used by 2 clients" in browser.text(browser.get("/profiles/cisco-c1300"))
+    q(superconn, "INSERT INTO ui.setting (key, value) VALUES ('default_vendor_profile', 'generic-rfc')")
+    try:
+        t = browser.text(browser.get("/profiles/"))
+        assert _used(t, "cisco-c1300") == 1 and _used(t, "generic-rfc") == 2
+        assert "used by 2 clients" in browser.text(browser.get("/profiles/generic-rfc"))
+    finally:
+        q(superconn, "DELETE FROM ui.setting WHERE key = 'default_vendor_profile'")
+
+
 # ----------------------------------------------------------------------- create, edit, delete
 def test_create_a_profile_by_copying(app, browser, superconn, logged_in, monkeypatch):
     from radius_admin.views import profiles
