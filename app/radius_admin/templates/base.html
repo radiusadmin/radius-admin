@@ -59,6 +59,7 @@
   <p class="nav-group">Network access</p>
   <ul>
     <li><a href="{{ url_for('clients.index') }}" {% if ep.startswith('clients.') %}aria-current="page"{% endif %}>RADIUS clients</a></li>
+    <li><a href="{{ url_for('profiles.index') }}" {% if ep.startswith('profiles.') %}aria-current="page"{% endif %}>Device profiles</a></li>
     <li><a href="{{ url_for('rules.index') }}" {% if ep.startswith('rules.') %}aria-current="page"{% endif %}>Access rules</a></li>
     <li><a href="{{ url_for('mab.index') }}" {% if ep.startswith('mab.') %}aria-current="page"{% endif %}>MAB devices{% if nav_counts and nav_counts.unknown_mab %}<span class="badge" title="Unknown devices waiting for approval">{{ nav_counts.unknown_mab }}<span class="sr-only"> unknown devices</span></span>{% endif %}</a></li>
     <li><a href="{{ url_for('dot1x_users.index') }}" {% if ep.startswith('dot1x_users.') %}aria-current="page"{% endif %}>802.1X users</a></li>

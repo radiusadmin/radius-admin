@@ -178,7 +178,7 @@ def test_monitor_closes_session_on_nak_from_a_switch(app, superconn):
     sw = FakeSwitch("Plaintext-Key-0001-abcdef", nak=True)
     try:
         cid = _client(superconn, ip="127.0.0.1")
-        q(superconn, "UPDATE ui.snmp_profile SET coa_port = %s", (sw.port,))
+        q(superconn, "UPDATE ui.radius_client SET coa_port = %s", (sw.port,))   # per client (SPEC section 26)
         sid = _acct(superconn, "AA-BB-CC-00-00-38", 5, 1, nas="127.0.0.1")
         q(superconn, "INSERT INTO ui.coa_request (client_id, action, calling_station_id, nas_ip, nas_port_id,"
                      " requested_by, radacct_id) VALUES (%s, 'disconnect', 'AA-BB-CC-00-00-38', '127.0.0.1',"

@@ -1,0 +1,70 @@
+name: Device profile problem
+description: A built-in device profile does not work as expected with your switch, access point or firewall.
+title: "Device profile: "
+labels: ["device-profile"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. Please do **not** paste shared secrets, passwords, certificates,
+        host names, IP addresses, account or group names, or other details of your network.
+        Replace them with placeholders such as `example.net` or `192.0.2.10`.
+  - type: input
+    id: profile
+    attributes:
+      label: Device profile
+      description: The profile id, as shown under Network access → Device profiles.
+      placeholder: generic-rfc
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: radius-admin version
+      description: Shown in the page footer and under Updates.
+      placeholder: 0.2.3
+    validations:
+      required: true
+  - type: input
+    id: device
+    attributes:
+      label: Device model and firmware
+      placeholder: Vendor, model, firmware version
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: What does not work?
+      multiple: true
+      options:
+        - VLAN assignment (802.1X or MAB)
+        - MAC authentication (MAB)
+        - Management (admin) login rights
+        - Role attribute
+        - Session actions (re-authenticate, bounce port, disconnect)
+        - Port names or SNMP monitoring
+        - Setup commands shown in the portal
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened, and what did you expect?
+      description: Include the device's error message if it shows one (for example a CoA-NAK Error-Cause, or a log line), with addresses and names replaced.
+    validations:
+      required: true
+  - type: textarea
+    id: attributes
+    attributes:
+      label: Attributes the device expects (optional)
+      description: If you know what the device needs instead, for example from its documentation, list the attributes and values.
+      render: text
+  - type: checkboxes
+    id: no-site-data
+    attributes:
+      label: Privacy
+      options:
+        - label: I removed secrets, host names, addresses and other details of my network from this report.
+          required: true

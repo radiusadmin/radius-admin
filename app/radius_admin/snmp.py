@@ -23,6 +23,8 @@ import shutil
 import subprocess
 import tempfile
 
+from . import vendors
+
 SNMPGET = "/usr/bin/snmpget"
 SNMPWALK = "/usr/bin/snmpbulkwalk"
 
@@ -166,16 +168,12 @@ def _int(v):
         return None
 
 
-_SHORT_IF_RE = re.compile(r"^(gi|te|fa|tw|fo|hu)(\d+)$", re.IGNORECASE)
-
-
-def cli_port_name(name):
-    """Standalone Catalyst 1300 switches report ifName 'gi4'; the CLI (and the CSV
-    export) call that port 'gi1/0/4'. Stack members already report 'te1/0/1'."""
-    m = _SHORT_IF_RE.match(name.strip())
-    if m:
-        return "%s1/0/%s" % (m.group(1).lower(), m.group(2))
-    return name.strip()
+def cli_port_name(name, profile=None):
+    """The port name the switch uses in its CLI and in NAS-Port-Id, from its SNMP ifName,
+    by the vendor profile's port-name rules (SPEC section 26). Example: standalone
+    Catalyst 1300 switches report ifName 'gi4' for the port the CLI (and the CSV export)
+    calls 'gi1/0/4'; stack members already report 'te1/0/1'."""
+    return vendors.port_name(profile or vendors.default(), name)
 
 
 def compress_ports(names):
@@ -207,7 +205,7 @@ def compress_ports(names):
     return ",".join(parts + loose)
 
 
-def build_status(system, port_control, if_names, radius_ext, radius_old):
+def build_status(system, port_control, if_names, radius_ext, radius_old, profile=None):
     """Turn raw walk results ({oid: value}) into the stored status dict."""
     st = {"sys_descr": system.get(OID_SYS_DESCR, "")[:500],
           "sys_name": system.get(OID_SYS_NAME, "")[:200],
@@ -222,7 +220,7 @@ def build_status(system, port_control, if_names, radius_ext, radius_old):
     auto = []
     for (idx,), v in sorted(ctl.items()):
         if _int(v) == 2:
-            auto.append(cli_port_name(names.get(idx, "if%d" % idx)))
+            auto.append(cli_port_name(names.get(idx, "if%d" % idx), profile))
     st["dot1x_ports"] = compress_ports(auto)
     st["dot1x_port_count"] = len(auto)
     servers = {}
@@ -256,7 +254,7 @@ def _octets_text(v):
     return (b or "").strip()
 
 
-def build_ports(port_control, if_names, pae, status, oper, users, bridge_if, pvid):
+def build_ports(port_control, if_names, pae, status, oper, users, bridge_if, pvid, profile=None):
     """Per-port 802.1X detail for the ports with port-control auto (the 802.1X ports).
     Every input is a raw walk result ({oid: value}); missing tables just leave fields None."""
     ctl = _children(port_control, OID_DOT1X_PORT_CONTROL)
@@ -285,7 +283,7 @@ def build_ports(port_control, if_names, pae, status, oper, users, bridge_if, pvi
         else:
             text = "unauthorized" if authorized is False else ""
         bport = if_bp.get(idx, idx)      # many switches number bridge ports like ifIndex
-        out.append({"ifindex": idx, "name": cli_port_name(names.get(idx, "if%d" % idx)),
+        out.append({"ifindex": idx, "name": cli_port_name(names.get(idx, "if%d" % idx), profile),
                     "authorized": authorized, "pae": pae_state, "state_text": text,
                     "oper": OPER.get(op) if op is not None else None,
                     "user": (user_v.get(idx) or "")[:253], "vlan": pvid_v.get(bport)})
@@ -364,7 +362,7 @@ class Session:
         return parse_output(p.stdout)
 
 
-def poll_switch(session, host):
+def poll_switch(session, host, profile=None):
     """Return a status dict; raises SnmpError when the switch does not answer."""
     system = session.run(SNMPGET, host, [OID_SYS_DESCR, OID_SYS_UPTIME, OID_SYS_NAME])
     if not system:
@@ -373,7 +371,7 @@ def poll_switch(session, host):
     names = session.run(SNMPWALK, host, [OID_IF_NAME]) if ctl else {}
     ext = session.run(SNMPWALK, host, [OID_RADIUS_EXT], hex_strings=True)
     old = {} if ext else session.run(SNMPWALK, host, [OID_RADIUS_OLD], hex_strings=True)
-    st = build_status(system, ctl, names, ext, old)
+    st = build_status(system, ctl, names, ext, old, profile)
     st["ports"] = []
     if st["dot1x_port_count"]:
         def walk(oid, hx=False):
@@ -383,7 +381,7 @@ def poll_switch(session, host):
                 return {}       # optional table (not every firmware has it)
         st["ports"] = build_ports(ctl, names, walk(OID_DOT1X_PAE_STATE), walk(OID_DOT1X_PORT_STATUS),
                                   walk(OID_IF_OPER), walk(OID_DOT1X_SESSION_USER, True),
-                                  walk(OID_BRIDGE_PORT_IF), walk(OID_PVID))
+                                  walk(OID_BRIDGE_PORT_IF), walk(OID_PVID), profile)
     return st
 
 

@@ -47,10 +47,7 @@
   <p class="small muted">When on, the 802.1X port list of a client is replaced by what its switch reports (every change is audited). When off, differences are only flagged in the client list.</p>
 
   <h2>Session actions</h2>
-  <label for="coa_port">Switch port for disconnect / re-authenticate (UDP)</label>
-  <input id="coa_port" name="coa_port" type="number" min="1" max="65535" value="{{ p.coa_port or 1700 }}" class="select-auto" aria-describedby="coa_port-hint"{{ m.described(errors, 'coa_port', True) }}>
-  <p id="coa_port-hint" class="small muted">Catalyst 1300 listens on UDP 1700 (RFC 5176 uses 3799). The switch needs <span class="mono">aaa server radius dynamic-author</span> with this server as client and the same shared key (RUNBOOK §6.4).</p>
-  {{ m.field_error(errors, 'coa_port') }}
+  <p class="small muted">Disconnect and re-authenticate go to each client's session-action port: the one set on its edit page, else its device profile's (Catalyst 1200/1300: UDP 1700; RFC 5176 devices: 3799). The device needs dynamic authorization with this server as client and the same shared key (RUNBOOK §6.4).</p>
   {% if p.updated_by %}<p class="small muted">Last changed by {{ p.updated_by }} {{ p.updated_at|dt }}.</p>{% endif %}
   <div class="actions"><button type="submit" class="btn btn-primary">Save</button></div>
 </form>

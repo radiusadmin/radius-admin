@@ -279,7 +279,7 @@ def superconn():
 RESET_TABLES = ("ui.session", "ui.password_history", "ui.login_attempt", "ui.apply_log", "ui.audit_log",
                 "ui.radius_client", "ui.access_rule", "ui.admin_user", "radcheck", "radusergroup", "radreply",
                 "mab_device", "ui.dot1x_user", "radpostauth", "radacct", "mab_pending", "ui.alert", "ui.coa_request",
-                "ui.sso_group_role", "ui.saml_request", "ui.saml_replay")
+                "ui.sso_group_role", "ui.saml_request", "ui.saml_replay", "ui.vendor_profile")
 
 
 @pytest.fixture

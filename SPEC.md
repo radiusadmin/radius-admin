@@ -300,13 +300,15 @@ content of `/etc/freeradius/policy.d/radius-admin`. It defines exactly these pol
   `control:Tmp-String-0 := <vlan>`, `control:Tmp-String-1 := "mab"`; not found → reject.
   Non-MAB requests: noop.
 - `radius_admin_postauth` (post-auth):
-  1. MAB (`control:Tmp-String-1 == "mab"`): reply Tunnel-Type := VLAN,
-     Tunnel-Medium-Type := IEEE-802, Tunnel-Private-Group-Id := control:Tmp-String-0.
+  1. MAB (`control:Tmp-String-1 == "mab"`): the vendor profile's VLAN reply attributes
+     (§26; Catalyst 1300: Tunnel-Type := VLAN, Tunnel-Medium-Type := IEEE-802,
+     Tunnel-Private-Group-Id := control:Tmp-String-0).
   2. Admin login (same condition as original: no EAP-Message, NAS-Port-Type absent or
      != Ethernet, no Called-Station-Id): accept only if `Packet-Src-IP-Address` is in
      `settings.admin_subnet` AND `SQL-Group == "net-admins"`; set
-     `control:Tmp-String-1 := "pap-admin"`; if `settings.admin_priv15` is true add
-     `reply:Cisco-AVPair += "shell:priv-lvl=15"`; else reject.
+     `control:Tmp-String-1 := "pap-admin"`; if `settings.admin_priv15` is true add the
+     vendor profile's full-admin reply attributes (§26; Catalyst 1300:
+     `reply:Cisco-AVPair += "shell:priv-lvl=15"`); else reject.
   3. EAP: reject if no `TLS-Client-Cert-Subject-Alt-Name-Dns`; set Tmp-String-1
      "eap-tls"; then rules: wired rules (connection=wired, NAS-Port-Type == Ethernet)
      and per-SSID wireless rules (`Called-Station-Id =~ /:<escaped ssid>$/`), each
@@ -326,8 +328,9 @@ Validators (raise ValueError with a human message):
 (≤ 64 KiB; reject `$INCLUDE`, `$-INCLUDE`, `$ENV`, `$TEMPLATE`, `exec` xlat, `Exec-Program`,
 backticks, `perl`, `python`; must have balanced braces).
 `render_clients(clients: list[dict]) -> str`: one `client <name> { ipaddr|ipv6addr = ..;
-secret = "<secret>"; shortname = <name>; nas_type = ..; require_message_authenticator = ..;
-limit_proxy_state = .. }` per enabled client, sorted by name, deterministic. Use
+secret = "<secret>"; shortname = <name>; nas_type = ..; [radius_admin_profile = <id>;]
+require_message_authenticator = ..; limit_proxy_state = .. }` per enabled client, sorted by
+name, deterministic (`radius_admin_profile`: §26). Use
 `ipv4addr`/`ipv6addr` per family; CIDR allowed.
 The helper performs its own independent safety checks (§6).
 
@@ -382,7 +385,8 @@ Actions:
 Staging path is fixed in helper.conf, never taken from the request. Helper safety
 checks: files ≤ 1 MiB, UTF-8, no NUL; clients file must consist only of `client <name> {`
 blocks containing whitelisted keys (ipaddr, ipv4addr, ipv6addr, secret, shortname,
-nas_type, require_message_authenticator, limit_proxy_state) and comments; policy file
+nas_type, require_message_authenticator, limit_proxy_state, radius_admin_profile (§26)) and
+comments; policy file
 must not contain `$INCLUDE`, `$-INCLUDE`, `$ENV`, `$TEMPLATE`, `%{exec:`, `Exec-Program`,
 backticks. Helper logs every action to syslog (ident `radius-admin-helper`).
 
@@ -557,8 +561,8 @@ CSV columns (header row required, exact names, any order tolerated by name):
   `ui.snmp_test` (UI-queued single-switch tests, pruned after 7 days).
 - `radius_admin/snmp.py`: Net-SNMP `snmpget`/`snmpbulkwalk` (system OpenSSL), credentials in a
   private 0600 snmp.conf (SNMPCONFPATH), literal IP targets only. Standard MIBs: system,
-  IEEE8021-PAE-MIB port control (2 = auto → 802.1X port), IF-MIB ifName (standalone C1300 `gi4`
-  → `gi1/0/4`), RADIUS-AUTH-CLIENT-MIB ext table (RFC 4668) or old table.
+  IEEE8021-PAE-MIB port control (2 = auto → 802.1X port), IF-MIB ifName, renamed by the vendor
+  profile's port-name rules (§26; standalone C1300 `gi4` → `gi1/0/4`), RADIUS-AUTH-CLIENT-MIB ext table (RFC 4668) or old table.
 - `radius_admin/snmp_poller.py` + `deploy/systemd/radius-admin-snmp.service`: OS user
   radius-admin, the only component with network access (IPAddressAllow = the switch networks:
   answers key `switch_nets` / `install.sh --switch-nets`, default the admin subnet; runs without
@@ -597,7 +601,8 @@ CSV columns (header row required, exact names, any order tolerated by name):
     (`radius_admin_vlan_rule_core()` mirrors `radius_admin_vlan_core()`).
   - `ui.switch_status` gains `fail_count`, `last_ok_at`, `ports` (jsonb per-port state).
   - `ui.alert_settings` (singleton), `ui.alert` (one open row per kind+subject), `ui.monitor_state`
-    (heartbeat, last FreeRADIUS check, radclient), `ui.coa_request`; `ui.snmp_profile.coa_port` (1700).
+    (heartbeat, last FreeRADIUS check, radclient), `ui.coa_request`; `ui.snmp_profile.coa_port` (1700;
+    replaced by a port per client in §26).
 - Policy (`unlang.py`): every reject sets `Module-Failure-Message` (`radius-admin: …`); MAB calls
   `radius_admin_mab_hex` with the regex-built MAC and hex NAS address / port (port hex re-validated);
   EAP-TLS calls `radius_admin_vlan_rule_hex` and splits `vlan:rule` by regex into Tmp-String-0/-6;
@@ -1160,3 +1165,166 @@ meta refresh stays only inside `<noscript>`, so every page still works without J
   session from this device", "Closed: no accounting update for a day" and "Closed: the switch
   no longer has it". The request page explains `Session-Context-Not-Found` instead of the
   dynamic-authorization checklist.
+
+## 26. Change (2026-11-19): vendor profiles
+
+- **Why.** The reply attributes for a VLAN and for full admin rights, the CoA attributes and
+  the SNMP port-name rule were written into the code for the Catalyst 1300. They now come from a
+  vendor profile so that other switches, access points and firewalls can be supported by adding
+  a profile, without code changes. This step moves the existing behaviour into the built-in
+  profile `cisco-c1300`, which every client uses; the generated policy, the clients file and
+  every CoA request are byte-for-byte what they were before.
+- **Format 1** (JSON, `app/radius_admin/vendor_profiles/<id>.json`; the same form is the
+  export/import format). Every field is required except `description`; unknown fields are
+  refused.
+
+  | Field | Contents |
+  |---|---|
+  | `format` | `1` |
+  | `id` | `[a-z0-9][a-z0-9-]{0,31}`; a built-in profile's file name |
+  | `label`, `description` | Display text, 1-64 / up to 300 printable characters |
+  | `status` | `supported` (passed the bench and real hardware) or `unverified` |
+  | `reply.vlan` | Attributes sent with an accepted MAB / 802.1X request. One value must be `{vlan}` |
+  | `reply.admin_full` | Attributes added to a switch-admin login when `admin_priv15` is on |
+  | `reply.role` | Optional (absent = empty). Attributes added to an 802.1X accept when the matched access rule has a role; one value must be `{role}` |
+  | `mab.port_types` | Optional (absent = `["Ethernet"]`). NAS-Port-Type values that start MAB: `Ethernet`, `Wireless-802.11` (access points and controllers) |
+  | `coa.port` | UDP port of the device's dynamic-authorization server, used when the client sets none |
+  | `coa.identify` | How the session is named: `mac-then-session` (Calling-Station-Id, else Acct-Session-Id) or `session-and-mac` (Acct-Session-Id and Calling-Station-Id, each when known; RFC 5176 §3.3) |
+  | `coa.send_nas_port_id` | Add NAS-Port-Id from the accounting record |
+  | `coa.reauth`, `coa.bounce`, `coa.disconnect` | `null` (the device cannot) or `{"packet": "coa"\|"disconnect", "attrs": [...]}` |
+  | `setup.accounting`, `setup.coa` | Optional. Device commands the portal shows (as escaped text, never configuration) for turning on accounting / dynamic authorization; `null` or absent: a generic sentence instead |
+  | `snmp.port_names` | Up to 8 rules `{"match": <regex, full match>, "ignore_case": bool, "format": ...}`; the first match renames an ifName; `format` is `[A-Za-z0-9/._:-]` plus `{n}`, `{n:lower}`, `{n:upper}` |
+
+  Reply entries are `{"attr", "op": ":=" | "+=", "value"}`, CoA entries `{"attr", "value"}`, at
+  most 8 per list. Each reply list needs at least one entry (FreeRADIUS refuses an empty
+  `update` section).
+- **Validation** (`vendors.validate`, applied to built-in files too, and again by
+  `render_policy` to any profile passed in). Attribute names are `[A-Za-z][A-Za-z0-9-]{0,63}`
+  and may not be server-internal or secret: `Auth-Type`, `Exec-Program*`, `Tmp-*`, `Module-*`,
+  `*-Password`, raw `Attr-N` / `Vendor-*` forms, packet framing (`Message-Authenticator`,
+  `State`, `EAP-*`), or the attributes the CoA sender fills in itself. Values are 1-247
+  printable ASCII characters without `"` `\` `%` `$` `` ` `` `{` `}`, so they cannot leave
+  their string, expand an xlat or reference configuration; a placeholder is a whole value and
+  `{vlan}` only in `reply.vlan`, `{role}` only in `reply.role`. Rendering: a placeholder becomes
+  its attribute reference (`{vlan}` → `&control:Tmp-String-0`, `{role}` → `&control:Tmp-String-4`),
+  a value of letters, digits and `-` is written bare
+  (enumeration names such as `VLAN`), anything else double-quoted.
+- **Code.** `vendors.py` (`validate`, `builtin`, `default`, `export_json`, `import_json`,
+  `port_name`, `format_value`); `unlang.render_policy(custom, profile=None)`;
+  `coa.build_request(..., profile=None)` and `coa.send(..., profile=None)` (an action the
+  profile sets to `null` is refused); `snmp.cli_port_name(name, profile=None)`, passed through
+  `build_status`, `build_ports` and `poll_switch`. `coa.ACTIONS` is now the tuple of action
+  names.
+- **Built-in profiles.**
+
+  | id | Status | VLAN | Full admin | CoA |
+  |---|---|---|---|---|
+  | id | MAB from | Role |
+  |---|---|---|
+  | `cisco-c1300` | Ethernet | none |
+  | `generic-rfc` | Ethernet, Wireless-802.11 | `Filter-Id := {role}` (RFC 2865) |
+
+  | id | Status | VLAN | Full admin | CoA |
+  |---|---|---|---|---|
+  | `cisco-c1300` (default) | supported | RFC 3580 tunnel attributes | `Cisco-AVPair += "shell:priv-lvl=15"` | UDP 1700, `mac-then-session`; reauth and bounce by `Cisco-AVPair` subscriber commands; Disconnect |
+  | `generic-rfc` | unverified | RFC 3580 tunnel attributes | `Service-Type := Administrative-User` (RFC 2865) | UDP 3799, `session-and-mac`; Disconnect only (re-authenticate and bounce have no standard form) |
+
+  `generic-rfc` keeps SNMP port names as reported. Both render a policy that passes
+  `radiusd -XC`; `generic-rfc` stays "unverified" until it has run against real hardware.
+- **A profile per client.**
+  - **Database** (`sql/99-vendor-profiles.sql`, additive, idempotent): `ui.radius_client.vendor_profile`
+    (`NULL` = the default; CHECK `^[a-z0-9][a-z0-9-]{0,31}$`) and `ui.radius_client.coa_port`
+    (`NULL` = the profile's port; 1-65535). When the column is added and
+    `ui.snmp_profile.coa_port` is not 1700, that value is copied to every existing client once,
+    so CoA keeps reaching the port it used before. `ui.snmp_profile.coa_port` is no longer read
+    or shown and is dropped in a later release. Setting `ui.setting.default_vendor_profile`
+    (absent or unknown: `cisco-c1300`), changed under Settings → Devices.
+  - **Clients file.** A client whose profile is set and differs from the default carries
+    `radius_admin_profile = <id>` (UDP and RadSec clients). FreeRADIUS 3.2 keeps unknown pairs of
+    a client section, and `%{client:radius_admin_profile}` reads it. The root helper accepts the
+    key in both client grammars, unquoted, matching `[a-z0-9][a-z0-9-]{0,31}`.
+  - **Policy.** `render_policy(custom, profile, others)`: `profile` is the default, `others` the
+    profiles enabled clients name. Each `update reply` with profile attributes becomes, when some
+    of `others` have a different attribute list for it, `if ("%{client:radius_admin_profile}" ==
+    "<id>" || …) { update reply {…} } … else { update reply {<default's>} }`, one branch per
+    distinct list, ids sorted. With no other profiles, or only ones with the same lists, the
+    output is what it was before. `services.render_all` refuses (PolicyInputError) a client
+    that names a profile this server does not have. A default-profile change, like a client's
+    profile change, takes effect at the next Apply.
+  - **CoA.** `run_coa` builds and sends each request with the client's profile, to
+    `coalesce(client.coa_port, profile.coa.port)`. The sessions page offers only the actions the
+    session's switch can take; a request for one it cannot is not queued ("<switch> (<profile>)
+    cannot bounce a port"). The request page names the profile and shows its `setup.coa`.
+  - **SNMP.** The poller (`run_cycle`, `run_tests`) passes each switch's profile to `poll_switch`;
+    the sessions page and the client's port table match NAS-Port-Id with it.
+  - **UI.** Client form: *Device profile* (Default: <label>, a built-in profile, or a custom one
+    marked "(custom)") and *Session-action port (UDP)* (empty = the profile's).
+    Client list: the profile's label in the options column. Settings → Devices: default profile.
+    Switch monitoring → Session actions: the port field is gone (text points to the client).
+    Sessions: the accounting setup text comes from the profiles of the switches concerned.
+  - **CSV import.** Optional header column `vendor_profile`: empty = not given (existing clients
+    keep theirs, new ones use the default), `default` = back to the default, else a built-in id;
+    anything else is an error for that line.
+  - **Audit.** `client.create` / `client.update` include `vendor_profile` and `coa_port`;
+    `settings.update` includes `default_vendor_profile`.
+- **MAB from access points.** The MAB condition (authorize `radius_admin_mab` and the post-auth
+  re-check) becomes, when a profile in use accepts more than Ethernet,
+  `&NAS-Port-Type && ((&NAS-Port-Type == Ethernet[ && <profiles>]) || (&NAS-Port-Type ==
+  Wireless-802.11 && <profiles>))`, where `<profiles>` names the clients' profiles that accept
+  that port type (`"%{client:radius_admin_profile}" == "<id>" || …`), or, when the default does,
+  `!(<the profiles that do not>)`. Every profile in use Ethernet-only: unchanged. The registered
+  MAC, its VLAN, the approval queue and the Calling-Station-Id check are the same for both; the
+  device decides which SSIDs use MAC authentication.
+- **A role per access rule.** `ui.access_rule.role` (`sql/99-vendor-profiles.sql`; NULL or
+  `^[A-Za-z0-9._-]{1,64}$`, CHECK), set on the rule form (optional) and audited with the rule.
+  When some profile in use has `reply.role` attributes, both 802.1X branches (password and
+  EAP-TLS) add after the VLAN: if `&control:Tmp-String-6` (the matched rule id) is 1-10 digits,
+  `&control:Tmp-String-4 := "%{sql:SELECT radius_admin_rule_role(<id>)}"`, and if that matches
+  `^[A-Za-z0-9._-]{1,64}$`, an `update reply` with the profile's role attributes (branched per
+  profile; a profile without any gets `noop`). `radius_admin_rule_role(bigint) → text`:
+  SECURITY DEFINER, owner `radius_owner`, `search_path` pinned, executable only by `radius_fr`;
+  the role of the enabled rule with that id, else `''`. It takes no request data (the id was
+  produced by `radius_admin_vlan_rule_hex` / `radius_admin_dot1x_vlan_rule_hex` and is checked
+  to be digits). The role reaches the reply only as an attribute reference, never re-parsed;
+  `Tmp-String-4` is otherwise used only by the switch-admin branch, and the post-auth insert
+  does not read it. A failed lookup sends the VLAN without the role. MAB devices get no role.
+- **SNMP without IEEE8021-PAE-MIB.** Such devices are still polled (system, uptime, RADIUS
+  servers); the client page says the 802.1X state is not offered over SNMP instead of implying
+  a fault.
+- **Custom profiles (portal).**
+  - **Storage.** `ui.vendor_profile (id PK, doc jsonb, created_at, updated_at, updated_by)`
+    (`sql/99-vendor-profiles.sql`; CHECK: id pattern, `doc` an object whose `id` equals the row's;
+    the app role has SELECT/INSERT/UPDATE/DELETE). `doc` is the profile as `validate()` returned
+    it. `vendors.catalog(conn)` = built-in profiles plus every stored profile that still
+    validates, has the row's id and no built-in id (others are left out). Every lookup goes
+    through the catalog: rendering for Apply, the default-profile setting, the client form and
+    list, CSV import, the sessions page, CoA and SNMP in the monitor.
+  - **Pages** (`views/profiles.py`, nav *Network access → Device profiles*). `/profiles/` (all
+    roles): every profile with type ("Built-in" or "Custom"; `status` is not shown), the number of
+    clients using it and the default marker; Export JSON for each; for admins Copy, New, Import,
+    and Delete for custom ones; for built-in profiles **Report a problem**: a link to
+    `https://github.com/<update_repo>/issues/new?template=device-profile.yml&title=…&profile=<id>&version=<installed version>`
+    (`vendors.report_url`; `update_repo` must be `owner/name`, else no link), the issue form
+    `.github/ISSUE_TEMPLATE/device-profile.yml` (profile, version, device and firmware, what
+    does not work, a privacy confirmation). Nothing else about the site goes into the link. `/profiles/<id>` shows the profile in a form,
+    read-only for built-in profiles and for non-admins. `/profiles/new?from=<id>` (admin)
+    starts from a copy. Saving, importing and deleting are admin-only and need a current
+    step-up (inline step-up fields keep the entries when it has lapsed). The id cannot be
+    changed after creation. Custom profiles are always saved as `unverified`.
+  - **Form.** One attribute per line, `Attribute := value` / `Attribute += value` (reply lists)
+    or `Attribute = value` (CoA extras); a packet type per CoA action ("Not supported" = `null`);
+    one port-name rule per line, `regex => format`, optional `(ignore case)`; checkboxes for the
+    MAB port types. `vendors.form_to_profile` builds the document and runs `validate()`; an error
+    is shown at the field its path names. When the FreeRADIUS dictionary directory is found (as
+    for CoA), every attribute name must be defined in its `dictionary*` files; otherwise the
+    check is left to `radiusd -XC` at Apply.
+  - **Export / import.** `/profiles/<id>/export` downloads `export_json(profile)` as
+    `<id>.radius-admin-profile.json` (audited `profile.export`). `/profiles/import` takes a file
+    or pasted JSON (≤ 64 KiB, UTF-8): status forced to `unverified`, `validate()`, the built-in id
+    and dictionary checks; an existing custom id needs "Replace". Audit: `profile.create`,
+    `profile.update` (with the before/after SHA-256 of the exported JSON, clients using it,
+    default), `profile.delete`, `profile.import` (`replaced`), failures included.
+  - **Delete** is refused while a client names the profile or it is the default.
+  - **Effect.** Reply attributes and MAB port types reach FreeRADIUS at the next Apply (the apply
+    page shows the pending change for a profile in use); CoA attributes, the CoA port and
+    port-name rules apply from the monitor's next pass and the next page load.

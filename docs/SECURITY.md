@@ -164,6 +164,20 @@ Verified in the sandbox: TLS 1.1 refused; ChaCha20 refused; negotiated
   reject, VLAN). That is why custom policy is admin-only, requires step-up
   re-authentication, is shown as a diff, validated, applied with a backup and fully
   audited. Keep the number of admin accounts minimal and review custom-policy changes.
+* **Custom device profiles (SPEC section 26)** are admin-supplied data that becomes reply
+  attributes in the generated policy, so they get the same controls as custom policy
+  (admin-only, step-up, Apply with validation, backup and audit), but they are not free text:
+  every field is checked on save, on import and again on every read. Attribute names follow a
+  strict pattern and may not be server-internal, secret or raw (`Auth-Type`, `Exec-Program*`,
+  `Tmp-*`, `*-Password`, `Attr-<n>`, `Vendor-*`, packet framing, CoA session attributes); values
+  are printable ASCII without `" \ % $ ` { }` (no string escape, xlat or config reference);
+  placeholders are whole values (`{vlan}`, `{role}`) that render as attribute references.
+  Names must exist in the FreeRADIUS dictionary when it is available, and `radiusd -XC` checks
+  the result before anything is installed. A custom profile can still send any ordinary
+  attribute to the devices that use it (for example a different VLAN attribute or an
+  `Filter-Id` the device refuses), so treat profile changes like policy changes and test them
+  on one device first. Imported files are untrusted input: they are validated like the form,
+  always saved as "not tested", and cannot replace a built-in profile.
 * **`exec` module removed.** `rlm_exec` is disabled (in `modules-to-disable.txt`) and no
   longer called from post-auth or accounting, so `Exec-Program` / `Exec-Program-Wait`
   attributes have no effect even if they appear in a reply.

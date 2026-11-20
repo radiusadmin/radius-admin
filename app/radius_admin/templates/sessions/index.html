@@ -19,18 +19,27 @@
   <div class="head-actions"><a class="btn btn-quiet" href="{{ url_for('sessions.actions') }}">Past actions</a></div>
 </header>
 
+{% macro setup_commands(setup) %}
+{% for label, commands in setup %}
+  {% if commands %}<p class="small">{{ label }}:</p>
+  <pre class="code">{{ commands }}</pre>
+  {% else %}<p class="small">{{ label }}: enable RADIUS accounting with start and stop records for 802.1X and MAB, sent to this server.</p>{% endif %}
+{% endfor %}
+{% endmacro %}
+
 {% if not acct.any %}
 <section class="panel callout">
   <h2>No accounting received yet</h2>
-  <p>Sessions appear once the switches send RADIUS accounting to this server (UDP 1813). On each Catalyst 1300:</p>
-  <pre class="code">aaa accounting dot1x start-stop group radius</pre>
+  <p>Sessions appear once the switches send RADIUS accounting (start and stop records) to this server (UDP 1813).</p>
+  {{ setup_commands(acct.setup) }}
   <p class="small muted">Full switch commands, including those for disconnect/re-authenticate, are in RUNBOOK §6.4.</p>
 </section>
 {% elif acct.silent %}
 <details class="panel callout-quiet">
   <summary>{{ acct.sending }} of {{ acct.switches }} switches sent accounting in the last 30 days. {{ acct.silent|length }} did not.</summary>
   <p class="small">{% for c in acct.silent %}<a href="{{ url_for('clients.edit', cid=c.id) }}">{{ c.name }}</a>{{ ', ' if not loop.last }}{% endfor %}</p>
-  <p class="small muted">Add <span class="mono">aaa accounting dot1x start-stop group radius</span> on those switches (RUNBOOK §6.4).</p>
+  <p class="small muted">Turn on RADIUS accounting on those switches (RUNBOOK §6.4).</p>
+  {{ setup_commands(acct.setup) }}
 </details>
 {% endif %}
 
@@ -92,7 +101,7 @@
       {% if up %}
       <details class="row-menu"><summary class="btn btn-quiet btn-small" aria-label="Session actions for {{ s.username or s.callingstationid }}">Actions</summary>
         <div class="menu">
-          {% for key, a in actions.items() %}
+          {% for key, a in actions.items() if s.client.profile.coa[key] %}
           <form method="post" action="{{ url_for('sessions.coa') }}" class="inline" data-coa data-confirm="{{ a[0] }} {{ s.username or s.callingstationid }} on {{ s.client.name }} {{ s.nasportid or '' }}? {{ a[1] }}">
             {{ m.csrf() }}<input type="hidden" name="sid" value="{{ s.radacctid }}"><input type="hidden" name="action" value="{{ key }}">
             <button type="submit" class="linklike{{ ' danger' if key == 'disconnect' else '' }}">{{ a[0] }}</button>
