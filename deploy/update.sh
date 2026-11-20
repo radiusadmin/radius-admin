@@ -15,6 +15,9 @@
 #      with no "..", then unpacks it as root into /opt/radius-admin-src/releases/<time>-<hash>.
 #   2. Compares the new release with the current one and picks the install.sh phases:
 #        packages  if the package list in install.sh changed
+#        nginx-update if the installed nginx is older than the new release's
+#                  RA_NGINX_MIN_VERSION (deploy/lib.sh): upgrades nginx from the mirror and
+#                  restarts it
 #        fr-package if the bundled FreeRADIUS package (packages/) changed; it upgrades
 #                  radius-admin-freeradius but restarts radiusd only with --restart-freeradius
 #        postgres  if sql/ or deploy/postgres/ changed (all SQL files are idempotent)
@@ -173,12 +176,19 @@ pkg_list() { # the package list in install.sh, to detect when the packages phase
     fi
 }
 
+nginx_outdated() { # nginx is installed and older than release $1's RA_NGINX_MIN_VERSION
+    [[ -f $1/deploy/lib.sh ]] || return 1
+    # shellcheck disable=SC2016  # expanded by the inner bash
+    bash -c '. "$1/deploy/lib.sh"; v=$(nginx_installed_version) && ! nginx_version_ok "$v"' _ "$1" 2>/dev/null
+}
+
 phases=()
 fr_changed=0
 if [[ -n $PHASES_OVERRIDE ]]; then
     IFS=, read -r -a phases <<<"$PHASES_OVERRIDE"
 else
     if [[ -z $cur ]] || [[ "$(pkg_list "$cur")" != "$(pkg_list "$new")" ]]; then phases+=(packages); fi
+    if nginx_outdated "$new"; then phases+=(nginx-update); fi
     if [[ -d $new/packages ]] && changed packages; then phases+=(fr-package); fi
     if changed sql deploy/postgres; then phases+=(postgres); fi
     if changed freeradius; then fr_changed=1; fi

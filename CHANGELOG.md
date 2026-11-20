@@ -5,6 +5,14 @@ Each release has a section here. `main` builds are the stable releases (`0.2.0`)
 show the "Unreleased" section plus their commits. Bump `VERSION` on `dev` right after a
 release, so previews sort after it.
 
+## Unreleased
+
+### Security
+- nginx security floor: preflight warns when nginx is older than `1.24.0-2ubuntu7.20` (Ubuntu's
+  fix for the HTTP/2 and TLS 1.3 vulnerabilities of 2026-11-18, CVE-2026-123007,
+  CVE-2026-123633, CVE-2026-118899), and the new installer phase `nginx-update`, which updates
+  also run when needed, upgrades nginx from the package mirror and restarts it.
+
 ## 0.2.3 - 2026-11-19
 
 ### Added
