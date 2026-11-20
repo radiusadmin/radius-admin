@@ -20,6 +20,10 @@ release, so previews sort after it.
   `/device-admins/`; the old address redirects.
 - The installer loads the SQL files in numeric order, so files numbered from 100 load last.
 
+### Fixed
+- Device profiles: "Used by" now counts the clients left on *Default*, under the default
+  profile. They were counted only when a client named the profile itself.
+
 ## 0.2.4 - 2026-11-19
 
 ### Added

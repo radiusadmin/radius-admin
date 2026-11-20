@@ -1303,7 +1303,8 @@ meta refresh stays only inside `<noscript>`, so every page still works without J
     list, CSV import, the sessions page, CoA and SNMP in the monitor.
   - **Pages** (`views/profiles.py`, nav *Network access → Device profiles*). `/profiles/` (all
     roles): every profile with type ("Built-in" or "Custom"; `status` is not shown), the number of
-    clients using it and the default marker; Export JSON for each; for admins Copy, New, Import,
+    clients using it (a client that names no profile counts for the default) and the default
+    marker; Export JSON for each; for admins Copy, New, Import,
     and Delete for custom ones; for built-in profiles **Report a problem**: a link to
     `https://github.com/<update_repo>/issues/new?template=device-profile.yml&title=…&profile=<id>&version=<installed version>`
     (`vendors.report_url`; `update_repo` must be `owner/name`, else no link), the issue form
