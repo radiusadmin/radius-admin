@@ -216,7 +216,8 @@ feature is in the same public code, with nothing locked behind a licence key.
 
 Commercial licences are annual, per organization, by headcount: USD 1,000 (50–249 people),
 USD 4,000 (250–999), USD 10,000 (1,000–4,999), on request from 5,000. Every tier includes every
-feature and unlimited servers. [LICENSING.md](LICENSING.md) explains how to count the
+feature and unlimited servers. These are list prices; deployments with special requirements are
+quoted individually. [LICENSING.md](LICENSING.md) explains how to count the
 headcount, the rules for service providers and how to get a licence.
 radius-admin is provided WITHOUT ANY WARRANTY; see the licence for details.
 

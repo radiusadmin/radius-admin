@@ -59,6 +59,10 @@ updates published during the subscription.
 | 1,000–4,999 | USD 10,000 |
 | 5,000 or more | On request |
 
+Prices are list prices for a standard licence. Deployments with special requirements, such as
+custom terms, several separate deployments or service providers, are quoted individually, and
+the final price is the one in the signed agreement.
+
 ## How to get a commercial licence
 
 Commercial licences are being set up. Until a licensing address is published, open a private
