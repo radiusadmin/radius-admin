@@ -14,7 +14,7 @@
 <form method="post" class="stack">
   {{ m.csrf() }}
   <label for="name">Name</label>
-  <input id="name" name="name" value="{{ c.name or '' }}" required maxlength="63" pattern="[A-Za-z0-9._\-]{1,63}" class="mono" aria-describedby="name-hint"{{ m.described(errors, 'name', True) }}>
+  <input id="name" name="name" value="{{ c.name or '' }}" required maxlength="63" pattern="[A-Za-z0-9._\-]{1,63}" class="mono"{{ m.described(errors, 'name', True) }}>
   <p id="name-hint" class="small muted">Letters, digits, dot, underscore, hyphen. Example: sw-192-0-2-26</p>
   {{ m.field_error(errors, 'name') }}
   <label for="ipaddr">IP address or network</label>
@@ -29,7 +29,7 @@
   </fieldset>
   <div id="radsec-box" class="reveal-box">
     <label for="radsec_peer_name">Expected certificate name</label>
-    <input id="radsec_peer_name" name="radsec_peer_name" value="{{ c.radsec_peer_name or '' }}" maxlength="253" class="mono" placeholder="ap1.example.net" aria-describedby="radsec_peer_name-hint"{{ m.described(errors, 'radsec_peer_name', True) }}>
+    <input id="radsec_peer_name" name="radsec_peer_name" value="{{ c.radsec_peer_name or '' }}" maxlength="253" class="mono" placeholder="ap1.example.net"{{ m.described(errors, 'radsec_peer_name', True) }}>
     <p id="radsec_peer_name-hint" class="small muted">The device must connect from the address above and present a certificate issued by the site CA (the CA of the 802.1X certificates). Enter the certificate's common name or DNS name to accept only that certificate; leave it empty to accept any certificate from the CA. No shared secret is needed.</p>
     {{ m.field_error(errors, 'radsec_peer_name') }}
     {% if not radsec_enabled %}<p class="flash flash-info">The RadSec listener is off. {% if has_role('admin') %}Turn it on under <a href="{{ url_for('clients.radsec') }}">RadSec listener</a>{% else %}An admin must turn it on{% endif %} before RadSec clients can connect.</p>{% endif %}
@@ -43,7 +43,7 @@
     <label class="check"><input type="radio" name="secret_mode" value="set" data-reveals="secret-set" {{ 'checked' if sm == 'set' else '' }}> Enter a secret</label>
     <div id="secret-set" class="reveal-box">
       <label for="secret">Secret</label>
-      <input id="secret" name="secret" type="password" autocomplete="off" maxlength="128" class="mono" aria-describedby="secret-hint"{{ m.described(errors, 'secret', True) }}>
+      <input id="secret" name="secret" type="password" autocomplete="off" maxlength="128" class="mono"{{ m.described(errors, 'secret', True) }}>
       <p id="secret-hint" class="small muted">16–128 printable characters, no spaces, quotes or backslashes.</p>
     </div>
     {{ m.field_error(errors, 'secret') }}
@@ -75,7 +75,7 @@
   </div>
   </div>{# udp-box #}
   <label for="dot1x_ports">802.1X ports</label>
-  <textarea id="dot1x_ports" name="dot1x_ports" rows="2" maxlength="1000" class="mono" aria-describedby="dot1x_ports-hint"{{ m.described(errors, 'dot1x_ports', True) }}>{{ c.dot1x_ports or '' }}</textarea>
+  <textarea id="dot1x_ports" name="dot1x_ports" rows="2" maxlength="1000" class="mono"{{ m.described(errors, 'dot1x_ports', True) }}>{{ c.dot1x_ports or '' }}</textarea>
   <p id="dot1x_ports-hint" class="small muted">Informational, as exported from the switch, for example <span class="mono">gi1/0/1-20,gi1/0/23</span>. Up to 1000 characters.</p>
   {% if c.dot1x_ports %}<p class="small">Current: {{ m.ports(c.dot1x_ports, 'ports-edit', c.name or '') }}</p>{% endif %}
   {{ m.field_error(errors, 'dot1x_ports') }}

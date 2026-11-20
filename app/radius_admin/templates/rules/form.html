@@ -25,7 +25,7 @@
     <input id="vlan" name="vlan" value="{{ r.vlan or '' }}" required inputmode="numeric" maxlength="4"{{ m.described(errors, 'vlan') }}>
     {{ m.field_error(errors, 'vlan') }}</div>
     <div><label for="priority">Order</label>
-    <input id="priority" name="priority" value="{{ r.priority }}" required inputmode="numeric" maxlength="6" aria-describedby="priority-hint"{{ m.described(errors, 'priority', True) }}>
+    <input id="priority" name="priority" value="{{ r.priority }}" required inputmode="numeric" maxlength="6"{{ m.described(errors, 'priority', True) }}>
     <p id="priority-hint" class="small muted">Lower runs first.</p>
     {{ m.field_error(errors, 'priority') }}</div>
   </div>

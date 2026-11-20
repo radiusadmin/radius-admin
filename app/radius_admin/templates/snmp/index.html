@@ -48,7 +48,7 @@
 
   <h2>Session actions</h2>
   <label for="coa_port">Switch port for disconnect / re-authenticate (UDP)</label>
-  <input id="coa_port" name="coa_port" type="number" min="1" max="65535" value="{{ p.coa_port or 1700 }}" class="select-auto" aria-describedby="coa_port-hint"{{ m.described(errors, 'coa_port', True) }}>
+  <input id="coa_port" name="coa_port" type="number" min="1" max="65535" value="{{ p.coa_port or 1700 }}" class="select-auto"{{ m.described(errors, 'coa_port', True) }}>
   <p id="coa_port-hint" class="small muted">Catalyst 1300 listens on UDP 1700 (RFC 5176 uses 3799). The switch needs <span class="mono">aaa server radius dynamic-author</span> with this server as client and the same shared key (RUNBOOK §6.4).</p>
   {{ m.field_error(errors, 'coa_port') }}
   {% if p.updated_by %}<p class="small muted">Last changed by {{ p.updated_by }} {{ p.updated_at|dt }}.</p>{% endif %}

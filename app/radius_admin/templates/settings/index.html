@@ -10,7 +10,7 @@
   <h2>Switch management logins</h2>
   <p class="small muted">FreeRADIUS reads these on every switch login; saving affects the next login.</p>
   <label for="admin_subnet">Management subnet</label>
-  <input id="admin_subnet" name="admin_subnet" value="{{ s.admin_subnet }}" required class="mono" aria-describedby="admin_subnet-hint"{{ m.described(errors, 'admin_subnet', True) }}>
+  <input id="admin_subnet" name="admin_subnet" value="{{ s.admin_subnet }}" required class="mono"{{ m.described(errors, 'admin_subnet', True) }}>
   <p id="admin_subnet-hint" class="small muted">Switch admin (PAP) logins are accepted only from switches in this network.</p>
   {{ m.field_error(errors, 'admin_subnet') }}
   <label class="check"><input type="checkbox" name="admin_priv15" value="1" {{ 'checked' if s.admin_priv15 else '' }}> Grant privilege level 15 on login (<span class="mono">shell:priv-lvl=15</span>)</label>
