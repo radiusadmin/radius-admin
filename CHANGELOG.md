@@ -21,6 +21,13 @@ release, so previews sort after it.
 - The installer loads the SQL files in numeric order, so files numbered from 100 load last.
 
 ### Fixed
+- **Upgrades no longer reset the EAP-TLS certificates and OCSP responder.** The freeradius
+  phase installed the shipped `mods-available/eap` (`certs/site/…`, OCSP responder
+  `pki.example.net`), so after an upgrade with `--with-freeradius` every EAP-TLS login was
+  rejected with "Couldn't connect to OCSP responder". It now keeps the live certificate, CA,
+  CRL and OCSP settings, as it does for LDAP. Affects 0.2.0 to 0.2.4: after such an upgrade,
+  check `ocsp { url }` and the certificate paths in `mods-available/eap` against the backup
+  the phase made (`/var/backups/radius-admin/freeradius-*.tar.gz`).
 - Device profiles: "Used by" now counts the clients left on *Default*, under the default
   profile. They were counted only when a client named the profile itself.
 

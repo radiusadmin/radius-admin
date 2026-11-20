@@ -637,6 +637,114 @@ def keep_ldap_tls(text, ltext, rel):
         tail = TLS_BLOCK.sub(add_ref, tail)
     return head + tail
 keep_ldap_settings()
+
+# The EAP server certificate, the CA that issues client certificates and how revocation is
+# checked are site settings too: the package ships certs/site/... and a placeholder OCSP
+# responder. Installing those over a working server rejects every EAP-TLS login ("Couldn't
+# connect to OCSP responder"). In tls-config tls-common (outside its sub-sections) and in its
+# ocsp { }, the staged file gets exactly the live values: changed, added, or commented out
+# where the live file has none. Ciphers, TLS versions and the rest stay as shipped. Only a
+# live file radius-admin installed is merged; a stock FreeRADIUS eap (first install) is not.
+EAP_TLS_KEYS = ("private_key_password", "private_key_file", "certificate_file", "ca_file",
+                "ca_path", "check_crl", "check_all_crl", "check_cert_issuer", "check_cert_cn")
+EAP_OCSP_KEYS = ("enable", "override_cert_url", "url", "use_nonce", "timeout", "softfail")
+def _code(ln):
+    s = ln.strip()
+    return "" if s.startswith("#") else re.sub(r"[ \t]+#.*$", "", s)
+def _block(lines, lo, hi, rx):
+    """(open, close) line indexes of the first `name {` matching rx at depth 0 in lines[lo:hi]"""
+    depth = 0
+    for i in range(lo, hi):
+        c = _code(lines[i])
+        if c.endswith("{"):
+            if depth == 0 and re.match(rx, c):
+                d = 0
+                for j in range(i, hi):
+                    cj = _code(lines[j])
+                    d += cj.endswith("{")
+                    d -= cj.startswith("}")
+                    if d == 0:
+                        return i, j
+                return None
+            depth += 1
+        elif c.startswith("}"):
+            depth -= 1
+    return None
+def _top(lines, span):
+    """indexes of the lines directly inside span (not in a sub-section)"""
+    if not span:
+        return []
+    out, depth = [], 0
+    for i in range(span[0] + 1, span[1]):
+        c = _code(lines[i])
+        if depth == 0 and not c.endswith("{"):
+            out.append(i)
+        if c.endswith("{"):
+            depth += 1
+        elif c.startswith("}"):
+            depth -= 1
+    return out
+def _merge_keys(st, sspan, lv, lspan, keys):
+    """set the keys inside staged span sspan() to the live lines in lspan; returns keys changed"""
+    kept = []
+    for key in keys:
+        act = re.compile(r"^([ \t]*)%s[ \t]*=" % key)
+        com = re.compile(r"^([ \t]*)#[ \t]*%s[ \t]*=" % key)
+        span = sspan()
+        lm = next((lv[i].strip() for i in _top(lv, lspan) if act.match(lv[i])), None)
+        si = next((i for i in _top(st, span) if act.match(st[i])), None)
+        if si is not None and lm is not None:
+            if st[si].strip() == lm:
+                continue
+            st[si] = act.match(st[si]).group(1) + lm + "\n"
+        elif lm is not None:
+            ci = next((i for i in _top(st, span) if com.match(st[i])), None)
+            indent = re.match(r"[ \t]*", st[span[0]]).group(0) + "\t"
+            at = ci + 1 if ci is not None else span[0] + 1
+            st.insert(at, indent + lm + "\n")
+        elif si is not None:
+            st[si] = (act.match(st[si]).group(1) + "# " + st[si].strip()
+                      + "    # not set on this server\n")
+        else:
+            continue
+        kept.append(key)
+    return kept
+def keep_eap_settings():
+    rel = "mods-available/eap"
+    s_path, l_path = os.path.join(staged, rel), os.path.join(live, rel)
+    if not (os.path.exists(s_path) and os.path.exists(l_path)):
+        return
+    ltext = open(l_path).read()
+    if not re.search(r"^[ \t]*#.*radius-admin:", ltext, re.M):
+        return
+    st, lv = open(s_path).read().splitlines(True), ltext.splitlines(True)
+    if st and not st[-1].endswith("\n"):
+        st[-1] += "\n"
+    common = r"tls-config[ \t]+tls-common[ \t]*\{"
+    ltls = _block(lv, 0, len(lv), r"eap[ \t]*\{")
+    ltls = ltls and _block(lv, ltls[0] + 1, ltls[1], common)
+    if not ltls:
+        print("  [WARN] no tls-config tls-common in the live %s: installing the shipped one" % rel)
+        return
+    def stls():
+        e = _block(st, 0, len(st), r"eap[ \t]*\{")
+        return e and _block(st, e[0] + 1, e[1], common)
+    if not stls():
+        sys.exit("tls-config tls-common not found in the staged %s" % rel)
+    kept = _merge_keys(st, stls, lv, ltls, EAP_TLS_KEYS)
+    if kept:
+        print("  [INFO] kept the live EAP TLS setting(s) %s in %s" % (", ".join(kept), rel))
+    locsp = _block(lv, ltls[0] + 1, ltls[1], r"ocsp[ \t]*\{")
+    def socsp():
+        t = stls()
+        return _block(st, t[0] + 1, t[1], r"ocsp[ \t]*\{")
+    if socsp():
+        # no ocsp { } on this server means no OCSP: every staged key is commented out
+        kept = _merge_keys(st, socsp, lv, locsp, EAP_OCSP_KEYS)
+        if kept:
+            print("  [INFO] kept the live OCSP setting(s) %s in %s" % (", ".join(kept), rel))
+    open(s_path, "w").write("".join(st))
+keep_eap_settings()
 # clients.conf: the secret inside `client localhost { ... }`
 s_path = os.path.join(staged, "clients.conf")
 if os.path.exists(s_path) and "REDACTED" in open(s_path).read():
