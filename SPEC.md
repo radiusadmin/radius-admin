@@ -275,6 +275,14 @@ roles and database `radius` loaded from these files.
    inner instance `eap radius_admin_inner_eap` (mschapv2 only; section 20). Remove md5, psk, gtc. Remove `ca_path = ${cadir}` (test CA lives there). Set
    `reject_unknown_intermediate_ca = yes` (certs/site/ca.pem = Example-IssuingCA + Example-RootCA,
    sizes match). cipher_list = FIPS list (§7). Keep OCSP as is.
+   Upgrades keep the site's values (`install.sh` `carry_over_secrets`, when the live file was
+   installed by radius-admin, i.e. has a `radius-admin:` comment; a stock eap is not merged): in
+   `tls-config tls-common` outside its sub-sections `private_key_password`, `private_key_file`,
+   `certificate_file`, `ca_file`, `ca_path`, `check_crl`, `check_all_crl`, `check_cert_issuer`,
+   `check_cert_cn`, and in its `ocsp { }` `enable`, `override_cert_url`, `url`, `use_nonce`,
+   `timeout`, `softfail` (set, added or commented out to match the live file; a live file
+   without `ocsp { }` keeps OCSP off). Ciphers, TLS versions and the method blocks come from the
+   release. The installer prints the names of the kept keys, never their values.
 6. `mods-available/ldap`: `ldap_debug = 0x0000`, `tls_min_version = "1.2"`,
    `cipher_list` = FIPS list. Nothing else.
 7. Modules to remove from mods-enabled: chap, digest, dpsk, dynamic_clients, echo,

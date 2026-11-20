@@ -218,7 +218,11 @@ What it does, in order:
    clients now come from the database). Secrets that are `REDACTED` placeholders in the
    repo (LDAP bind password, `localhost` client secret) are carried over from the live
    files; if the live `client localhost` secret or LDAP password cannot be found the
-   phase **stops before changing anything**.
+   phase **stops before changing anything**. On an upgrade the live LDAP connection
+   settings and, in `mods-available/eap`, the EAP certificate, CA, CRL and OCSP settings
+   (`ocsp { url }` among them) are kept too (SPEC §4 item 5); the phase prints which keys it
+   kept. After the phase, `diff` the new `mods-available/eap` against the backup tarball if
+   EAP-TLS logins fail.
 3. Renders the initial `policy.d/radius-admin` and `radius-admin-clients.conf` from the
    database with `python3 -m radius_admin.cli render` (as `radius-admin`) and installs
    them root:freerad 0640; also leaves them in the app's staging dir.
