@@ -218,7 +218,8 @@ Commercial licences are annual, per organization, by headcount: USD 1,000 (50–
 USD 4,000 (250–999), USD 10,000 (1,000–4,999), on request from 5,000. Every tier includes every
 feature and unlimited servers. These are list prices; deployments with special requirements are
 quoted individually. [LICENSING.md](LICENSING.md) explains how to count the
-headcount, the rules for service providers and how to get a licence.
+headcount, the rules for service providers and how to get a licence. Questions, or a price that
+does not fit? E-mail licensing@radiusadmin.net; prices are open to discussion.
 radius-admin is provided WITHOUT ANY WARRANTY; see the licence for details.
 
 The release bundle also contains the `radius-admin-freeradius` package: FreeRADIUS, a separate

@@ -65,10 +65,12 @@ the final price is the one in the signed agreement.
 
 ## How to get a commercial licence
 
-Commercial licences are being set up. Until a licensing address is published, open a private
-conversation through the repository (see "Contact" on the project page) and describe your
-organization and deployment.
-<!-- TODO before the first BSL release: licensing contact address. -->
+E-mail **licensing@radiusadmin.net** with your organization's name, its headcount and a short
+description of the deployment.
+
+Prices are open to discussion. radius-admin is made by one person, not a sales department: if
+the list price does not fit your organization, or your situation is unusual, please get in
+touch. I am flexible, and for some organizations free use may be possible. Just ask.
 
 ## Older versions and the future
 
