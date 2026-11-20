@@ -133,8 +133,15 @@ sudo ./deploy/make-csr.sh                 # ECDSA P-384; add --ip <management-IP
 cat /etc/radius-admin/tls/server.csr      # submit to pki.example.net (TLS Web Server template)
 # when issued (leaf first, then Example-IssuingCA):
 sudo install -o root -g root -m 0644 radius.example.net-chain.pem /etc/radius-admin/tls/server.crt
-sudo ./deploy/install.sh --phase packages,users -y     # no service impact
+sudo ./deploy/install.sh --phase packages,nginx-update,users -y     # no service impact
 ```
+
+`nginx-update` upgrades nginx when it is older than the oldest build with the security fixes
+the portal needs (`RA_NGINX_MIN_VERSION` in `deploy/lib.sh`, currently `1.24.0-2ubuntu7.20`;
+see SECURITY.md 2.v). Preflight warns about an old nginx; the phase refreshes the package lists
+if needed, upgrades it when the mirror has a fixed build and restarts it if it was running. If
+the mirror has none (no `noble-security`), it warns and the install continues. Check with
+`dpkg-query -W nginx`.
 
 Verify: `id radius-admin`, `ls -l /etc/radius-admin/keys/data.key` →
 `-r-------- radius-admin radius-admin 32`. **Back up `data.key` offline** (encrypted
@@ -927,7 +934,8 @@ the package to your home directory on the server, checks the SHA-256 there and r
 How `update.sh` chooses what to run: it unpacks the release to
 `/opt/radius-admin-src/releases/<UTC time>-<hash>` (root-owned), compares it with
 `/opt/radius-admin-src/current`, and runs `install.sh` with `packages` only if the package
-list changed, `postgres` if `sql/` or `deploy/postgres/` changed, always `app`, and `nginx`
+list changed, `nginx-update` if the installed nginx is older than the new release's security
+floor (it upgrades nginx from the mirror and restarts it), `postgres` if `sql/` or `deploy/postgres/` changed, always `app`, and `nginx`
 or `firewall` if their templates changed (the plan then shows the portal settings they keep from
 this server, see section 13.1; extra `install.sh` options go after `--`). FreeRADIUS files are only installed with
 `-WithFreeradius`; FreeRADIUS is never restarted by an update. The first push (no previous

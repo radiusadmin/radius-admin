@@ -7,6 +7,9 @@
 # Phases (in order):
 #   preflight  read-only checks (deploy/preflight.sh); aborts on blocking failures
 #   packages   apt install from the configured mirror
+#   nginx-update  upgrade nginx when it is older than RA_NGINX_MIN_VERSION (lib.sh: the oldest
+#              build with the security fixes the portal needs) and the mirror has a fixed build
+#              (runs apt-get update first if needed); restarts a running nginx
 #   fr-package install the bundled FreeRADIUS package (packages/radius-admin-freeradius_*.deb)
 #              when no FreeRADIUS is installed, or upgrade it when the bundled one is newer.
 #              A FreeRADIUS installed some other way is kept. Restarts radiusd only with
@@ -61,7 +64,7 @@ OPT_OCSP_URL=${RA_OCSP_URL:-}   # set in the environment: wins over the installe
 # shellcheck source=answers.sh
 . "$HERE/answers.sh"
 
-ALL_PHASES=(preflight packages fr-package users postgres migrate freeradius app site nginx firewall bootstrap)
+ALL_PHASES=(preflight packages nginx-update fr-package users postgres migrate freeradius app site nginx firewall bootstrap)
 PHASES=()
 FROM=""
 CONFIRM_MIGRATE=0
@@ -282,6 +285,37 @@ phase_packages() {
         rm -f /etc/nginx/sites-enabled/default
         info "disabled nginx default site (port 80)"
         systemctl reload nginx 2>/dev/null || true
+    fi
+}
+
+# nginx security fixes (RA_NGINX_MIN_VERSION, lib.sh): upgrade nginx when it is older and the
+# mirror has a fixed build. A running nginx is restarted, not reloaded: a reload keeps the old
+# binary in memory. Nothing to do (and no apt call) when nginx is current or not installed.
+phase_nginx_update() {
+    hdr "Phase nginx-update"
+    local v c
+    v=$(nginx_installed_version || true)
+    if [[ -z $v ]]; then info "nginx is not installed; nothing to update"; return 0; fi
+    if nginx_version_ok "$v"; then ok "nginx $v has the required security fixes ($RA_NGINX_MIN_VERSION or later)"; return 0; fi
+    c=$(nginx_candidate_version || true)
+    if ! nginx_version_ok "$c"; then
+        info "nginx $v is older than $RA_NGINX_MIN_VERSION; refreshing the package lists"
+        DEBIAN_FRONTEND=noninteractive apt-get update -qq || warn "apt-get update failed"
+        c=$(nginx_candidate_version || true)
+    fi
+    if ! nginx_version_ok "$c"; then
+        warn "nginx $v lacks security fixes (needs $RA_NGINX_MIN_VERSION or later) and the package mirror has no fixed build (candidate ${c:-none}); enable the noble-security updates, then run: install.sh --phase nginx-update"
+        return 0
+    fi
+    DEBIAN_FRONTEND=noninteractive NEEDRESTART_SUSPEND=1 apt-get install -y -q --only-upgrade --no-install-recommends nginx
+    v=$(nginx_installed_version || true)
+    nginx_version_ok "$v" || die "nginx upgrade to $c did not take effect (installed: ${v:-none})"
+    if systemctl is-active --quiet nginx; then
+        nginx -t >/dev/null 2>&1 || die "nginx upgraded to $v but nginx -t fails; it was not restarted (the old version keeps running until it is): check nginx -t"
+        systemctl restart nginx
+        ok "nginx upgraded to $v and restarted"
+    else
+        ok "nginx upgraded to $v (not running)"
     fi
 }
 
@@ -1146,6 +1180,7 @@ for p in "${ALL_PHASES[@]}"; do
     case $p in
         preflight) phase_preflight ;;
         packages) phase_packages ;;
+        nginx-update) phase_nginx_update ;;
         fr-package) phase_fr_package ;;
         users) phase_users ;;
         postgres) phase_postgres ;;

@@ -1328,3 +1328,33 @@ meta refresh stays only inside `<noscript>`, so every page still works without J
   - **Effect.** Reply attributes and MAB port types reach FreeRADIUS at the next Apply (the apply
     page shows the pending change for a profile in use); CoA attributes, the CoA port and
     port-name rules apply from the monitor's next pass and the next page load.
+
+## 27. Change (2026-11-19): nginx security floor
+
+- **Why.** The nginx security release of 2026-11-18 (1.30.7 / 1.31.9) fixes two HTTP/2 bugs
+  (CVE-2026-123007, CVE-2026-123633) and a TLS 1.3 denial of service (CVE-2026-118899) that
+  the portal's site is exposed to (`listen … ssl http2`, TLS 1.3, `proxy_pass` to gunicorn).
+  Ubuntu 24.04 fixed them in nginx `1.24.0-2ubuntu7.20` (USN-9159-1). The other CVEs of that
+  release need HTTP/3, the mail proxy, stream modules, a `proxy_pass` built from request data
+  with `resolver`, or `try_files` with `alias` and `map` captures; the site uses none of them.
+- **`RA_NGINX_MIN_VERSION`** (`deploy/lib.sh`, overridable from the environment): the oldest
+  nginx package with the fixes the site needs, compared with `dpkg --compare-versions`. Raise it
+  when a later nginx advisory affects the site template. Helpers `nginx_installed_version`,
+  `nginx_candidate_version`, `nginx_version_ok` (read-only).
+- **Preflight** reports the installed nginx (OK, or WARN when older, saying whether the package
+  lists already offer a fixed build), or, before nginx is installed, warns when the candidate
+  is older. Warnings only: preflight stays read-only and never blocks on this.
+- **Installer phase `nginx-update`** (after `packages`, before `fr-package`): nothing when nginx
+  is not installed or already at the floor (no apt call). Otherwise, when the cached candidate
+  is too old it runs `apt-get update` once; when the candidate then meets the floor it runs
+  `apt-get install --only-upgrade nginx` (`NEEDRESTART_SUSPEND=1`), checks the installed
+  version, and restarts a running nginx after `nginx -t` (a restart, not a reload: a reload keeps
+  the old binary). No fixed build on the mirror: a warning, the install continues. `nginx -t`
+  failing after the upgrade stops the installer without restarting nginx.
+- **`update.sh`** adds `nginx-update` to its automatic choice when the installed nginx is older
+  than the *new* release's `RA_NGINX_MIN_VERSION` (it sources the new `deploy/lib.sh`), so a
+  release that raises the floor upgrades nginx on servers that update; the plan shows the phase
+  before the confirmation. The portal's signed updates run the same `update.sh`, and their
+  health check (nginx active and listening on 443) covers the restart.
+- Tests: `tests/installer/test_nginx_update.sh` (version comparison, every branch of the phase
+  with stubbed apt/dpkg/systemctl/nginx, the update.sh choice, preflight wiring).
