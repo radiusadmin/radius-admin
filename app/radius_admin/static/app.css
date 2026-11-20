@@ -180,6 +180,7 @@ body.app {
   background: var(--steel-800); color: #d5dee6;
   padding: 1rem .75rem 2rem;
   position: sticky; top: var(--top-h); height: calc(100vh - var(--top-h)); overflow-y: auto;
+  display: flex; flex-direction: column;
 }
 .sidenav ul { list-style: none; margin: 0 0 .5rem; padding: 0; }
 .sidenav a {
@@ -190,10 +191,23 @@ body.app {
 .sidenav a:hover { background: var(--steel-700); }
 .sidenav a[aria-current="page"] { background: var(--steel-700); color: #fff; border-left-color: #7fd3c7; }
 .nav-group { margin: 1.1rem .7rem .35rem; font-size: .78rem; color: var(--steel-300); }
+.nav-foot { margin-top: auto; padding-top: .75rem; border-top: 1px solid var(--steel-700); }
 .nav-apply .dot { width: 9px; height: 9px; border-radius: 50%; background: #f2b24c; box-shadow: 0 0 0 3px rgba(242, 178, 76, .25); }
 
 .main { grid-area: main; padding: 1.5rem 2rem 3rem; max-width: none; width: 100%; min-width: 0; }
 .main:focus { outline: none; }
+.crumb { margin: 0 0 .5rem; font-size: .9rem; }
+.crumb a::before { content: "\2190\00a0"; }
+
+/* Settings overview: one panel per category */
+/* columns, not a grid: cards stack without the gaps a tall card leaves in its row */
+.settings-groups { columns: 2 340px; column-gap: 1rem; max-width: 1100px; }
+.settings-groups .panel { break-inside: avoid; margin: 0 0 1rem; }
+.settings-groups .panel h2 { margin-top: 0; }
+.settings-links { list-style: none; margin: 0; padding: 0; }
+.settings-links li + li { margin-top: .75rem; padding-top: .75rem; border-top: 1px solid var(--line); }
+.settings-links a { font-weight: 600; }
+.settings-links p { margin: .2rem 0 0; }
 
 /* The pending strip: the one loud element. Amber = staged. */
 .pending-strip {

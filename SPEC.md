@@ -707,8 +707,12 @@ CSV columns (header row required, exact names, any order tolerated by name):
   option. `install.sh --print-settings` prints each value and its source; `update.sh` shows it in
   the plan when it runs `nginx` or `firewall`, and stops (release discarded) if it fails.
 - **Navigation and wording.** Side navigation grouped by topic: Network access (RADIUS clients,
-  access rules, MAB devices, switch admins, custom policy, Apply changes), Monitoring, Records,
-  Administration (settings, single sign-on, UI admins, setup checklist; admins only). The
+  access rules, MAB devices, switch admins, custom policy, Apply changes), Monitoring, Records.
+  Admins also get one **Settings** button pinned to the bottom of the side panel (it carries the
+  update badge); it opens `/settings/overview`, which lists the settings pages by category:
+  RADIUS and switches (general settings), Console access (UI admins, single sign-on, sign-in
+  notice, sessions and time zone), Notifications (alert settings), Maintenance (updates, setup
+  checklist). Those pages highlight the button and show an "All settings" link back. The
   "Live now" / "Needs Apply" badges are gone: pages whose changes need Apply (clients, client
   import, RadSec listener, custom policy) show one note under the title (`m.apply_note()`).
 - **Console session limits in Settings** (admin + step-up): step-up window 1–60 min, idle timeout

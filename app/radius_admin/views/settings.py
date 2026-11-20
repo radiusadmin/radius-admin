@@ -142,3 +142,10 @@ def policy_preview():
     except Exception as e:
         policy, error = None, str(e)
     return render_template("settings/preview.html", policy=policy, error=error)
+
+
+@bp.route("/settings/overview")
+@role_required("admin")
+def overview():
+    """The page behind the Settings button: every admin settings page, by category."""
+    return render_template("settings/overview.html")
