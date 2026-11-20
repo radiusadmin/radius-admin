@@ -185,15 +185,71 @@ def test_duo_grammar_refusals(denv, bad):
     assert r["ok"] is False and duo_live(denv) == OLD_DUO and denv.live("policy") == b"# old policy\n"
 
 
-def test_fips_mode_needs_fips_mode_and_failmode_secure(denv):
-    _write(denv.fips, "1\n", 0o644)
-    denv.stage()
-    stage_duo(denv)                                                  # rendered without fips_mode
-    assert denv.call({"action": "apply"})["ok"] is False
-    stage_duo(denv, unlang.render_duo_config(dict(SETTINGS, failmode="safe"), fips=True).encode())
-    r = denv.call({"action": "apply"})
+@pytest.fixture
+def fenv(denv):
+    """denv plus a signed catalog (SPEC section 29.4: in FIPS mode the installed build must be
+    FIPS-capable in it)."""
+    from test_helper_integrations import _openssl
+    e = denv
+    e.keys = os.path.join(e.root, "keys")
+    os.makedirs(e.keys)
+    _openssl("ecparam", "-name", "secp384r1", "-genkey", "-noout", "-out", os.path.join(e.keys, "key.pem"))
+    e.pub = os.path.join(e.keys, "pub.pem")
+    _openssl("pkey", "-in", os.path.join(e.keys, "key.pem"), "-pubout", "-out", e.pub)
+    os.chmod(e.pub, 0o644)
+    e.opt = os.path.join(e.root, "opt-integrations")
+    os.makedirs(e.opt)
+    e.catalog = os.path.join(e.opt, "catalog.json")
+    with open(e.conf, "a") as fh:
+        fh.write("update_pubkey = %s\nintegration_catalog = %s\n" % (e.pub, e.catalog))
+    return e
+
+
+def installed_as(e, sha="b" * 64, fips=True, version="6.8.1"):
+    _write(os.path.join(e.duo, ".radius-admin"),
+           json.dumps({"version": version, "verified": "catalog", "sha256": sha, "fips": fips}), 0o644)
+
+
+def test_fips_mode_needs_fips_mode_and_failmode_secure(fenv):
+    from test_helper_integrations import entry, ship
+    _write(fenv.fips, "1\n", 0o644)
+    installed_as(fenv)
+    ship(fenv, [entry("6.8.1", sha256="b" * 64, fips=True, fips_tested=["ubuntu-24.04-pro-fips-updates"])])
+    fenv.stage()
+    stage_duo(fenv)                                                  # rendered without fips_mode
+    assert fenv.call({"action": "apply"})["ok"] is False
+    stage_duo(fenv, unlang.render_duo_config(dict(SETTINGS, failmode="safe"), fips=True).encode())
+    r = fenv.call({"action": "apply"})
     assert r["ok"] is True, r
-    assert b"fips_mode=true" in duo_live(denv) and b"failmode=secure" in duo_live(denv)
+    assert b"fips_mode=true" in duo_live(fenv) and b"failmode=secure" in duo_live(fenv)
+
+
+@pytest.mark.parametrize("case", ["not-listed", "not-fips", "withdrawn", "installed-standard", "no-catalog"])
+def test_fips_mode_refuses_a_build_that_is_not_fips_capable(fenv, case):
+    """A Duo build that the signed catalog does not list as FIPS-capable (or that was installed
+    before FIPS mode was turned on) never gets a configuration in FIPS mode; validate says so too."""
+    from test_helper_integrations import entry, ship
+    _write(fenv.fips, "1\n", 0o644)
+    installed_as(fenv, fips=case != "installed-standard")
+    e = entry("6.8.1", sha256="b" * 64, fips=True, fips_tested=["ubuntu-24.04-pro-fips-updates"])
+    if case == "not-listed":
+        e["sha256"] = "c" * 64
+    elif case == "not-fips":
+        e.update(fips=False, fips_tested=[])
+    elif case == "withdrawn":
+        e["withdrawn"] = True
+    if case != "no-catalog":
+        ship(fenv, [e])
+    fenv.stage()
+    stage_duo(fenv, unlang.render_duo_config(SETTINGS, fips=True).encode())
+    for action in ("validate", "apply"):
+        r = fenv.call({"action": action})
+        assert r["ok"] is False and "FIPS-capable build" in r["message"], (action, r)
+    assert duo_live(fenv) == OLD_DUO and restarts(fenv) == []
+    # standard mode: the same build is fine
+    _write(fenv.fips, "0\n", 0o644)
+    stage_duo(fenv)
+    assert fenv.call({"action": "apply"})["ok"] is True
 
 
 def test_duo_config_without_duo_installed_is_refused(denv):

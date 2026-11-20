@@ -70,6 +70,20 @@
     <dt>Planned</dt>
     <dd>Okta RADIUS agent on this server, built-in authenticator codes (TOTP), privacyIDEA on this server.</dd>
   </dl>
-  <p class="small muted">The device must wait long enough for the person to answer: set its RADIUS timeout to about 60 seconds for logins that need a second factor. 802.1X network access never uses a second factor.</p>
+  <p class="small muted">802.1X network access never uses a second factor.</p>
+</section>
+
+<section class="panel" aria-labelledby="timeout-h">
+  <h2 id="timeout-h">RADIUS timeout on the devices</h2>
+  <p>A device admin login with a second factor waits for the person to answer the push or call; Duo allows up to 60 seconds. Devices that give up sooner reject the login before it is approved. Set the timeout on each device{% if policy['local'].enabled or policy['directory'].enabled %} the rules cover{% endif %}:</p>
+  {% if timeout_hints %}
+  <dl class="kv">
+  {% for h in timeout_hints %}
+    <dt>{{ h.label }} <span class="small muted">{{ h.clients }} client{{ '' if h.clients == 1 else 's' }}</span></dt>
+    <dd>{% if h.commands %}<pre class="code">{{ h.text }}</pre>{% else %}{{ h.text }}{% endif %}</dd>
+  {% endfor %}
+  </dl>
+  {% else %}<p class="empty">No enabled RADIUS clients{% if policy['local'].enabled or policy['directory'].enabled %} covered by the rules{% endif %}.</p>{% endif %}
+  <p class="small muted">From the clients' device profiles (Network access → Device profiles). A retransmitted request is answered once; it never sends a second push.</p>
 </section>
 {% endblock %}

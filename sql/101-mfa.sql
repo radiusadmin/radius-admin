@@ -113,4 +113,25 @@ $$;
 
 REVOKE ALL ON FUNCTION public.radius_admin_mfa_hex(text, text, text) FROM PUBLIC, radius_fr, radius_admin;
 GRANT EXECUTE ON FUNCTION public.radius_admin_mfa_hex(text, text, text) TO radius_fr;
+
+-- Alerts for the second factor (SPEC section 29.4), raised by the monitor service:
+--   mfa_provider_down  the applied Duo proxy is not running or not listening on 127.0.0.1:18120
+--   mfa_timeouts       rejects with "the second-factor provider did not answer" over a window
+--   mfa_unverified     an enabled provider runs a build installed with an admin-pasted SHA-256
+--   mfa_withdrawn      the installed build was withdrawn from the signed catalog
+-- mfa_enabled switches the first, third and fourth; the timeouts have their own switch.
+-- reminded_at: when an open alert was last sent again (unverified / withdrawn builds: daily).
+-- The kind list only grows (see 96-portal-alert.sql).
+ALTER TABLE ui.alert_settings ADD COLUMN IF NOT EXISTS mfa_enabled boolean NOT NULL DEFAULT true;
+ALTER TABLE ui.alert_settings ADD COLUMN IF NOT EXISTS mfa_timeout_enabled boolean NOT NULL DEFAULT true;
+ALTER TABLE ui.alert_settings ADD COLUMN IF NOT EXISTS mfa_timeout_threshold integer NOT NULL DEFAULT 3
+	CHECK (mfa_timeout_threshold BETWEEN 1 AND 100000);
+ALTER TABLE ui.alert_settings ADD COLUMN IF NOT EXISTS mfa_timeout_window_minutes integer NOT NULL DEFAULT 15
+	CHECK (mfa_timeout_window_minutes BETWEEN 1 AND 1440);
+ALTER TABLE ui.alert ADD COLUMN IF NOT EXISTS reminded_at timestamptz;
+
+ALTER TABLE ui.alert DROP CONSTRAINT IF EXISTS alert_kind_check;
+ALTER TABLE ui.alert ADD CONSTRAINT alert_kind_check
+	CHECK (kind IN ('reject_spike', 'switch_down', 'radius_down', 'portal_down', 'monitor_down', 'test',
+	                'mfa_provider_down', 'mfa_timeouts', 'mfa_unverified', 'mfa_withdrawn'));
 RESET ROLE;

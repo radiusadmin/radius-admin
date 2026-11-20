@@ -24,7 +24,7 @@ WorkingDirectory=/var/lib/radius-admin
 RuntimeDirectory=radius-admin
 RuntimeDirectoryMode=0750
 ExecStart=/usr/bin/gunicorn --bind unix:/run/radius-admin/app.sock --umask 0007 \
-    --workers 3 --timeout 180 --graceful-timeout 30 \
+    --workers 3 --timeout 240 --graceful-timeout 30 \
     --max-requests 2000 --max-requests-jitter 200 \
     --access-logfile - --error-logfile - --no-sendfile \
     radius_admin.wsgi:app

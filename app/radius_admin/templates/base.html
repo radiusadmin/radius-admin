@@ -104,7 +104,7 @@
 {% endif %}
 <main id="main" class="main" tabindex="-1">
   {% if current_user and in_settings and _ep != 'settings.overview' %}
-  <p class="crumb"><a href="{{ url_for('settings.overview') }}">All settings</a></p>
+  <p class="crumb"><a class="btn btn-quiet btn-small btn-back" href="{{ url_for('settings.overview') }}">All settings</a></p>
   {% endif %}
   {% with msgs = get_flashed_messages(with_categories=true) %}
   {% if msgs %}

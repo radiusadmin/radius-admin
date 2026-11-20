@@ -107,6 +107,68 @@ def providers_in_use(conn=None):
         "SELECT provider_id FROM ui.mfa_policy WHERE provider_id IS NOT NULL", conn=conn)}
 
 
+def coverage(conn=None):
+    """Which device admin logins need a second factor, for reports and the setup checklist:
+    {kind: {enabled, provider_id, provider (label), provider_type, provider_on, clients ('all'
+    or a list of client names), label}}, plus 'exempt' (local accounts) and 'providers'."""
+    providers = {p["id"]: p for p in load_providers(conn)}
+    names = {r["id"]: r["name"] for r in db.query("SELECT id, name FROM ui.radius_client", conn=conn)}
+    out = {}
+    for kind, pol in load_policy(conn).items():
+        p = providers.get(pol["provider_id"]) if pol["provider_id"] else None
+        out[kind] = {"enabled": pol["enabled"], "provider_id": pol["provider_id"],
+                     "provider": (p["label"] or TYPE_LABELS.get(p["type"], p["id"])) if p else "",
+                     "provider_type": p["type"] if p else "", "provider_on": bool(p and p["enabled"]),
+                     "clients": "all" if pol["client_scope"] == "all" else sorted(
+                         names[c] for c in pol["client_ids"] if c in names),
+                     "label": KIND_LABELS[kind]}
+    out["exempt"] = load_exempt(conn)
+    out["providers"] = list(providers.values())
+    return out
+
+
+MFA_METHODS = {"pap-admin+mfa": "local", "admin-ldap+mfa": "directory"}
+
+
+def provider_at(kind, when, conn=None):
+    """The provider that the second-factor rule for `kind` named at time `when`: the current
+    rule, with every later change (audit action integration.policy, detail {kind: {provider_id:
+    {from, to}}}) undone, newest first. None when the rule named none."""
+    pid = load_policy(conn)[kind]["provider_id"]
+    for r in db.query("SELECT detail FROM ui.audit_log WHERE action = 'integration.policy' AND success AND at > %s"
+                      " ORDER BY at DESC, id DESC", (when,), conn=conn):
+        d = r["detail"] if isinstance(r["detail"], dict) else json.loads(r["detail"] or "{}")
+        change = (d.get(kind) or {}).get("provider_id") if isinstance(d.get(kind), dict) else None
+        if isinstance(change, dict) and "from" in change:
+            pid = change["from"]
+    return pid
+
+
+def login_provider(authmethod, when, conn=None):
+    """For an authentication log record of a login with a second factor: {id, label, type,
+    kind} of the provider it went to (reconstructed from the rules at that time), or None for
+    other methods or when it cannot be known."""
+    kind = MFA_METHODS.get(authmethod or "")
+    if kind is None or when is None:
+        return None
+    pid = provider_at(kind, when, conn)
+    if not pid:
+        return None
+    p = get_provider(pid, conn)
+    return {"id": pid, "kind": kind, "type": p["type"] if p else "",
+            "label": (p["label"] or TYPE_LABELS.get(p["type"], pid)) if p else pid}
+
+
+def coverage_text(c):
+    """One account kind's coverage in words (c: one entry of coverage())."""
+    if not c["enabled"]:
+        return "not required"
+    where = "all clients" if c["clients"] == "all" else "selected clients: " + (", ".join(c["clients"]) or "none")
+    if not c["provider_on"]:
+        return "required on %s, but %s is off: these logins are rejected" % (where, c["provider"] or "the provider")
+    return "%s, on %s" % (c["provider"], where)
+
+
 # ---------------------------------------------------------------- Duo on this server (SPEC section 29.2)
 DUO_ID = "duo"
 DUO_FILE_RE = r"duoauthproxy-(\d{1,4}\.\d{1,4}\.\d{1,4})-src\.tgz"
@@ -135,3 +197,20 @@ def duo_configured(key, p):
     """True when ikey, skey and API hostname are set (the provider can be turned on)."""
     s = p["settings"]
     return bool(s.get("ikey") and s.get("api_host") and duo_secrets(key, p).get("skey"))
+
+
+def build_check(installed, entries, provider=DUO_ID):
+    """How the signed catalog sees an installed build (the helper's `installed` record):
+    {'verified': catalog-checked at install or listed since (same SHA-256, not withdrawn),
+     'withdrawn': the catalog withdrew this build (same SHA-256 or same version)}."""
+    installed = installed or {}
+    version, digest = installed.get("version") or "", installed.get("sha256") or ""
+    mine = [e for e in entries or [] if e.get("provider") == provider]
+    listed = any(digest and e.get("sha256") == digest and not e.get("withdrawn") for e in mine)
+    withdrawn = any(e.get("withdrawn") and ((digest and e.get("sha256") == digest)
+                                            or (version and e.get("version") == version)) for e in mine)
+    fips = any(digest and e.get("sha256") == digest and e.get("fips") and not e.get("withdrawn") for e in mine)
+    return {"verified": bool(installed) and (installed.get("verified") == "catalog" or listed) and not withdrawn,
+            "listed": listed, "withdrawn": withdrawn,
+            # FIPS mode (SPEC section 29.4): installed in FIPS mode and FIPS-capable in the catalog
+            "fips_capable": fips and installed.get("fips") is True}

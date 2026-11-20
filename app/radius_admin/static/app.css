@@ -196,8 +196,9 @@ body.app {
 
 .main { grid-area: main; padding: 1.5rem 2rem 3rem; max-width: none; width: 100%; min-width: 0; }
 .main:focus { outline: none; }
-.crumb { margin: 0 0 .5rem; font-size: .9rem; }
-.crumb a::before { content: "\2190\00a0"; }
+.crumb { margin: 0 0 .75rem; }
+/* back buttons above a page heading: a quiet button with a leading arrow */
+.btn-back::before { content: "\2190"; margin-right: .35rem; }
 
 /* Settings overview: one panel per category */
 /* columns, not a grid: cards stack without the gaps a tall card leaves in its row */

@@ -18,7 +18,7 @@
   {% if has_role('operator') %}
   <div class="apply-actions">
     <form method="post" action="{{ url_for('apply.validate') }}" class="inline" data-busy="Validating…">{{ m.csrf() }}<button class="btn" type="submit">Validate</button></form>
-    <form method="post" action="{{ url_for('apply.apply') }}" class="inline" data-confirm="Apply the configuration and restart FreeRADIUS now?" data-busy="Applying…">
+    <form method="post" action="{{ url_for('apply.apply') }}" class="inline" data-confirm="Apply the configuration and restart FreeRADIUS{{ ' and the Duo Authentication Proxy' if pending.providers }} now?" data-busy="{{ 'Applying… (with Duo this can take a few minutes)' if pending.providers else 'Applying…' }}">
       {{ m.csrf() }}<input type="hidden" name="expected" value="{{ policy_sha }}:{{ clients_sha }}:{{ providers_sha }}">
       <input type="hidden" name="return_to" value="{{ url_for('apply.index') }}">
       <button class="btn btn-primary" type="submit">Apply and restart</button></form>

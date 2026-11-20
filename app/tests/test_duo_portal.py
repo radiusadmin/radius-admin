@@ -270,3 +270,102 @@ def test_integrations_page_has_duo_buttons(browser, superconn, logged_in, idir):
     body = browser.text(browser.get("/integrations/"))
     assert 'class="btn btn-primary" href="/integrations/duo">Set up Duo' not in body      # set up: "Open" in the table
     assert 'href="/integrations/duo">Open</a>' in body
+
+
+def test_page_follows_the_catalog_after_install(browser, superconn, logged_in, idir):
+    """An entered-hash install counts as checked once a catalog lists its SHA-256, and a build
+    the catalog withdrew is flagged (SPEC sections 29 and 29.4)."""
+    h = helper_of(browser)
+    h.duo.update(installed={"version": "6.9.0", "sha256": "d" * 64, "verified": "pasted-hash"},
+                 service_active=True, listening=True)
+    logged_in("viewer")
+    body = browser.text(browser.get("/integrations/duo"))
+    assert "Unverified: SHA-256 entered by an admin" in body and "does not list it yet" in body
+    h.catalog = {"serial": 5, "source": "release", "message": "", "entries": [
+        {"provider": "duo", "version": "6.9.0", "sha256": "d" * 64, "fips": False, "withdrawn": False}]}
+    body = browser.text(browser.get("/integrations/duo"))
+    assert "checked against the signed catalog" in body and "Unverified" not in body
+    h.catalog["entries"][0]["withdrawn"] = True
+    body = browser.text(browser.get("/integrations/duo"))
+    assert "withdrawn from the signed catalog" in body and "withdrew this build" in body
+    assert "checked against the signed catalog" not in body
+
+
+def test_apply_with_a_duo_change_waits_longer(app, browser, superconn, logged_in, idir, monkeypatch):
+    """SPEC section 29.4: an apply that restarts the Duo proxy too can take the helper ~180 s
+    (both services failing and being restored); the portal then waits helper_duo_timeout, and
+    gunicorn and nginx wait longer than that."""
+    from radius_admin import helper_client
+    waits = []
+    real = helper_client.call
+
+    def spy(sock, action, timeout=120, **kw):
+        if action in ("apply", "rollback"):
+            waits.append((action, timeout))
+        return real(sock, action, timeout=timeout, **kw)
+    monkeypatch.setattr(helper_client, "call", spy)
+    helper_of(browser).duo["installed"] = {"version": "6.8.1", "verified": "catalog"}
+    admin(browser, superconn, logged_in)
+    page = browser.text(browser.get("/apply/"))
+    assert "Applying…\"" in page                                    # nothing about Duo yet
+    browser.post("/apply/apply", {}, csrf_page="/apply/")
+    browser.post("/integrations/duo/settings", dict(SETTINGS_FORM, enabled="1"), csrf_page="/integrations/duo")
+    page = browser.text(browser.get("/apply/"))
+    assert "with Duo this can take a few minutes" in page
+    browser.post("/apply/apply", {}, csrf_page="/apply/")           # Duo file changes: long wait
+    browser.post("/apply/apply", {}, csrf_page="/apply/")           # unchanged: the usual wait
+    assert waits == [("apply", 10), ("apply", 210), ("apply", 10)]
+    bid = helper_of(browser).backups[0]
+    browser.post("/apply/rollback", {"backup_id": bid}, csrf_page="/apply/")
+    assert waits[-1] == ("rollback", 210)
+    # the timeouts in front of the portal are longer than the longest helper wait
+    from radius_admin.config import DEFAULTS
+    root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "deploy")
+    with open(os.path.join(root, "systemd", "radius-admin.service")) as fh:
+        gunicorn = int(re.search(r"--timeout (\d+)", fh.read()).group(1))
+    with open(os.path.join(root, "nginx", "radius-admin.conf")) as fh:
+        nginx = int(re.search(r"proxy_read_timeout (\d+)s;", fh.read()).group(1))
+    with open(os.path.join(root, "etc", "helper.conf.example")) as fh:
+        h = dict(re.findall(r"(?m)^(lock_timeout|validate_timeout|restart_timeout|restart_wait) = (\d+)", fh.read()))
+    worst = int(h["lock_timeout"]) + int(h["validate_timeout"]) + 4 * (int(h["restart_timeout"]) + int(h["restart_wait"]))
+    assert worst < DEFAULTS["helper_duo_timeout"] < gunicorn and DEFAULTS["helper_duo_timeout"] < nginx
+
+
+def test_fips_mode_turns_duo_on_only_with_a_fips_capable_build(app, browser, superconn, logged_in, idir):
+    """SPEC section 29.4: in FIPS mode Duo can be turned on only when the installed build was
+    installed in FIPS mode and the signed catalog lists it as FIPS-capable."""
+    h = helper_of(browser)
+    h.duo["installed"] = {"version": "6.8.1", "sha256": "b" * 64, "verified": "catalog", "fips": False}
+    h.catalog = {"serial": 2, "source": "release", "message": "", "entries": [
+        {"provider": "duo", "version": "6.8.1", "sha256": "b" * 64, "fips": False, "withdrawn": False}]}
+    admin(browser, superconn, logged_in)
+    body = browser.text(browser.get("/integrations/duo"))
+    assert "not FIPS-capable" not in body                            # standard mode: never mentioned
+    app.config["RA"]["require_fips"] = True
+    body = browser.text(browser.get("/integrations/duo"))
+    assert "FIPS mode: this build is not FIPS-capable" in body and "installed before FIPS mode" in body
+    r = browser.post("/integrations/duo/settings", dict(SETTINGS_FORM, enabled="1"), csrf_page="/integrations/duo")
+    assert r.status_code == 400 and "Install a FIPS-capable build first" in browser.text(r)
+    assert q(superconn, "SELECT enabled FROM ui.mfa_provider WHERE id='duo'") in ([], [(False,)])
+    # saving with Duo off still works
+    r = browser.post("/integrations/duo/settings", SETTINGS_FORM, csrf_page="/integrations/duo")
+    assert r.status_code == 302
+    h.catalog["entries"][0].update(fips=True, fips_tested=["ubuntu-24.04-pro-fips-updates"])
+    h.duo["installed"]["fips"] = True
+    assert "not FIPS-capable" not in browser.text(browser.get("/integrations/duo"))
+    r = browser.post("/integrations/duo/settings", dict(SETTINGS_FORM, enabled="1"), csrf_page="/integrations/duo")
+    assert r.status_code == 302 and q(superconn, "SELECT enabled FROM ui.mfa_provider WHERE id='duo'") == [(True,)]
+
+
+def test_checks_return_to_their_section(browser, superconn, logged_in, idir):
+    """The server check and the connectivity check post to an address with the section's
+    fragment, so the result page opens at the result instead of the top."""
+    helper_of(browser).duo.update(installed={"version": "6.8.1", "verified": "catalog"}, service_active=True)
+    admin(browser, superconn, logged_in)
+    body = browser.text(browser.get("/integrations/duo"))
+    assert 'action="/integrations/duo/check#duo-check"' in body and 'id="duo-check"' in body
+    assert 'action="/integrations/duo/test#duo-test"' in body and 'id="duo-test"' in body
+    body = browser.text(browser.post("/integrations/duo/test", {}, csrf_page="/integrations/duo"))
+    assert 'id="duo-test"' in body and "The Auth Proxy was able to reach Duo" in body
+    # the back link above the heading is a button
+    assert '<a class="btn btn-quiet btn-small btn-back" href="/integrations/">Integrations</a>' in body

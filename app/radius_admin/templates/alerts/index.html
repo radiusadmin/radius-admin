@@ -5,7 +5,7 @@
 {% block content %}
 <header class="page-head">
   <div><h1>Alerts</h1>
-  <p class="lede">Raised by the monitoring service: reject spikes, switches that stop answering, and FreeRADIUS going down. Each alert is sent once when it opens and once when it clears.</p></div>
+  <p class="lede">Raised by the monitoring service: reject spikes, switches that stop answering, FreeRADIUS or the portal going down, and problems with the second factor for device admins. Each alert is sent once when it opens and once when it clears.</p></div>
   {% if has_role('admin') %}<div class="head-actions">
     {% if testing %}{{ m.busy_button('Sending…', 'btn btn-quiet') }}{% else %}{{ m.post_button(url_for('alerts.test'), 'Send test alert', 'btn btn-quiet', busy='Sending…') }}{% endif %}
     <a class="btn btn-primary" href="{{ url_for('alerts.settings') }}">Alert settings</a></div>{% endif %}
@@ -28,6 +28,8 @@
       {% if mon and mon.radius_checked_at %}<span class="cell-sub">Last check {{ mon.radius_checked_at|ago }}: {{ mon.radius_message }}</span>{% endif %}</dd>
     <dt>Portal down</dt><dd>{% if s.portal_enabled %}nginx checked every minute; alerts after 2 failed checks by syslog{{ ' and email' if s.email_enabled }}{% else %}<span class="muted">Off</span>{% endif %}
       {% if s.portal_enabled and not s.email_enabled %}<span class="cell-sub warn-text">Email is off: these alerts go only to the local syslog. Forward it or turn on email.</span>{% endif %}</dd>
+    <dt>Second-factor provider</dt><dd>{% if s.mfa_enabled %}Duo proxy checked every minute once applied; unverified or withdrawn builds reported daily{% else %}<span class="muted">Off</span>{% endif %}</dd>
+    <dt>Second factor not answering</dt><dd>{% if s.mfa_timeout_enabled %}{{ s.mfa_timeout_threshold }} or more device admin logins without an answer within {{ s.mfa_timeout_window_minutes }} min{% else %}<span class="muted">Off</span>{% endif %}</dd>
   </dl>
 </section>
 

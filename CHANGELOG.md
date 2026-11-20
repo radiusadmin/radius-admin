@@ -29,6 +29,22 @@ release, so previews sort after it.
   download or upload Duo, install it with a live log, enter its keys, test the connection, remove
   it. Duo then serves local and directory device admin accounts; its configuration is applied, shown
   as a diff and rolled back together with FreeRADIUS's files.
+- **Second-factor alerts.** Alerts when the Duo proxy stops or stops listening, when device admin
+  logins get no answer from the second-factor provider (threshold and window in Alert settings),
+  and once a day while the Duo build in use is unverified or was withdrawn from the signed catalog.
+- **Second factor in reports and logs.** The privileged-access report shows per account whether a
+  second factor is needed, by which provider and on which clients, and the break-glass exemptions;
+  the auth log detail of a `+mfa` login names its provider; the setup checklist has an optional
+  "Second factor for device admins" step; the Integrations page shows each device profile's RADIUS
+  timeout commands (Catalyst 1200/1300: `radius-server timeout 30`, `retransmit 2`), and custom
+  profiles have a field for them.
+
+### Changed
+- An apply that also restarts the Duo proxy may take up to about three minutes; the portal, nginx
+  and gunicorn now wait long enough for it (`helper_duo_timeout`, 210 s; 240 s in front).
+- A Duo build the signed catalog marks FIPS-capable is now required in FIPS mode for turning Duo on
+  and for every apply with Duo, not only for installing. No build is marked FIPS-capable yet.
+- The Duo page shows a build as checked once a later catalog lists it, and flags a withdrawn build.
 
 ### Changed
 - **Licence: from the GNU AGPL to the Business Source License 1.1 (source available).**

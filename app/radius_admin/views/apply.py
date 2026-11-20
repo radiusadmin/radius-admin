@@ -48,9 +48,17 @@ def _mask_duo(text):
     return re.sub(r"(?m)^((?:skey|secret|radius_secret_\d+)=).*$", r"\1********", text or "")
 
 
-def _call(action, **kw):
+def helper_wait(duo_change):
+    """Seconds to wait for the helper: helper_timeout, or helper_duo_timeout when the call may also
+    restart the Duo Authentication Proxy (its worst case, both services failing and being restored,
+    is about 180 s with the helper's defaults; SPEC section 29.4)."""
+    c = cfg()
+    return max(c["helper_timeout"], c.get("helper_duo_timeout", 210)) if duo_change else c["helper_timeout"]
+
+
+def _call(action, duo_change=False, **kw):
     try:
-        return helper_client.call(cfg()["helper_socket"], action, timeout=cfg()["helper_timeout"], **kw)
+        return helper_client.call(cfg()["helper_socket"], action, timeout=helper_wait(duo_change), **kw)
     except helper_client.HelperError as e:
         return {"ok": False, "action": action, "message": str(e)}
 
@@ -149,7 +157,9 @@ def apply():
         flash("The configuration changed while you were reviewing it. Review the new diff and apply again.",
               "error")
         return redirect(url_for("apply.index"))
-    resp = _call("apply")
+    staged_duo = providers.get("provider-duo")
+    resp = _call("apply", duo_change=staged_duo is not None
+                 and staged_duo != read_applied()["providers"].get("provider-duo"))
     ok = bool(resp.get("ok"))
     # Trust the hashes we staged; flag a mismatch reported by the helper.
     hp, hc = resp.get("policy_sha256"), resp.get("clients_sha256")
@@ -176,7 +186,10 @@ def rollback():
     if not BACKUP_RE.match(backup_id):
         flash("Choose a valid backup.", "error")
         return redirect(url_for("apply.index"))
-    resp = _call("rollback", backup_id=backup_id)
+    # a backup can carry a Duo configuration that radius-admin applied earlier
+    duo_known = "provider-duo" in read_applied()["providers"] or bool(
+        db.query_one("SELECT 1 AS x FROM ui.mfa_provider WHERE type = 'duo'"))
+    resp = _call("rollback", duo_change=duo_known, backup_id=backup_id)
     ok = bool(resp.get("ok"))
     hp = resp.get("policy_sha256") if isinstance(resp.get("policy_sha256"), str) else None
     hc = resp.get("clients_sha256") if isinstance(resp.get("clients_sha256"), str) else None

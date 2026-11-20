@@ -701,8 +701,8 @@ CSV columns (header row required, exact names, any order tolerated by name):
   `sso.settings`, `sso.group_add`, `sso.group_delete`.
 - **Setup checklist** (`views/setup.py`, admin): required steps (FreeRADIUS running via helper
   `status`, ≥1 enabled client, ≥1 enabled rule, admin subnet not the 192.0.2.0/24 example, applied
-  and not pending) and optional ones (second admin, switch admins, SSO, RadSec, monitoring, alert
-  e-mail; skippable). Dashboard strip until finished. Audited `setup.skip|restore|finish|reopen`.
+  and not pending) and optional ones (second admin, switch admins, second factor for device admins
+  (section 29.4), SSO, RadSec, monitoring, alert e-mail; skippable). Dashboard strip until finished. Audited `setup.skip|restore|finish|reopen`.
 - **Installer answers** (`deploy/answers.sh`): `install.sh` with no options on a terminal, or
   `--interactive`, asks server name, management subnet, listen address, switch networks, resolvers, portal
   certificate (self-signed ECDSA P-384 / CSR / existing) and the first admin; `--answers FILE`
@@ -1205,6 +1205,7 @@ meta refresh stays only inside `<noscript>`, so every page still works without J
   | `coa.send_nas_port_id` | Add NAS-Port-Id from the accounting record |
   | `coa.reauth`, `coa.bounce`, `coa.disconnect` | `null` (the device cannot) or `{"packet": "coa"\|"disconnect", "attrs": [...]}` |
   | `setup.accounting`, `setup.coa` | Optional. Device commands the portal shows (as escaped text, never configuration) for turning on accounting / dynamic authorization; `null` or absent: a generic sentence instead |
+  | `setup.mfa_timeout` | Optional (section 29.4). Device commands for a RADIUS timeout long enough for a second factor; `null` or absent: `vendors.GENERIC_MFA_TIMEOUT` |
   | `snmp.port_names` | Up to 8 rules `{"match": <regex, full match>, "ignore_case": bool, "format": ...}`; the first match renames an ifName; `format` is `[A-Za-z0-9/._:-]` plus `{n}`, `{n:lower}`, `{n:upper}` |
 
   Reply entries are `{"attr", "op": ":=" | "+=", "value"}`, CoA entries `{"attr", "value"}`, at
@@ -1640,8 +1641,8 @@ unreachable). The portal pages that drive this follow.
   back and FreeRADIUS is left unchanged; a FreeRADIUS failure restores both. An unchanged Duo file
   does not restart the proxy. Responses and the state carry `duo_sha256`. `rollback` restores a
   backed-up Duo file that radius-admin wrote; Duo's own sample is not restored (the restored
-  FreeRADIUS files do not use Duo). With a changed Duo file the worst case of apply exceeds the
-  120 s the portal waits; a failing proxy is the rare path.
+  FreeRADIUS files do not use Duo). With a changed Duo file the worst case of apply is about 180 s;
+  the portal waits longer for it (section 29.4).
 - **Actions.** `integration_remove {"id", "actor"?}`: refused unless radius-admin installed it, while
   the live clients file still has the `radius-admin-mfa-primary` listener ("turn the provider off
   and apply first") or an install/removal runs; state `queued` with `action: remove`; starts
@@ -1685,3 +1686,66 @@ unreachable). The portal pages that drive this follow.
   `integration.install_requested` (file, verified, SHA-256), `integration.configure` (changes;
   `duo_skey_updated`, never the key), `integration.test`, `integration.remove_requested`; the outcome
   of an install or removal is `integration.install` / `integration.remove` (section 29.2).
+
+### 29.4 Second factor: alerts, reports, apply time, FIPS
+
+- **Alerts** (`alerts.py`, monitor every 60 s; `sql/101-mfa.sql` adds the kinds to
+  `alert_kind_check`, `ui.alert_settings.mfa_enabled`, `mfa_timeout_enabled`,
+  `mfa_timeout_threshold` (1–100000, default 3), `mfa_timeout_window_minutes` (1–1440, default 15)
+  and `ui.alert.reminded_at`):
+  - `mfa_provider_down` (subject `duo`): the Duo provider is on, the last successful apply/rollback
+    has a non-empty `providers_sha256`, and the helper's `integration_status` reports Duo not
+    installed, not active or not listening on 127.0.0.1:18120, in two checks in a row. A helper
+    error (or a helper without the action) neither opens nor resolves.
+  - `mfa_timeouts`: rejects with reason exactly `radius-admin: the second-factor provider did not
+    answer` (= `unlang._MFA_NO_ANSWER`) in the window ≥ threshold; resolves below threshold/2; its own
+    switch.
+  - `mfa_unverified` (subject `duo`): the provider is on and its build was installed with
+    `verified = pasted-hash` while no catalog entry with that SHA-256 (not withdrawn) exists; in FIPS
+    mode also when the build is not FIPS-capable (below), with a message starting "FIPS mode:".
+  - `mfa_withdrawn` (subject `duo`): an installed build (on or off) matches a withdrawn catalog entry
+    by SHA-256 or version.
+  - The last two are sent again (`alerts.remind_alert`, prefix "Still open: ") 24 h after they were
+    last sent, while open. `mfa_enabled` switches the three provider alerts. The monitor calls
+    `integration_status` every round and `integration_catalog` at most once an hour, only while
+    Duo is installed. `integrations.build_check(installed, entries)` → `verified`, `listed`,
+    `withdrawn`, `fips_capable` is shared with the Duo page, which now shows a build the catalog
+    lists later as checked and a withdrawn build in red.
+- **Reports and logs.** Privileged-access report: the "Two-factor" column of device admin rows is
+  "exempt (break-glass)", "not required", "<provider>, on all clients|selected clients: …" or
+  "required …, but <provider> is off: these logins are rejected" (`integrations.coverage`,
+  `coverage_text`), plus a section "Second factor for device admin logins" (accounts, required,
+  provider, provider state, clients, exempt) and notes (no exempt local account; reject when the
+  provider is off or silent). Auth log detail of `pap-admin+mfa` / `admin-ldap+mfa`: "Second factor"
+  with the provider the rule for that account kind named at the login's time
+  (`integrations.provider_at`: the current rule with every later successful `integration.policy`
+  change of `provider_id` undone; "Provider not known" when it named none). radpostauth gets no
+  provider column (rule 3). Setup checklist: optional step `mfa` "Second factor for device admins",
+  done when a rule is on and its provider is on, linking to the Integrations page.
+- **Device timeout.** Vendor profiles gain `setup.mfa_timeout` (section 26; Catalyst 1200/1300:
+  `radius-server timeout 30` + `radius-server retransmit 2`; generic-rfc `null` → the generic text;
+  custom profiles: form field `setup_mfa_timeout`). The Integrations page lists, per profile of the
+  enabled clients the enabled rules cover (all enabled clients when a rule covers all, or no rule
+  is on), the profile's commands or the generic text and the client count.
+- **Apply time.** Worst case of apply/rollback with a changed Duo file: lock 10 + validate 30 + 4 ×
+  (restart 20 + wait 15) = 180 s. The app waits `helper_duo_timeout` (default 210 s; never less than
+  `helper_timeout`) for `apply` when the staged `provider-duo` differs from the applied copy, and for
+  `rollback` when a Duo configuration was applied or a Duo provider exists; otherwise
+  `helper_timeout` (120 s). gunicorn `--timeout 240`, nginx `proxy_read_timeout 240s`. The Apply
+  button's busy text says it can take a few minutes when providers are pending. No helper protocol
+  change.
+- **FIPS.** In FIPS mode the helper's `validate`/`apply`/`rollback` with a staged Duo file also
+  require (`check_duo_fips`) that `<duo_dir>/.radius-admin` says `fips: true` (installed in FIPS
+  mode) and that the verified catalog has an entry with that SHA-256, `fips: true`, not withdrawn;
+  otherwise "FIPS mode: the installed Duo Authentication Proxy X is not a FIPS-capable build …" or
+  "… was installed before FIPS mode was turned on …", and nothing changes. The Duo page refuses
+  "On" for such a build in FIPS mode and says why (standard mode: no wording). No catalog entry is
+  FIPS-capable yet. `tools/integrations/duo-fips-check.py` (`source`, `host`, `installed`, `all`;
+  `--running`, `--json`) is the maintainers' lab check before `catalog.py fips` (RUNBOOK §6.9b):
+  R1 kernel FIPS, R2 system OpenSSL FIPS provider active, R3 Duo's `pkgs/fips_modules/<arch>/fips.so`
+  HMAC-SHA256 (OpenSSL's public fipsinstall key) equals its `module-mac`, in the source and the
+  installed tree, same file, R4 the installed provider loads with Duo's `openssl.cnf` (self-tests),
+  R5 Duo's Python with FIPS enabled refuses MD5 and computes SHA-256, R6 applied `fips_mode=true`,
+  `failmode=secure`, listening, log "FIPS mode is enabled"; M1 (CMVP certificate of the provider
+  version) and M2 (prebuilt provider, `cryptography` wheel with its own OpenSSL) are decided by the
+  maintainer. Exit 0 only when every required check that ran passed.

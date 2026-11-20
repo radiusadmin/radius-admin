@@ -437,6 +437,17 @@ tokens and RADIUS secrets are never logged; the helper redacts `secret = …` an
   `api-*.duosecurity.com:443`. Duo bundles its own Python and an OpenSSL FIPS module
   (`pkgs/fips_modules`); whether that module counts as validated on a given platform is checked per
   build before the catalog marks it FIPS-capable.
+- **FIPS mode** (section 29.4). Duo is installed, turned on and applied only for a build the signed
+  catalog marks FIPS-capable and that was installed in FIPS mode; the helper refuses to apply a Duo
+  configuration otherwise, so a Duo installed before FIPS mode was turned on never gets a new
+  configuration. Duo 6.8.1 ships OpenSSL FIPS Provider 3.1.2 as a prebuilt binary, and its
+  `cryptography` wheel links its own OpenSSL 3.3.2; with `fips_mode` only the FIPS provider serves
+  its cryptography (MD5 refused). Whether that is acceptable (CMVP certificate, prebuilt binaries)
+  is decided per build with `tools/integrations/duo-fips-check.py` on a FIPS lab machine; until
+  then no catalog entry is FIPS-capable and Duo is not available in FIPS mode.
+- **Monitoring** (section 29.4). Alerts when the applied Duo proxy is down, when logins get no
+  answer from the provider, daily while an unverified or withdrawn build is in use. The audit trail
+  of rule changes shows which provider a past login was sent to.
 
 ## Universal edition additions (SPEC section 14)
 

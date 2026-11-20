@@ -641,6 +641,23 @@ UI → **Alerts**. The monitoring service checks every minute and raises:
   Alerts page cannot be reached, so this one is useful only with syslog forwarding or
   email (the Alerts pages warn while email is off); afterwards it stays in the alert history. nginx restarts itself every 30 seconds after a failure (nginx phase drop-in), so
   an alert means it has stayed down; check `systemctl status nginx` and `nginx -t`.
+* **Second-factor provider down**: the Duo provider is on, a configuration with Duo has been
+  applied, and `duoauthproxy.service` is not active or not listening on 127.0.0.1:18120 in two
+  checks in a row. Device admin logins that need a second factor are rejected meanwhile; exempt
+  break-glass accounts still log in (§6.9b).
+* **Second factor not answering**: N or more device admin logins rejected with "the
+  second-factor provider did not answer" within M minutes (default 3 in 15; its own switch);
+  clears below N/2. A few are normal (an ignored push); many mean the provider or its link to
+  the vendor's cloud is down.
+* **Unverified second-factor build**: the Duo provider is on and its build was installed with
+  an admin-entered SHA-256 that the signed catalog still does not list. Sent again once a day
+  while open; clears by itself once a release's catalog lists the build.
+* **Withdrawn second-factor build**: the installed Duo build was withdrawn from the signed
+  catalog (by SHA-256 or version). Sent again once a day until a current build is installed.
+
+  The three provider alerts share one switch in Alert settings. The monitor asks the helper
+  (`integration_status`, the catalog once an hour); an older helper without those actions
+  raises nothing.
 
 Each alert is sent once when it opens and once when it clears, and recorded in the audit
 log. The dashboard and the side menu show open alerts; the dashboard and Alerts page also
@@ -831,7 +848,7 @@ requires one of the device admin groups (§6.9a). Not offered in FIPS mode.
 proxy on this server (127.0.0.1:18120); Duo sends the password check back to the virtual server
 `radius-admin-mfa-primary` (127.0.0.1:18121), which checks it exactly like a normal device admin
 login, and only then asks for the push, phone call or passcode. Installing and configuring Duo from
-the portal comes in a later release; the FreeRADIUS side is in place.
+the portal is described below.
 
 **Rules and break-glass.** Rules exist per account kind (local, directory) and can be limited to
 selected clients. Exempt local accounts (at most 10) never need a second factor: keep at least one,
@@ -882,10 +899,76 @@ to it: turn the Duo provider off and apply first; the removal keeps a copy of th
 `/var/backups/radius-admin/`. Outbound HTTPS from the proxy to `api-*.duosecurity.com:443` must be
 allowed.
 
+**Elsewhere in the portal.** The Integrations page lists, per device profile of the clients the
+rules cover, how to raise the device's RADIUS timeout (Catalyst 1200/1300: `radius-server timeout
+30` and `radius-server retransmit 2`, about 90 s with the retries; other devices: at least 60 s in
+total); custom profiles have a field for it. The auth log detail of a `+mfa` login names the
+provider the rule named at that time (rebuilt from the audit log of rule changes). The
+privileged-access report shows per account whether a second factor is needed, by which provider
+and on which clients, the exemptions, and warns when no local account is exempt. The setup
+checklist has an optional step "Second factor for device admins". Alerts: §6.5.
+
+**Applying with Duo takes longer.** An apply that changes Duo's configuration restarts the Duo
+proxy and then FreeRADIUS; in the worst case (both fail and are restored) the helper needs about
+180 s. The portal then waits up to `helper_duo_timeout` (210 s, `[app]` in radius-admin.conf),
+nginx and gunicorn up to 240 s; the Apply button says it can take a few minutes. A changed
+`restart_timeout`/`restart_wait` in helper.conf must keep `lock + validate + 4 × (restart + wait)`
+below `helper_duo_timeout`.
+
+**FIPS mode.** Only builds the signed catalog marks FIPS-capable can be installed, turned on and
+applied; the build must have been installed in FIPS mode, and Duo then runs with `fips_mode=true`
+and fail mode secure. A Duo installed before FIPS mode was turned on is refused at apply (validate
+says so) and the Unverified alert names the reason; install a FIPS-capable build or turn Duo off
+and apply. No catalog entry is FIPS-capable yet (see the maintainers' check below), so Duo is not
+available in FIPS mode for now; remote MFA servers are not offered in FIPS mode either.
+
 Maintainers add a build with `tools/integrations/catalog.py add duo X.Y.Z <downloaded file>
 --vendor-sha256 <value from the vendor's checksum page>` (refused unless both agree), mark it
 FIPS-capable only after the FIPS VM check (`catalog.py fips duo X.Y.Z <platform>`), and withdraw a
 bad one with `catalog.py withdraw duo X.Y.Z`; the next release signs the catalog.
+
+**FIPS check of a Duo build (maintainers only; lab VM, never a production server).** A build gets
+`fips: true` only after this check passes for it. What is known so far (Duo 6.8.1, read and run in
+a standard-mode sandbox): Duo ships a prebuilt OpenSSL FIPS provider per architecture
+(`pkgs/fips_modules/<amd64|aarch64>/fips.so`, "OpenSSL FIPS Provider 3.1.2", module MAC intact)
+with its `openssl.cnf`, installed as `/opt/duoauthproxy/usr/local/openssl/`; `fips_mode = true`
+in `[main]` makes Duo's `cryptography` 43.0.1 (a manylinux wheel that links its own OpenSSL 3.3.2)
+use only that provider: SHA-256 works, MD5 is refused. Duo logs "FIPS mode is not enabled" at a
+start without it.
+
+1. Lab VM: Ubuntu 24.04 LTS, `sudo pro attach <token>`, `sudo pro enable fips-updates`, reboot;
+   `cat /proc/sys/crypto/fips_enabled` must print 1. Install radius-admin from the release
+   candidate's bundle (`require_fips` on).
+2. Static check of Duo's file (nothing in it runs):
+   `python3 tools/integrations/duo-fips-check.py source duoauthproxy-X.Y.Z-src.tgz`
+   (R3: the provider for this architecture is intact; prints its version).
+3. Lab catalog: the helper installs in FIPS mode only builds the signed catalog marks
+   FIPS-capable, so sign a lab catalog with a throwaway key on the VM:
+   `openssl ecparam -name secp384r1 -genkey -noout -out lab.pem`,
+   `openssl pkey -in lab.pem -pubout -out lab-pub.pem`, `cp integrations/catalog.json lab.json`,
+   `tools/integrations/catalog.py --catalog lab.json add duo X.Y.Z <file> --vendor-sha256 <Duo's value>`,
+   `catalog.py --catalog lab.json fips duo X.Y.Z lab`, `catalog.py --catalog lab.json sign lab.pem`;
+   install `lab.json` and its `.sig` as `catalog.json` / `catalog.json.sig` (root, 0644) in
+   `/opt/radius-admin/integrations/`, and point `update_pubkey` in `/etc/radius-admin/helper.conf`
+   at `lab-pub.pem`. Never on a real server and never committed.
+4. Portal: Integrations → Duo: upload the build, install (FIPS mode), connect with the keys of a
+   Duo trial account's RADIUS application (or dummy keys: the proxy starts, logins fail), tick
+   On, Apply. A test login with a push is worth doing with a trial account.
+5. Full check: `sudo python3 tools/integrations/duo-fips-check.py all duoauthproxy-X.Y.Z-src.tgz
+   --running --json duo-X.Y.Z-fips.json`. Required: R1 kernel FIPS, R2 system OpenSSL FIPS
+   provider active, R3/R3i provider intact and the installed copy is the source's, R4 Duo's
+   provider loads and passes its self-tests, R5 MD5 refused / SHA-256 works in Duo's Python, R6
+   applied `fips_mode=true` + `failmode=secure`, proxy listening, log says FIPS mode is enabled.
+   Your decision: M1, the provider version is on an active CMVP certificate for OpenSSL's FIPS
+   provider (csrc.nist.gov, Cryptographic Module Validation Program; check the certificate's
+   status and its operational environment notes); M2, a prebuilt provider binary from Duo and a
+   `cryptography` wheel with its own OpenSSL are acceptable under rule 6 and the maintainer's
+   FIPS decision for providers.
+6. Only if all of that holds: in the repository, `tools/integrations/catalog.py fips duo X.Y.Z
+   ubuntu-24.04-pro-fips-updates`, with the JSON report's summary in the pull request; the next
+   release signs it. Otherwise leave `fips: false` and note why in the release notes.
+7. Throw the VM away (or `sudo /opt/duoauthproxy/uninstall --no-prompt` and restore
+   `update_pubkey`).
 
 ### 6.10 Device profiles (switches from other vendors)
 

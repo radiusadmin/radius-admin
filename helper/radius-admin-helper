@@ -131,6 +131,9 @@ CONFIG_DEFAULTS = {
 }
 # Worst case for apply with defaults: lock 10 + validate 30 + (restart 20 + wait 15)
 # + rollback (restart 20 + wait 15) = 110 s, inside the app's helper_timeout (120 s).
+# With a changed Duo configuration the proxy is restarted before FreeRADIUS and, when
+# FreeRADIUS fails, restored and restarted again: 10 + 30 + 4 x 35 = 180 s, inside the
+# app's helper_duo_timeout (210 s; nginx and gunicorn wait 240 s).
 
 _FACILITIES = {
     "authpriv": syslog.LOG_AUTHPRIV, "auth": syslog.LOG_AUTH, "daemon": syslog.LOG_DAEMON,
@@ -1282,6 +1285,7 @@ def act_validate(cfg, req):
             if not _duo_ready(cfg):
                 raise HelperError("a Duo configuration is staged, but the Duo Authentication Proxy is not installed")
             check_duo_config(duo, fips_on(cfg))
+            check_duo_fips(cfg)
         ok, out, n = validate_candidate(cfg, vroot, policy, clients)
     resp = {"ok": ok, "message": ("configuration valid (%d clients)" % n) if ok
             else "radiusd -XC reported errors", "output": out,
@@ -1289,6 +1293,25 @@ def act_validate(cfg, req):
     if duo is not None:
         resp["duo_sha256"] = sha256(duo)
     return resp
+
+
+def check_duo_fips(cfg):
+    """FIPS mode (SPEC section 29.4): a Duo configuration is installed only while the installed
+    build was installed in FIPS mode and the signed catalog lists its SHA-256 as FIPS-capable and
+    not withdrawn. A build installed before FIPS mode was turned on, or one the catalog does not
+    (or no longer) mark FIPS-capable, keeps Duo out of FreeRADIUS until it is replaced."""
+    if not fips_on(cfg):
+        return
+    inst = _installed(cfg, "duo")
+    entry = next((e for e in load_catalog(cfg)["entries"]
+                  if e["provider"] == "duo" and inst.get("sha256") and e["sha256"] == inst.get("sha256")), None)
+    name = "the installed Duo Authentication Proxy" + ((" " + str(inst["version"])) if inst.get("version") else "")
+    if entry is None or not entry["fips"] or entry["withdrawn"]:
+        raise HelperError("FIPS mode: %s is not a FIPS-capable build in the signed catalog; turn the Duo provider"
+                          " off and apply, or install a FIPS-capable build" % name)
+    if inst.get("fips") is not True:
+        raise HelperError("FIPS mode: %s was installed before FIPS mode was turned on (not a FIPS-capable build"
+                          " install); install it again, or turn the Duo provider off and apply" % name)
 
 
 def _duo_ready(cfg):
@@ -1333,6 +1356,7 @@ def _deploy(cfg, bdir, vroot, policy, clients, reason, extra, duo=None):
         if not _duo_ready(cfg):
             raise HelperError("a Duo configuration is staged, but the Duo Authentication Proxy is not installed")
         check_duo_config(duo, fips_on(cfg))
+        check_duo_fips(cfg)
     ok, out, n = validate_candidate(cfg, vroot, policy, clients)
     if not ok:
         return dict(extra, ok=False, rolled_back=False, output=out,

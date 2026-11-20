@@ -38,12 +38,44 @@ def _local_admins():
         "SELECT DISTINCT username FROM radusergroup WHERE groupname = %s", (SWITCH_GROUP,))}
 
 
+def timeout_hints(policy=None, all_clients=None):
+    """The RADIUS timeout advice per vendor profile (SPEC section 29.4), for the enabled clients
+    a second-factor rule covers (every enabled client while no rule is on, so the advice can be
+    followed before the rules are turned on): [{id, label, text, commands, clients}], by label."""
+    from .. import vendors
+    policy = policy if policy is not None else ig.load_policy()
+    all_clients = all_clients if all_clients is not None else load_clients()
+    on = [p for p in policy.values() if p["enabled"]]
+    if on and all(p["client_scope"] == "selected" for p in on):
+        wanted = {cid for p in on for cid in p["client_ids"]}
+    else:
+        wanted = None
+    cat = vendors.catalog()
+    default_id = vendors.load_default_id(None, cat)
+    out = {}
+    for c in all_clients:
+        if not c.get("enabled", True) or (wanted is not None and c["id"] not in wanted):
+            continue
+        try:
+            prof = vendors.resolve(c.get("vendor_profile"), default_id, cat)
+        except vendors.ProfileError:
+            prof = vendors.default()
+        text, commands = vendors.mfa_timeout_hint(prof)
+        e = out.setdefault(prof["id"], {"id": prof["id"], "label": prof["label"], "text": text,
+                                        "commands": commands, "clients": 0})
+        e["clients"] += 1
+    return sorted(out.values(), key=lambda e: e["label"].lower())
+
+
 @bp.route("/")
 @login_required
 def index():
     providers = ig.load_providers()
-    clients = {c["id"]: c["name"] for c in load_clients()}
-    return render_template("integrations/index.html", providers=providers, policy=ig.load_policy(),
+    all_clients = load_clients()
+    clients = {c["id"]: c["name"] for c in all_clients}
+    policy = ig.load_policy()
+    return render_template("integrations/index.html", providers=providers, policy=policy,
+                           timeout_hints=timeout_hints(policy, all_clients),
                            exempt=ig.load_exempt(), clients=clients, type_labels=ig.TYPE_LABELS,
                            kind_labels=ig.KIND_LABELS, in_use=ig.providers_in_use(),
                            remote_allowed=_remote_allowed(), fips=_fips(), s=get_settings())
@@ -279,6 +311,7 @@ def _duo_page(test=None, preflight=None, errors=None, status_code=200):
     st = _helper("integration_status")
     duo = (st.get("integrations") or {}).get("duo") or {} if st.get("ok") else {}
     cat = _helper("integration_catalog")
+    build = ig.build_check(duo.get("installed"), cat.get("entries") if cat.get("ok") else [])
     entries = [e for e in (cat.get("entries") or []) if e.get("provider") == "duo" and not e.get("withdrawn")]
     if _fips():
         entries = [e for e in entries if e.get("fips")]
@@ -288,7 +321,7 @@ def _duo_page(test=None, preflight=None, errors=None, status_code=200):
     state = duo.get("state") or {}
     return render_template(
         "integrations/duo.html", helper_ok=bool(st.get("ok")), helper_message=st.get("message", ""),
-        duo=duo, state=state, running=state.get("state") in _INTEGRATION_ACTIVE, catalog=entries,
+        duo=duo, build=build, state=state, running=state.get("state") in _INTEGRATION_ACTIVE, catalog=entries,
         catalog_serial=cat.get("serial", 0) if cat.get("ok") else None, catalog_message=cat.get("message", ""),
         fetch=read_status(cfg()["integration_dir"], "duo"), files=_duo_files(), provider=p,
         has_skey=bool(secrets.get("skey")), in_use=ig.DUO_ID in ig.providers_in_use(), test=test,
@@ -457,6 +490,11 @@ def duo_settings():
     duo = ((_helper("integration_status").get("integrations") or {}).get("duo") or {})
     if enabled and not duo.get("installed"):
         errors["enabled"] = "Install the Duo Authentication Proxy first."
+    elif enabled and _fips():
+        cat = _helper("integration_catalog")
+        if not ig.build_check(duo.get("installed"), cat.get("entries") if cat.get("ok") else [])["fips_capable"]:
+            errors["enabled"] = ("FIPS mode: the installed build is not FIPS-capable in the signed catalog."
+                                 " Install a FIPS-capable build first.")
     if not enabled and p["enabled"] and ig.DUO_ID in {r["provider_id"] for r in db.query(
             "SELECT provider_id FROM ui.mfa_policy WHERE enabled AND provider_id IS NOT NULL")}:
         errors["enabled"] = "A second-factor rule uses Duo. Change the rule first."
