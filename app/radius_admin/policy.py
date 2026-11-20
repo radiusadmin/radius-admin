@@ -1,4 +1,4 @@
-"""Password policies for UI admins and switch admins."""
+"""Password policies for UI admins and device admins."""
 import re
 
 from .crypto import verify_password

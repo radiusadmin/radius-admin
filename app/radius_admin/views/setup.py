@@ -38,7 +38,7 @@ def checklist():
          "%d enabled client%s" % (n["clients"], "" if n["clients"] == 1 else "s"), "clients.index"),
         ("rules", "Create access rules (directory group to VLAN)", True, n["rules"] > 0,
          "%d enabled rule%s" % (n["rules"], "" if n["rules"] == 1 else "s"), "rules.index"),
-        ("admin_subnet", "Set the management subnet for switch admin logins", True,
+        ("admin_subnet", "Set the management subnet for device admin logins", True,
          s["admin_subnet"] != EXAMPLE_SUBNET,
          "Still the example network %s" % EXAMPLE_SUBNET if s["admin_subnet"] == EXAMPLE_SUBNET
          else s["admin_subnet"], "settings.index"),
@@ -50,8 +50,11 @@ def checklist():
          "%d enabled admin account%s%s" % (n["admins"], "" if n["admins"] == 1 else "s",
                                            ", plus an SSO admin group" if saml_on and n["sso_admin_groups"] else ""),
          "admins.index"),
-        ("switch_admins", "Add switch admin accounts", False, n["switch_admins"] > 0,
-         "%d switch admin%s" % (n["switch_admins"], "" if n["switch_admins"] == 1 else "s"), "switch_admins.index"),
+        ("switch_admins", "Add device admin accounts (or accept directory accounts)", False,
+         n["switch_admins"] > 0 or (s["admin_directory"] and bool(s["admin_directory_groups"])),
+         "%d device admin%s%s" % (n["switch_admins"], "" if n["switch_admins"] == 1 else "s",
+                                  ", plus directory groups" if s["admin_directory"] and s["admin_directory_groups"]
+                                  else ""), "switch_admins.index"),
         ("sso", "Single sign-on for the console", False, saml_on, "On" if saml_on else "Off", "sso.settings"),
         ("radsec", "RadSec for clients that support it", False, radsec_on, "On" if radsec_on else "Off",
          "clients.radsec"),

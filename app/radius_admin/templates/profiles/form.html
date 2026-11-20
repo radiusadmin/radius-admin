@@ -40,7 +40,7 @@
   {{ m.field_error(errors, 'reply_vlan') }}
   <label for="reply_admin">Full admin rights</label>
   <textarea id="reply_admin" name="reply_admin" rows="2" class="mono" spellcheck="false"{{ m.described(errors, 'reply_admin', True) }}{{ ro }}>{{ f.reply_admin }}</textarea>
-  <p id="reply_admin-hint" class="small muted">Added to a switch-admin login when Settings → “Grant full admin rights” is on. At least one attribute.</p>
+  <p id="reply_admin-hint" class="small muted">Added to a device admin login when Settings → “Grant full admin rights” is on. At least one attribute.</p>
   {{ m.field_error(errors, 'reply_admin') }}
   <label for="reply_role">Role <span class="muted">(optional)</span></label>
   <textarea id="reply_role" name="reply_role" rows="2" class="mono" spellcheck="false"{{ m.described(errors, 'reply_role', True) }}{{ ro }}>{{ f.reply_role }}</textarea>

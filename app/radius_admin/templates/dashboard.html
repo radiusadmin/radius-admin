@@ -44,7 +44,7 @@
 <section class="counts" aria-label="Inventory">
   <a href="{{ url_for('clients.index') }}"><strong>{{ counts.clients }}</strong> RADIUS clients</a>
   <a href="{{ url_for('rules.index') }}"><strong>{{ counts.rules }}</strong> access rules</a>
-  <a href="{{ url_for('switch_admins.index') }}"><strong>{{ counts.switch_admins }}</strong> switch admins</a>
+  <a href="{{ url_for('switch_admins.index') }}"><strong>{{ counts.switch_admins }}</strong> device admins</a>
   <a href="{{ url_for('mab.index') }}"><strong>{{ counts.mab }}</strong> MAB devices</a>
   {% if ops %}<a href="{{ url_for('sessions.index') }}"><strong>{{ ops.sessions }}</strong> live sessions</a>
   {% if ops.unknown_mab %}<a href="{{ url_for('mab.pending') }}" class="hot"><strong>{{ ops.unknown_mab }}</strong> unknown devices</a>{% endif %}{% endif %}

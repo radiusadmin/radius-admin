@@ -482,15 +482,16 @@ phase_postgres() {
     # The SQL files are fed on stdin (opened by root here), not passed with -f: psql runs
     # as the postgres user, which usually cannot read the unpacked package directory
     # (e.g. under a 0750 home directory).
+    # Numeric order (00-, 10-, ..., 99-, 100-): a plain glob would sort 100- before 20-.
     local f
-    for f in "$SRC"/sql/[0-9][0-9]-*.sql; do
+    while IFS= read -r f; do
         if [[ $(basename "$f") == 00-* ]]; then
             psql_su -d postgres <"$f" >/dev/null
         else
             psql_su -d radius <"$f" >/dev/null
         fi
         ok "loaded $(basename "$f")"
-    done
+    done < <(printf '%s\n' "$SRC"/sql/[0-9]*-*.sql | sort -V)
     local u r
     for u in freerad:radius_fr radius-admin:radius_admin; do
         r=$(runuser -u "${u%%:*}" -- psql -XAtq "dbname=radius host=/var/run/postgresql user=${u##*:}" -c 'SELECT current_user' 2>&1 || true)

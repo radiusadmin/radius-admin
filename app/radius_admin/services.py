@@ -19,7 +19,8 @@ SETTING_KEYS = ("admin_subnet", "admin_priv15", "custom_policy", "banner_text", 
                 "session_idle_minutes", "session_absolute_hours", "stepup_minutes",
                 "update_channel", "update_mode", "update_window_day", "update_window_hour",
                 "update_check_requested", "display_timezone", "dot1x_ttls",
-                "dot1x_ttls_directory", "dot1x_peap", "dot1x_peap_directory", "default_vendor_profile")
+                "dot1x_ttls_directory", "dot1x_peap", "dot1x_peap_directory", "default_vendor_profile",
+                "admin_directory", "admin_directory_groups")
 RADSEC_KEYS = ("enabled", "listen", "port", "max_connections", "idle_timeout", "ocsp", "ocsp_url")
 SAML_KEYS = ("enabled", "idp_metadata", "entity_id", "group_attribute", "name_attribute", "local_login")
 DEFAULT_BANNER = ("This system is for authorized use only. Activity on this system is "
@@ -34,6 +35,18 @@ def unlang():
 
 
 # ---------------------------------------------------------------- settings
+def directory_groups(text):
+    """Group names from a one-per-line setting: trimmed, blanks dropped, each name once
+    (case-insensitively, first spelling kept)."""
+    out, seen = [], set()
+    for line in (text or "").splitlines():
+        name = line.strip()
+        if name and name.lower() not in seen:
+            seen.add(name.lower())
+            out.append(name)
+    return out
+
+
 def get_settings(conn=None):
     rows = db.query("SELECT key, value FROM ui.setting", conn=conn)
     raw = {r["key"]: r["value"] for r in rows}
@@ -45,6 +58,9 @@ def get_settings(conn=None):
         "default_vendor_profile": default_profile,
         "admin_subnet": raw.get("admin_subnet", "192.0.2.0/24"),
         "admin_priv15": raw.get("admin_priv15", "false").lower() == "true",
+        # device admin logins with directory accounts in these groups (SPEC section 28)
+        "admin_directory": raw.get("admin_directory", "false") == "true",
+        "admin_directory_groups": directory_groups(raw.get("admin_directory_groups", "")),
         "custom_policy": raw.get("custom_policy", ""),
         "banner_text": raw.get("banner_text") or DEFAULT_BANNER,
         "mab_default_vlan": raw.get("mab_default_vlan", ""),
@@ -349,7 +365,7 @@ def restore_applied_from_history(backup_id, base=None, new_backup_id=None):
     return policy, clients
 
 
-# ----------------------------------------------------------- switch admins
+# ----------------------------------------------------------- device admins (switch admins)
 SWITCH_GROUP = "net-admins"
 PW_ATTRS = ("Password-With-Header", "Crypt-Password", "Cleartext-Password", "SSHA2-256-Password",
             "PBKDF2-Password", "SHA2-Password", "NT-Password", "MD5-Password", "SMD5-Password",
