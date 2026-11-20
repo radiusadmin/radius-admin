@@ -356,7 +356,7 @@ Actions:
   for active and UDP 1812 listening; on failure restore backup + restart and return
   `{"ok":false, "rolled_back":true, ...}`; success → `{"ok":true, "backup_id":..,
   "policy_sha256":.., "clients_sha256":..}`.
-- `rollback` `{"backup_id": "<ts>"}` (format `^\d{8}T\d{6}Z$`) → restore that backup,
+- `rollback` `{"backup_id": "<ts>"}` (format `^\d{8}T\d{6}Z\Z`) → restore that backup,
   validate, restart, same failure handling.
 - `update_status` → `{"ok":true, "installed": {version, channel, commit, built} from
   `build_file`, "key_present": bool, "key_fingerprint": sha256 of the pinned key's DER,

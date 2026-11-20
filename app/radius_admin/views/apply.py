@@ -15,7 +15,7 @@ from . import ev
 
 bp = Blueprint("apply", __name__, url_prefix="/apply")
 
-BACKUP_RE = re.compile(r"^\d{8}T\d{6}Z$")
+BACKUP_RE = re.compile(r"^\d{8}T\d{6}Z\Z")
 
 
 def _diff(old, new, name):
