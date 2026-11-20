@@ -62,11 +62,15 @@ REASON_HINTS = (
                                 "group membership."),
     (r"no DNS name", "The client certificate has no DNS subject alternative name, which is how the computer is "
                      "looked up in AD. Re-issue the certificate from the computer template."),
-    (r"outside the management subnet", "Switch admin logins are accepted only from switches in the management "
+    (r"outside the management subnet", "Device admin logins are accepted only from devices in the management "
                                        "subnet (Settings)."),
-    (r"not a switch admin|not in group net-admins", "The user exists but is not a switch admin."),
+    (r"not in a device admin group",
+     "The directory accepted the password, but the account is in none of the directory groups allowed to log "
+     "in to devices (Settings, Device admin logins). The groups seen are shown below."),
+    (r"no such device admin", "Not a local device admin, and the directory has no account of that name."),
+    (r"not a (switch|device) admin|not in group net-admins", "The user exists but is not a device admin."),
     (r"(?i)digest does not match|password.*(incorrect|does not match|mismatch)|Cleartext-Password",
-     "Wrong password for this switch admin account."),
+     "Wrong password for this device admin account."),
     (r"(?i)no .*password|No known good password|User not found|No Auth-Type",
      "Unknown user, or the account has no usable password."),
     (r"(?i)certificate (has )?expired", "The client certificate has expired. Renew it on the computer "

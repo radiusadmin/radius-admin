@@ -288,8 +288,9 @@ def test_generic_disconnect_reaches_an_rfc5176_device():
 def test_policy_branches_only_where_attributes_differ():
     text = unlang.render_policy("", vendors.default(), [generic()])
     # VLAN attributes are the same in both profiles: no branch there; the admin attribute (1),
-    # the MAB port types (authorize and post-auth: 2) and the role attributes (2) differ
-    assert text.count("%{client:radius_admin_profile}") == 5
+    # the MAB port types (authorize and post-auth: 2) and the role attributes (2) differ; the admin
+    # attribute is added for local and for directory device admins (SPEC section 28)
+    assert text.count("%{client:radius_admin_profile}") == 6
     assert text.count("\t\t\tupdate reply {\n\t\t\t\t&Tunnel-Type := VLAN\n") == 2         # unbranched
     assert ('\t\t\t\tif ("%{client:radius_admin_profile}" == "generic-rfc") {\n'
             "\t\t\t\t\tupdate reply {\n\t\t\t\t\t\t&Service-Type := Administrative-User\n\t\t\t\t\t}\n\t\t\t\t}\n"

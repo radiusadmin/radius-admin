@@ -153,7 +153,7 @@ def test_navigation_groups(browser, logged_in):
     logged_in("admin")
     g = _nav_groups(browser)
     assert list(g) == ["Network access", "Monitoring", "Records"]     # settings: one button at the bottom
-    for item in ("RADIUS clients", "Access rules", "MAB devices", "Switch admins", "Custom policy", "Apply changes"):
+    for item in ("RADIUS clients", "Access rules", "MAB devices", "Device admins", "Custom policy", "Apply changes"):
         assert item in g["Network access"], item
     assert all("UI admins" not in items and "Single sign-on" not in items for items in g.values())
 
@@ -167,7 +167,7 @@ def test_navigation_without_administration_for_operators(browser, logged_in):
 def test_apply_note_only_where_apply_is_needed(browser, superconn, logged_in):
     logged_in("admin")
     q(superconn, "INSERT INTO ui.access_rule (priority, connection, ad_group, vlan) VALUES (10,'wired','Wired-Support',510)")
-    for p in ("/rules/", "/rules/new", "/rules/1/edit", "/mab/", "/switch-admins/", "/settings", "/settings/sso"):
+    for p in ("/rules/", "/rules/new", "/rules/1/edit", "/mab/", "/device-admins/", "/settings", "/settings/sso"):
         assert 'class="apply-note"' not in browser.text(browser.get(p)), p      # saving takes effect at once
     for p in ("/clients/", "/clients/new", "/clients/radsec", "/clients/import", "/custom-policy"):
         t = browser.text(browser.get(p))

@@ -218,7 +218,11 @@ What it does, in order:
    clients now come from the database). Secrets that are `REDACTED` placeholders in the
    repo (LDAP bind password, `localhost` client secret) are carried over from the live
    files; if the live `client localhost` secret or LDAP password cannot be found the
-   phase **stops before changing anything**.
+   phase **stops before changing anything**. On an upgrade the live LDAP connection
+   settings and, in `mods-available/eap`, the EAP certificate, CA, CRL and OCSP settings
+   (`ocsp { url }` among them) are kept too (SPEC §4 item 5); the phase prints which keys it
+   kept. After the phase, `diff` the new `mods-available/eap` against the backup tarball if
+   EAP-TLS logins fail.
 3. Renders the initial `policy.d/radius-admin` and `radius-admin-clients.conf` from the
    database with `python3 -m radius_admin.cli render` (as `radius-admin`) and installs
    them root:freerad 0640; also leaves them in the app's staging dir.
@@ -773,6 +777,34 @@ EAP-TTLS and PEAP with their inner servers `radius-admin-inner` and `radius-admi
 `mschap` module and the `ldap_user` section of `mods-available/ldap`; your directory settings
 are kept as before). Both methods stay off until you turn them on in Settings. EAP-TLS, MAB and switch logins behave as before.
 
+### 6.9a Device admins with directory accounts
+
+**Device admins** (formerly *switch admins*) are the logins to the management of switches, access
+points, firewalls and other RADIUS clients. Besides the local accounts on the Device admins page,
+members of chosen directory groups can log in with their directory account and password:
+
+1. **Prerequisite.** The directory connection works (the same one EAP-TLS and EAP-TTLS directory
+   accounts use; RUNBOOK §6.9 step 4). Nothing else to install.
+2. UI → **Settings → Device admin logins**: tick *Also accept directory accounts* and list the
+   directory groups allowed to log in, one per line (for example `Network-Admins`). Nested groups
+   count. Save (step-up). Takes effect at the next login; no Apply, no restart.
+3. On the device, keep RADIUS login as today (PAP from the management subnet). Users type their
+   user name or `user@domain` and their directory password. *Grant full admin rights* applies to
+   directory accounts as well.
+4. **Check.** Auth log, method `admin-ldap`: the record lists the user's directory groups and marks
+   the allowed ones. Rejects say why: outside the management subnet, not found in the directory,
+   the directory refused the password (wrong, disabled, locked or expired), not in a device admin
+   group, or the directory could not be searched.
+
+A local device admin of the same name always wins (its own password and disabled state), so keep
+one or two local accounts as a break-glass path for when the directory is unreachable. Repeated
+wrong passwords count against the directory account's lockout policy, as for any LDAP bind; logins
+from outside the management subnet never reach the directory.
+
+Upgrade to this release: `sudo ./deploy/install.sh --phase postgres`, `--phase app`, then
+`--phase freeradius --restart-freeradius` in a maintenance window. The old address
+`/switch-admins/` redirects to `/device-admins/`.
+
 ### 6.10 Device profiles (switches from other vendors)
 
 A **device profile** says which attributes this server sends to a RADIUS client (VLAN
@@ -1079,7 +1111,8 @@ repository secret `UPDATE_SIGNING_KEY` (Settings → Secrets and variables → A
 an offline copy of `update-signing.key` somewhere safe, then delete it from the machine. Until
 both exist, CI publishes no builds and the Updates page says updates are not set up.
 Optionally require a reviewer for the `release` environment (Settings → Environments), so a
-person approves every published build.
+person approves every published build. Only the build job uses that environment, and it runs
+only for a new version, so a merge that publishes nothing never waits for a reviewer.
 
 **Releasing.** Bump `VERSION` on `dev` right after a release (for example `0.2.0`), describe
 changes under `## Unreleased` in `CHANGELOG.md`, and when releasing rename that section to
@@ -1088,7 +1121,8 @@ merge to `main` publishes `0.2.0`. To publish a `dev` build (for a test server o
 channel), open Actions → **Release** → **Run workflow**, choose the branch `dev` and run it; it
 builds the newest commit on `dev` once CI has passed for it. testing and dev keep their
 newest 3 builds. A push to `main` without a `VERSION` change publishes
-nothing; the Release run then shows the warning "No release published". Rename
+nothing: the Release run's version check shows the warning "No release published" and the
+signed build job is skipped, so there is nothing to approve. Rename
 `## Unreleased` before the merge to `main`, or the run warns "Empty release notes" and the
 release is published without notes.
 
@@ -1177,7 +1211,7 @@ migration (new switch-admin passwords, MAB devices) exists only in PostgreSQL.
 | Validate fails | output shows the radiusd error and line; most often custom policy syntax; fix and re-validate. "forbidden construct" = the policy uses `$INCLUDE`, `$ENV`, `$TEMPLATE`, `%{exec:}`, `Exec-Program`, backticks, an interpreter xlat or a numeric attribute alias (`Attr-<n>`); use attribute names instead |
 | Apply → rolled back | FreeRADIUS did not become active/listening in 15 s; `journalctl -u freeradius`; run `radiusd -XC` |
 | Apply fails "another apply … in progress" | wait; lock is released when the other request finishes |
-| Switch admin rejected | Auth log reason; source IP not in admin subnet; user not in `net-admins`; legacy hash → reset password in UI; account disabled (`Auth-Type := Reject`) |
+| Device admin rejected | Auth log reason; source IP not in admin subnet; user not in `net-admins`; directory account not in an allowed group (§6.9a); legacy hash → reset password in UI; account disabled (`Auth-Type := Reject`) |
 | MAB rejected | MAC registered + enabled? switch sends PAP (not EAP-MD5)? Calling-Station-Id matches User-Name? |
 | EAP-TLS rejected | cert SAN DNS present? chains to Example-IssuingCA/Example-RootCA (`reject_unknown_intermediate_ca`)? OCSP reachable from FreeRADIUS? AD computer object in a rule group? `radiusd -X` |
 | LDAP bind/TLS errors | libldap uses GnuTLS (preflight shows it); `cipher_list` is unset on purpose; check the DC's Schannel policy allows TLS 1.2 ECDHE-AES-GCM; `ldapsearch -H ldaps://dc01.example.net -x -D '<bind DN>' -W -b '' -s base` |

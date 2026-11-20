@@ -113,7 +113,8 @@ def seed_db():
          " ('d.off', %s, '{Wired-Office}', false, NULL),"
          " ('e.old', %s, '{Wired-Office}', true, now() - interval '1 hour');"
          "INSERT INTO ui.setting (key, value) VALUES ('dot1x_ttls', 'true'), ('dot1x_ttls_directory', 'false'),"
-         " ('dot1x_peap', 'true'), ('dot1x_peap_directory', 'false')"
+         " ('dot1x_peap', 'true'), ('dot1x_peap_directory', 'false'), ('admin_directory', 'false'),"
+         " ('admin_directory_groups', '')"
          " ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;"
          # PEAP allowed for j.doe and d.off (NT hash of the same password), not for k.smith
          "UPDATE ui.dot1x_user SET nt_hash = %s WHERE username IN ('j.doe', 'd.off');"
@@ -329,6 +330,96 @@ def pap_cases(prefix, priv15):
     record("PAP unknown user -> Reject" + sfx, code == "reject", out[-400:])
     code, out = radclient(prefix, SW_IN, base + ['User-Name = "t-admin1"', 'CHAP-Password = "%s"' % ADMIN_PW])
     record("CHAP (removed) -> Reject" + sfx, code == "reject", out[-400:])
+
+
+def set_admin_directory(on, groups="Network-Admins"):
+    psql("INSERT INTO ui.setting (key, value) VALUES ('admin_directory', %s), ('admin_directory_groups', %s)"
+         " ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value" % (q("true" if on else "false"), q(groups)))
+
+
+def admin_directory_cases(prefix):
+    """Device admin logins with a directory account (SPEC section 28): radius_admin_admin_authorize
+    (ldap_user bind as the user) and the group check in radius_admin_postauth. Live settings."""
+    base = ['NAS-IP-Address = %s' % SW_IN[0], 'Service-Type = Login-User']
+
+    def login(user, pw, client=SW_IN, extra=()):
+        attrs = ['NAS-IP-Address = %s' % client[0], 'Service-Type = Login-User'] + list(extra)
+        return radclient(prefix, client, attrs + ['User-Name = "%s"' % user, 'User-Password = "%s"' % pw])
+
+    def last(user=None):
+        where = "" if user is None else " WHERE username = %s" % q(user)
+        return psql("SELECT authmethod||'|'||reply||'|'||coalesce(reason,'') FROM radpostauth%s"
+                    " ORDER BY id DESC LIMIT 1" % where)
+
+    set_admin_directory(False)
+    code, out = login("netadmin", DIR_PW)
+    record("DEVICE ADMIN directory account while directory accounts are off -> Reject",
+           code == "reject" and not last("netadmin").startswith("admin-ldap"), last("netadmin"))
+    set_admin_directory(True, "")
+    code, out = login("netadmin", DIR_PW)
+    record("DEVICE ADMIN directory accounts on but no group configured -> Reject (no bind)",
+           code == "reject" and not last("netadmin").startswith("admin-ldap"), last("netadmin"))
+    set_admin_directory(True)       # live setting, no restart
+    for priv15 in (False, True):
+        set_priv15(priv15)
+        code, out = login("netadmin", DIR_PW)
+        record("DEVICE ADMIN directory netadmin (Network-Admins) -> Accept [priv15=%s]" % priv15,
+               code == "accept" and has_priv15(out) == priv15, out[-500:])
+    set_priv15(False)
+    for name, user, pw, client, want, why in (
+        ("DEVICE ADMIN directory by userPrincipalName -> Accept", "netadmin@example.net", DIR_PW, SW_IN,
+         "accept", ""),
+        ("DEVICE ADMIN directory name in another case (NETADMIN) -> Accept", "NETADMIN", DIR_PW, SW_IN,
+         "accept", ""),
+        ("DEVICE ADMIN directory wrong password -> Reject", "netadmin", "wrong-password", SW_IN, "reject",
+         "the directory refused the password"),
+        ("DEVICE ADMIN directory account in no device admin group (jroe) -> Reject", "jroe", DIR_PW, SW_IN,
+         "reject", "not in a device admin group"),
+        ("DEVICE ADMIN directory group 'Guests,Network-Admins' is not Network-Admins -> Reject", "commaguy",
+         DIR_PW, SW_IN, "reject", "not in a device admin group"),
+        ("DEVICE ADMIN directory unknown user -> Reject", "nosuchadmin", DIR_PW, SW_IN, "reject",
+         "no such device admin"),
+        ("DEVICE ADMIN directory from outside the management subnet -> Reject before any bind", "netadmin", DIR_PW,
+         SW_OUT, "reject", "outside the management subnet"),
+        ("DEVICE ADMIN t-admin2 is local and in the directory: the directory password fails", "t-admin2", DIR_PW,
+         SW_IN, "reject", ""),
+        ("DEVICE ADMIN t-admin2 is local and in the directory: the local password works", "t-admin2", ADMIN_PW,
+         SW_IN, "accept", ""),
+    ):
+        code, out = login(user, pw, client)
+        got = last()
+        record(name, code == want and why in got, "%s %r" % (code, got))
+    got = last("t-admin2")
+    record("DEVICE ADMIN a local account is logged as pap-admin, never admin-ldap", got.startswith("pap-admin|"), got)
+    # nested groups count: labtech is in "R&D Lab (Bldg-2)", a member of Wired-Utility
+    set_admin_directory(True, "Some-Other-Group\nwired-utility")
+    code, out = login("labtech", DIR_PW)
+    record("DEVICE ADMIN directory NESTED group (Wired-Utility, case-insensitive) -> Accept", code == "accept", last())
+    code, out = login("netadmin", DIR_PW)
+    record("DEVICE ADMIN group list changed live: netadmin no longer allowed -> Reject",
+           code == "reject" and "not in a device admin group" in last(), last())
+    set_admin_directory(True)
+    # an 802.1X-shaped request never takes the device admin path
+    code, out = radclient(prefix, SW_IN, ['NAS-IP-Address = %s' % SW_IN[0], 'NAS-Port-Type = Ethernet',
+                                          'User-Name = "netadmin"', 'User-Password = "%s"' % DIR_PW])
+    record("DEVICE ADMIN directory password on an Ethernet port (not a management login) -> Reject",
+           code == "reject" and not last().startswith("admin-ldap"), last())
+    # LDAP filter and SQL injection through the user name: escaped by rlm_ldap, hex to SQL
+    for pl in ("*", "net*", "netadmin)(objectClass=*", "*)(|(sAMAccountName=*", "netadmin\\2a",
+               "x' OR '1'='1", "x'); DELETE FROM radcheck; --", "\\047 OR 1=1 --"):
+        code, out = login(pl, DIR_PW)
+        record("DEVICE ADMIN INJECTION %r in the user name -> Reject" % pl, code == "reject", "%s %r" % (code, last()))
+    record("DEVICE ADMIN injection left radcheck intact",
+           psql("SELECT count(*) FROM radcheck WHERE username IN ('t-admin1','t-admin2','t-notgroup','t-legacy')")
+           == "4")
+    row = psql("SELECT username||'|'||coalesce(ad_groups_hex,'') FROM radpostauth WHERE reply='Access-Accept'"
+               " AND authmethod='admin-ldap' AND username='netadmin' ORDER BY id LIMIT 1").split("|")
+    groups = [bytes.fromhex(x).decode() for x in row[1].split(",")[1:]] if len(row) == 2 and row[1] else []
+    record("radpostauth: directory device admin Accept logs admin-ldap and the directory groups once",
+           "Network-Admins" in groups and len(groups) == len(set(groups)), str(row[:1] + groups))
+    set_admin_directory(False)
+    code, out = login("netadmin", DIR_PW)
+    record("DEVICE ADMIN directory accounts turned off again (no restart) -> Reject", code == "reject", last())
 
 
 def mab_cases(prefix):
@@ -605,8 +696,9 @@ def ttls_cases(eapol_test, bench, prefix, logname):
     rule = psql("SELECT id FROM ui.access_rule WHERE ad_group='Wired-Office'")
     record("radpostauth: EAP-TTLS Accept logs the inner user, method, VLAN and rule",
            row == "j.doe|ttls-pap|500|%s" % rule, row)
+    # (device admin logins with a directory account, earlier in the run, have their own method)
     row = psql("SELECT username||'|'||authmethod FROM radpostauth WHERE reply='Access-Reject'"
-               " AND reason LIKE '%%wrong password%%' ORDER BY id LIMIT 1")
+               " AND reason LIKE '%%wrong password%%' AND authmethod <> 'admin-ldap' ORDER BY id LIMIT 1")
     record("radpostauth: EAP-TTLS wrong password logs the inner user and method", row == "j.doe|ttls-pap", row)
     record("radpostauth: the outer anonymous identity is never the logged user",
            psql("SELECT count(*) FROM radpostauth WHERE authmethod='ttls-pap' AND username='anonymous'") == "0")
@@ -649,7 +741,7 @@ def ttls_cases(eapol_test, bench, prefix, logname):
     record("radpostauth: directory EAP-TTLS Accept logs each directory group once",
            bool(groups) and len(groups) == len(set(groups)), str(groups))
     row = psql("SELECT username||'|'||authmethod FROM radpostauth WHERE reply='Access-Reject'"
-               " AND reason LIKE '%%directory refused%%' ORDER BY id LIMIT 1")
+               " AND reason LIKE '%%directory refused%%' AND authmethod <> 'admin-ldap' ORDER BY id LIMIT 1")
     record("radpostauth: directory wrong password logs the inner user and ttls-ldap", row == "jroe|ttls-ldap", row)
     for pl in ("*", "j*", "jroe)(objectClass=*", "*)(|(sAMAccountName=*", "jroe\\2a", "jroe)(userPassword=*"):
         code, out = ttls(pl, DIR_PW)
@@ -1060,7 +1152,7 @@ def postauth_checks():
                 "WHERE table_name='radpostauth'")
     record("radpostauth has no password column", "pass" not in cols.split(","), cols)
     dump = psql("SELECT coalesce(string_agg(t::text, E'\\n'), '') FROM radpostauth t")
-    leaked = [p for p in (ADMIN_PW, LEGACY_PW, DOT1X_PW, "wrong-password") if p in dump]
+    leaked = [p for p in (ADMIN_PW, LEGACY_PW, DOT1X_PW, DIR_PW, "wrong-password") if p in dump]
     record("no password text anywhere in radpostauth", not leaked, str(leaked))
 
     def find(user, reply, method, vlan=None):
@@ -1147,6 +1239,7 @@ def main():
             set_priv15(priv15)  # live setting, no restart
             pap_cases(a.prefix, priv15)
         set_priv15(False)
+        admin_directory_cases(a.prefix)
         mab_cases(a.prefix)
         if a.eapol_test:
             eap_cases(a.eapol_test, bench, logname)

@@ -182,3 +182,37 @@ cn: J Doe Directory
 sAMAccountName: j.doe
 userPassword: @USERPW@
 
+
+# Device admin logins with a directory account (SPEC section 28)
+# netadmin: Network-Admins (an allowed device admin group in the bench)
+dn: CN=Net Admin,OU=Users,DC=example,DC=net
+objectClass: user
+cn: Net Admin
+sAMAccountName: netadmin
+userPrincipalName: netadmin@example.net
+userPassword: @USERPW@
+
+# t-admin2 is also a local device admin: the local account (and password) wins
+dn: CN=T Admin Two Directory,OU=Users,DC=example,DC=net
+objectClass: user
+cn: T Admin Two Directory
+sAMAccountName: t-admin2
+userPassword: @USERPW@
+
+# commaguy: only in "Guests,Network-Admins", which must never count as Network-Admins
+dn: CN=Comma Guy,OU=Users,DC=example,DC=net
+objectClass: user
+cn: Comma Guy
+sAMAccountName: commaguy
+userPassword: @USERPW@
+
+dn: CN=Network-Admins,OU=Groups,DC=example,DC=net
+objectClass: group
+cn: Network-Admins
+member: CN=Net Admin,OU=Users,DC=example,DC=net
+member: CN=T Admin Two Directory,OU=Users,DC=example,DC=net
+
+dn: CN=Guests\,Network-Admins,OU=Groups,DC=example,DC=net
+objectClass: group
+cn: Guests,Network-Admins
+member: CN=Comma Guy,OU=Users,DC=example,DC=net
