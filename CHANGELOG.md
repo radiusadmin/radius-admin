@@ -7,6 +7,17 @@ release, so previews sort after it.
 
 ## Unreleased
 
+### Added
+- **A second factor for device admin logins (Integrations).** A new Integrations page sets which
+  device admin logins must be approved with a second factor: local or directory accounts, on all
+  clients or selected ones, with exempt break-glass accounts. First provider: a remote RADIUS MFA
+  server (for example a Network Policy Server with the Entra multifactor extension, privacyIDEA or
+  an Okta RADIUS agent) for directory accounts; FreeRADIUS still checks the management subnet first
+  and the device admin group after the server's accept. The FreeRADIUS side of the Duo
+  Authentication Proxy (on this server, password checked here before the push) is in place;
+  installing Duo from the portal follows. Logins that need a second factor fail closed. Auth log
+  methods `pap-admin+mfa` and `admin-ldap+mfa`.
+
 ### Changed
 - **Licence: from the GNU AGPL to the Business Source License 1.1 (source available).**
   Free for personal use, for organizations with fewer than 50 people and for a 60-day trial;

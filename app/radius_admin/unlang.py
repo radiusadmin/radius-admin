@@ -40,6 +40,9 @@ __all__ = [
     "validate_radsec_peer_name",
     "validate_radsec_settings",
     "RADSEC_DEFAULTS",
+    "validate_mfa_provider",
+    "render_mfa",
+    "MFA_TYPES",
     "POLICY_PATH",
     "CLIENTS_PATH",
 ]
@@ -56,6 +59,19 @@ TLS12_CIPHERS = ("ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDH
                  "ECDHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384:DHE-RSA-AES128-GCM-SHA256")
 RADSEC_DEFAULTS = {"enabled": False, "listen": "*", "port": 2083, "max_connections": 16,
                    "idle_timeout": 30, "ocsp": False, "ocsp_url": ""}
+
+# Second-factor providers (SPEC section 29). A device admin login that needs a second
+# factor is proxied to realm radius_admin_mfa_<id>. The Duo Authentication Proxy listens
+# on 127.0.0.1:DUO_PROXY_PORT and sends the password check back to the virtual server
+# MFA_PRIMARY_SERVER on 127.0.0.1:MFA_PRIMARY_PORT (client section MFA_CLIENTS_SECTION).
+MFA_TYPES = ("duo", "radius-mfa")
+MFA_REALM_PREFIX = "radius_admin_mfa_"
+MFA_PRIMARY_SERVER = "radius-admin-mfa-primary"
+MFA_CLIENTS_SECTION = "radius_admin_mfa"
+MFA_PROXY_CLIENT = "radius-admin-duo-proxy"
+MFA_PRIMARY_PORT = 18121
+DUO_PROXY_PORT = 18120
+MFA_TIMEOUT_DEFAULT = 60
 
 CUSTOM_POLICY_MAX_BYTES = 64 * 1024
 
@@ -498,6 +514,146 @@ def _admin_source_check(indent):
 _OUTSIDE_SUBNET = "radius-admin: device admin login from an address outside the management subnet"
 
 
+def _reject_with(reason, indent):
+    t = "\t" * indent
+    return (t + "update request {\n"
+            + t + "\t&Module-Failure-Message := \"" + reason + "\"\n"
+            + t + "}\n"
+            + t + "reject\n")
+
+
+def _outside_subnet_reject(indent):
+    """Reject unless _admin_source_check found the source inside the management subnet."""
+    t = "\t" * indent
+    return (t + "if (!&control:Tmp-String-8 || &control:Tmp-String-8 != \"t\") {\n"
+            + _reject_with(_OUTSIDE_SUBNET, indent + 1)
+            + t + "}\n")
+
+
+def _ldap_user_lookup(indent, auth_type):
+    """Find a device admin in the directory (ldap_user, which caches the group names) and
+    copy the groups to &control:Tmp-String-9. With auth_type, the password is then checked
+    with an LDAP bind as that person (Auth-Type ldap_user)."""
+    t = "\t" * indent
+    return (t + "ldap_user\n"
+            + t + "if (notfound) {\n"
+            + _reject_with("radius-admin: no such device admin (not a local account, not found in the directory)",
+                           indent + 1)
+            + t + "}\n"
+            + t + "elsif (!ok && !updated) {\n"
+            + _reject_with("radius-admin: the directory could not be searched for this user", indent + 1)
+            + t + "}\n"
+            + t + "update control {\n"
+            + (t + "\t&Auth-Type := ldap_user\n" if auth_type else "")
+            + t + "\t&Tmp-String-9 !* ANY\n"
+            + t + "}\n"
+            + t + "update control {\n"
+            + t + "\t&Tmp-String-9 += &control:ldap_user-LDAP-Group[*]\n"
+            + t + "}\n")
+
+
+# Class that radius-admin-mfa-primary returns through the Duo proxy (SPEC section 29).
+_MFA_CLASS_PREFIX = "radius-admin:"
+
+
+def _mfa_class_hex(method):
+    """Class is an octets attribute: %{proxy-reply:Class} prints it as 0x<hex>. Comparing that
+    text never fails to evaluate, unlike a comparison of a Class that is not there."""
+    return "0x" + (_MFA_CLASS_PREFIX + method).encode("ascii").hex()
+_MFA_RESULT_RX = "/^(duo|radius-mfa):([a-z][a-z0-9-]{0,31})$/"
+_MFA_UNAVAILABLE = "radius-admin: a second factor is required for this login, but its provider is turned off"
+_MFA_UNDECIDED = "radius-admin: could not determine whether this login needs a second factor"
+_MFA_LOCAL_REMOTE = ("radius-admin: a remote second-factor server checks directory accounts only,"
+                     " and this is a local account")
+_MFA_NOT_PROXIED = ("radius-admin: a second factor is required, but the login did not reach its provider"
+                    " (the provider's configuration is not applied)")
+_MFA_BAD_CLASS = "radius-admin: the Duo proxy's answer did not carry the password check of radius-admin-mfa-primary"
+_MFA_REFUSED_DUO = ("radius-admin: refused in the second-factor chain (the password was wrong, the account is not"
+                    " a device admin, or the second factor was denied)")
+_MFA_REFUSED_REMOTE = ("radius-admin: the second-factor server refused the login (the password was wrong or the"
+                       " second factor was denied)")
+_MFA_NO_ANSWER = "radius-admin: the second-factor provider did not answer"
+
+
+def _mfa_decision(indent):
+    """Unlang for radius_admin_admin_authorize, after &control:Tmp-String-0 holds the
+    radius_admin_admin_directory_hex result: ask radius_admin_mfa_hex whether the login needs
+    a second factor (user name and client shortname as hex, the account kind as a literal).
+    A provider -> Proxy-To-Realm radius_admin_mfa_<id>, marker &control:Tmp-Integer-0 (1 Duo,
+    2 remote server), method <pap-admin|admin-ldap>+mfa, management subnet checked, directory
+    groups looked up for a remote server, and `return` so that no later module chooses an
+    Auth-Type. 'off' and 'exempt' continue; anything else (provider off, database error,
+    malformed answer) rejects."""
+    t = "\t" * indent
+    return (
+        t + "# Second factor (SPEC section 29), decided live on every login\n"
+        + t + "update control {\n"
+        + t + "\t&Tmp-String-5 := \"%{client:shortname}\"\n"
+        + t + "}\n"
+        + t + "if (&control:Tmp-String-0 && &control:Tmp-String-0 == \"directory\") {\n"
+        + t + "\tupdate control {\n"
+        + t + "\t\t&Tmp-String-7 := \"%{sql:SELECT radius_admin_mfa_hex('%{hex:User-Name}', '%{hex:control:Tmp-String-5}', 'directory')}\"\n"
+        + t + "\t}\n"
+        + t + "}\n"
+        + t + "else {\n"
+        + t + "\tupdate control {\n"
+        + t + "\t\t&Tmp-String-7 := \"%{sql:SELECT radius_admin_mfa_hex('%{hex:User-Name}', '%{hex:control:Tmp-String-5}', 'local')}\"\n"
+        + t + "\t}\n"
+        + t + "}\n"
+        + t + "if (&control:Tmp-String-7 && &control:Tmp-String-7 =~ " + _MFA_RESULT_RX + ") {\n"
+        + t + "\tupdate control {\n"
+        + t + "\t\t&Proxy-To-Realm := \"" + MFA_REALM_PREFIX + "%{2}\"\n"
+        + t + "\t}\n"
+        + t + "\tif (&control:Tmp-String-7 =~ /^duo:/) {\n"
+        + t + "\t\tupdate control {\n"
+        + t + "\t\t\t&Tmp-Integer-0 := 1\n"
+        + t + "\t\t}\n"
+        + t + "\t}\n"
+        + t + "\telse {\n"
+        + t + "\t\tupdate control {\n"
+        + t + "\t\t\t&Tmp-Integer-0 := 2\n"
+        + t + "\t\t}\n"
+        + t + "\t}\n"
+        + t + "\tif (&control:Tmp-String-0 && &control:Tmp-String-0 == \"directory\") {\n"
+        + t + "\t\tupdate control {\n"
+        + t + '\t\t\t&Tmp-String-1 := "admin-ldap+mfa"\n'
+        + t + "\t\t}\n"
+        + t + "\t}\n"
+        + t + "\telse {\n"
+        + t + "\t\tupdate control {\n"
+        + t + '\t\t\t&Tmp-String-1 := "pap-admin+mfa"\n'
+        + t + "\t\t}\n"
+        + t + "\t}\n"
+        + _admin_source_check(indent + 1)
+        + _outside_subnet_reject(indent + 1)
+        + t + "\tif (&control:Tmp-Integer-0 == 2) {\n"
+        + t + "\t\tif (&control:Tmp-String-0 && &control:Tmp-String-0 == \"directory\") {\n"
+        + _ldap_user_lookup(indent + 3, auth_type=False)
+        + t + "\t\t}\n"
+        + t + "\t\telse {\n"
+        + _reject_with(_MFA_LOCAL_REMOTE, indent + 3)
+        + t + "\t\t}\n"
+        + t + "\t}\n"
+        + t + "\tupdate control {\n"
+        + t + "\t\t&Tmp-String-0 !* ANY\n"
+        + t + "\t\t&Tmp-String-7 !* ANY\n"
+        + t + "\t}\n"
+        + t + "\t# the provider checks the password: no later module may choose an Auth-Type\n"
+        + t + "\treturn\n"
+        + t + "}\n"
+        + t + "elsif (&control:Tmp-String-7 && &control:Tmp-String-7 == \"unavailable\") {\n"
+        + _reject_with(_MFA_UNAVAILABLE, indent + 1)
+        + t + "}\n"
+        + t + "elsif (\"%{control:Tmp-String-7}\" != \"off\" && \"%{control:Tmp-String-7}\" != \"exempt\") {\n"
+        + _reject_with(_MFA_UNDECIDED, indent + 1)
+        + t + "}\n"
+        + t + "update control {\n"
+        + t + "\t&Tmp-String-5 !* ANY\n"
+        + t + "\t&Tmp-String-7 !* ANY\n"
+        + t + "}\n"
+    )
+
+
 def _reply_lines(profile, list_name, indent):
     """The vendor profile's reply attributes for one purpose (SPEC section 26), as
     unlang update-section lines. Values were validated by vendors.validate()."""
@@ -731,43 +887,26 @@ def render_policy(custom="", profile=None, others=()):
         "#  so a device outside it never makes the server bind. radius_admin_postauth then\n"
         "#  requires one of the configured directory groups.\n"
         "#\n"
+        "#  A login that needs a second factor (SPEC section 29, radius_admin_mfa_hex) is\n"
+        "#  proxied to the provider's realm instead: for Duo the provider sends the password\n"
+        "#  check back to radius-admin-mfa-primary (radius_admin_mfa_primary_*); a remote\n"
+        "#  RADIUS server checks the password and the second factor itself, after the\n"
+        "#  directory lookup here. &control:Tmp-Integer-0 = 1 (Duo) or 2 (remote) marks it.\n"
+        "#\n"
         "radius_admin_admin_authorize {\n"
         "\tif (" + _ADMIN_REQUEST + " && &User-Name && &User-Password && !&control:Auth-Type) {\n"
         "\t\tupdate control {\n"
         "\t\t\t&Tmp-String-0 := \"%{sql:SELECT radius_admin_admin_directory_hex('%{hex:User-Name}')}\"\n"
         "\t\t}\n"
+        + _mfa_decision(2) +
         "\t\tif (&control:Tmp-String-0 && &control:Tmp-String-0 == \"directory\") {\n"
         "\t\t\tupdate control {\n"
         '\t\t\t\t&Tmp-String-1 := "admin-ldap"\n'
         "\t\t\t\t&Tmp-String-0 !* ANY\n"
         "\t\t\t}\n"
-        + _admin_source_check(3) +
-        "\t\t\tif (!&control:Tmp-String-8 || &control:Tmp-String-8 != \"t\") {\n"
-        "\t\t\t\tupdate request {\n"
-        "\t\t\t\t\t&Module-Failure-Message := \"" + _OUTSIDE_SUBNET + "\"\n"
-        "\t\t\t\t}\n"
-        "\t\t\t\treject\n"
-        "\t\t\t}\n"
-        "\t\t\tldap_user\n"
-        "\t\t\tif (notfound) {\n"
-        "\t\t\t\tupdate request {\n"
-        "\t\t\t\t\t&Module-Failure-Message := \"radius-admin: no such device admin (not a local account, not found in the directory)\"\n"
-        "\t\t\t\t}\n"
-        "\t\t\t\treject\n"
-        "\t\t\t}\n"
-        "\t\t\telsif (!ok && !updated) {\n"
-        "\t\t\t\tupdate request {\n"
-        "\t\t\t\t\t&Module-Failure-Message := \"radius-admin: the directory could not be searched for this user\"\n"
-        "\t\t\t\t}\n"
-        "\t\t\t\treject\n"
-        "\t\t\t}\n"
-        "\t\t\tupdate control {\n"
-        "\t\t\t\t&Auth-Type := ldap_user\n"
-        "\t\t\t\t&Tmp-String-9 !* ANY\n"
-        "\t\t\t}\n"
-        "\t\t\tupdate control {\n"
-        "\t\t\t\t&Tmp-String-9 += &control:ldap_user-LDAP-Group[*]\n"
-        "\t\t\t}\n"
+        + _admin_source_check(3)
+        + _outside_subnet_reject(3)
+        + _ldap_user_lookup(3, auth_type=True) +
         "\t\t}\n"
         "\t\telse {\n"
         "\t\t\tupdate control {\n"
@@ -777,6 +916,69 @@ def render_policy(custom="", profile=None, others=()):
         "\t}\n"
         "\telse {\n"
         "\t\tnoop\n"
+        "\t}\n"
+        "}\n\n"
+    )
+
+    # ---------------------------------------------------------------- second factor, step 1
+    o.append(
+        "#\n"
+        "#  Second factor, password check (SPEC section 29). The Duo Authentication Proxy\n"
+        "#  sends the device admin login it received from the default server back to the\n"
+        "#  virtual server radius-admin-mfa-primary (127.0.0.1 only), which checks the\n"
+        "#  password and the device admin group exactly like radius_admin_admin_authorize /\n"
+        "#  radius_admin_postauth, and answers with Class \"radius-admin:<method>\". The\n"
+        "#  default server checked the management subnet before it proxied the login.\n"
+        "#\n"
+        "radius_admin_mfa_primary_authorize {\n"
+        "\tif (&EAP-Message || !&User-Name || !&User-Password) {\n"
+        "\t\tupdate request {\n"
+        "\t\t\t&Module-Failure-Message := \"radius-admin: only device admin logins with a password reach the second-factor chain\"\n"
+        "\t\t}\n"
+        "\t\treject\n"
+        "\t}\n"
+        "\tupdate control {\n"
+        "\t\t&Tmp-String-0 := \"%{sql:SELECT radius_admin_admin_directory_hex('%{hex:User-Name}')}\"\n"
+        "\t}\n"
+        "\tif (&control:Tmp-String-0 && &control:Tmp-String-0 == \"directory\") {\n"
+        "\t\tupdate control {\n"
+        '\t\t\t&Tmp-String-1 := "admin-ldap"\n'
+        "\t\t\t&Tmp-String-0 !* ANY\n"
+        "\t\t}\n"
+        + _ldap_user_lookup(2, auth_type=True) +
+        "\t}\n"
+        "\telse {\n"
+        "\t\tupdate control {\n"
+        '\t\t\t&Tmp-String-1 := "pap-admin"\n'
+        "\t\t\t&Tmp-String-0 !* ANY\n"
+        "\t\t}\n"
+        "\t}\n"
+        "}\n\n"
+        "radius_admin_mfa_primary_postauth {\n"
+        "\tif (&control:Tmp-String-1 && &control:Tmp-String-1 == \"admin-ldap\") {\n"
+        + _directory_groups_hex(2) +
+        "\t\tif (\"%{control:Tmp-String-3}\" =~ /^(,[0-9a-f]+)*$/ && \"%{sql:SELECT radius_admin_admin_group_hex('%{control:Tmp-String-3}')}\" == \"t\") {\n"
+        "\t\t\tupdate reply {\n"
+        '\t\t\t\t&Class := "' + _MFA_CLASS_PREFIX + 'admin-ldap"\n'
+        "\t\t\t}\n"
+        "\t\t}\n"
+        "\t\telse {\n"
+        "\t\t\tupdate request {\n"
+        "\t\t\t\t&Module-Failure-Message := \"radius-admin: the directory account is not in a device admin group\"\n"
+        "\t\t\t}\n"
+        "\t\t\treject\n"
+        "\t\t}\n"
+        "\t}\n"
+        "\telsif (&control:Tmp-String-1 && &control:Tmp-String-1 == \"pap-admin\" && SQL-Group == \"net-admins\") {\n"
+        "\t\tupdate reply {\n"
+        '\t\t\t&Class := "' + _MFA_CLASS_PREFIX + 'pap-admin"\n'
+        "\t\t}\n"
+        "\t}\n"
+        "\telse {\n"
+        "\t\tupdate request {\n"
+        "\t\t\t&Module-Failure-Message := \"radius-admin: user is not a device admin (not in group net-admins)\"\n"
+        "\t\t}\n"
+        "\t\treject\n"
         "\t}\n"
         "}\n\n"
     )
@@ -896,6 +1098,34 @@ def render_policy(custom="", profile=None, others=()):
         "#  gets that round's method, user and reason.\n"
         "#\n"
         "radius_admin_reject {\n"
+        "\t# A device admin login that needed a second factor (SPEC section 29) and has no reason\n"
+        "\t# yet: the provider refused it, did not answer (FreeRADIUS's \"lack of any response\"), or it was\n"
+        "\t# never proxied (realm not applied: \"No Auth-Type found\"). %{proxy-reply:...} expands to \"\"\n"
+        "\t# without a reply, where a comparison of the attribute would fail to evaluate.\n"
+        "\tif (&control:Tmp-Integer-0 && (!&Module-Failure-Message || &Module-Failure-Message =~ /lack of any response from home server|No Auth-Type found/)) {\n"
+        "\t\tif (\"%{proxy-reply:Packet-Type}\" == \"Access-Reject\") {\n"
+        "\t\t\tif (&control:Tmp-Integer-0 == 1) {\n"
+        "\t\t\t\tupdate request {\n"
+        "\t\t\t\t\t&Module-Failure-Message := \"" + _MFA_REFUSED_DUO + "\"\n"
+        "\t\t\t\t}\n"
+        "\t\t\t}\n"
+        "\t\t\telse {\n"
+        "\t\t\t\tupdate request {\n"
+        "\t\t\t\t\t&Module-Failure-Message := \"" + _MFA_REFUSED_REMOTE + "\"\n"
+        "\t\t\t\t}\n"
+        "\t\t\t}\n"
+        "\t\t}\n"
+        "\t\telsif (&Module-Failure-Message && &Module-Failure-Message =~ /lack of any response from home server/) {\n"
+        "\t\t\tupdate request {\n"
+        "\t\t\t\t&Module-Failure-Message := \"" + _MFA_NO_ANSWER + "\"\n"
+        "\t\t\t}\n"
+        "\t\t}\n"
+        "\t\telse {\n"
+        "\t\t\tupdate request {\n"
+        "\t\t\t\t&Module-Failure-Message := \"" + _MFA_NOT_PROXIED + "\"\n"
+        "\t\t\t}\n"
+        "\t\t}\n"
+        "\t}\n"
         "\t# A directory device admin whose LDAP bind was refused (radius_admin_admin_authorize):\n"
         "\t# rlm_ldap's own message (\"Bind credentials incorrect\") becomes the plain reason; any\n"
         "\t# other failure (directory unreachable, ...) keeps its text.\n"
@@ -1031,8 +1261,12 @@ def render_policy(custom="", profile=None, others=()):
         "\t# SECURITY: request/directory data is passed to %{sql:...} ONLY as hex\n"
         "\t# (%{hex:...}, alphabet [0-9a-f]); FreeRADIUS un-escapes backslash sequences\n"
         "\t# in %{sql:...} arguments after SQL escaping, so raw strings could inject SQL.\n"
+        "\t# A login that needed a second factor (&control:Tmp-Integer-0, SPEC section 29) is\n"
+        "\t# accepted only on the provider's Access-Accept; for Duo the answer must carry the\n"
+        "\t# Class of radius-admin-mfa-primary, which checked the password and the group. The\n"
+        "\t# provider's own reply attributes are dropped; the profile's are added here.\n"
         "\telsif (" + _ADMIN_REQUEST + ") {\n"
-        "\t\tif (!&control:Tmp-String-1 || &control:Tmp-String-1 != \"admin-ldap\") {\n"
+        "\t\tif (!&control:Tmp-Integer-0 && (!&control:Tmp-String-1 || &control:Tmp-String-1 != \"admin-ldap\")) {\n"
         "\t\t\tupdate control {\n"
         '\t\t\t\t&Tmp-String-1 := "pap-admin"\n'
         "\t\t\t}\n"
@@ -1043,6 +1277,46 @@ def render_policy(custom="", profile=None, others=()):
         "\t\t\t\t&Module-Failure-Message := \"" + _OUTSIDE_SUBNET + "\"\n"
         "\t\t\t}\n"
         "\t\t\treject\n"
+        "\t\t}\n"
+        "\t\telsif (&control:Tmp-Integer-0) {\n"
+        "\t\t\t# accept only when this whole condition is true (a condition that fails to\n"
+        "\t\t\t# evaluate counts as false, so it lands in a reject branch below)\n"
+        "\t\t\tif (\"%{proxy-reply:Packet-Type}\" == \"Access-Accept\" && ((\"%{control:Tmp-Integer-0}\" == \"1\" && "
+        "((\"%{control:Tmp-String-1}\" == \"pap-admin+mfa\" && \"%{proxy-reply:Class}\" == \""
+        + _mfa_class_hex("pap-admin") + "\") || (\"%{control:Tmp-String-1}\" == \"admin-ldap+mfa\" && \"%{proxy-reply:Class}\" == \""
+        + _mfa_class_hex("admin-ldap") + "\"))) || (\"%{control:Tmp-Integer-0}\" == \"2\" && "
+        "\"%{control:Tmp-String-1}\" == \"admin-ldap+mfa\"))) {\n"
+        "\t\t\t\tupdate {\n"
+        "\t\t\t\t\t&reply: !* ANY\n"
+        "\t\t\t\t}\n"
+        "\t\t\t\tif (\"%{control:Tmp-Integer-0}\" == \"1\") {\n"
+        "\t\t\t\t\t# Duo: radius-admin-mfa-primary checked the password and the group\n"
+        "\t\t\t\t\tif (\"%{sql:SELECT radius_admin_priv15()}\" == \"t\") {\n"
+        + _reply_block(profile, others, "admin_full", 6) +
+        "\t\t\t\t\t}\n"
+        "\t\t\t\t}\n"
+        "\t\t\t\telse {\n"
+        "\t\t\t\t\t# remote server: the directory groups looked up before proxying\n"
+        + _directory_groups_hex(5) +
+        "\t\t\t\t\tif (\"%{control:Tmp-String-3}\" =~ /^(,[0-9a-f]+)*$/ && \"%{sql:SELECT radius_admin_admin_group_hex('%{control:Tmp-String-3}')}\" == \"t\") {\n"
+        "\t\t\t\t\t\tif (\"%{sql:SELECT radius_admin_priv15()}\" == \"t\") {\n"
+        + _reply_block(profile, others, "admin_full", 7) +
+        "\t\t\t\t\t\t}\n"
+        "\t\t\t\t\t}\n"
+        "\t\t\t\t\telse {\n"
+        + _reject_with("radius-admin: the directory account is not in a device admin group", 6) +
+        "\t\t\t\t\t}\n"
+        "\t\t\t\t}\n"
+        "\t\t\t}\n"
+        "\t\t\telsif (\"%{proxy-reply:Packet-Type}\" != \"Access-Accept\") {\n"
+        + _reject_with(_MFA_NOT_PROXIED, 4) +
+        "\t\t\t}\n"
+        "\t\t\telsif (\"%{control:Tmp-Integer-0}\" == \"2\") {\n"
+        + _reject_with(_MFA_LOCAL_REMOTE, 4) +
+        "\t\t\t}\n"
+        "\t\t\telse {\n"
+        + _reject_with(_MFA_BAD_CLASS, 4) +
+        "\t\t\t}\n"
         "\t\t}\n"
         "\t\telsif (&control:Tmp-String-1 == \"admin-ldap\") {\n"
         + _directory_groups_hex(3) +
@@ -1248,7 +1522,136 @@ def _client_profile_line(c, default_id, indent):
     return "%sradius_admin_profile = %s\n" % ("\t" * indent, pid)
 
 
-def render_clients(clients, radsec=None, default_profile=None):
+_MFA_ID_RE = re.compile(r"[a-z][a-z0-9-]{0,31}")
+
+
+def _mfa_int(value, what, lo, hi):
+    if isinstance(value, bool):
+        raise PolicyInputError("%s must be a whole number from %d to %d." % (what, lo, hi))
+    if isinstance(value, str) and re.fullmatch(r"[0-9]{1,5}", value.strip()):
+        value = int(value.strip())
+    if not isinstance(value, int) or not lo <= value <= hi:
+        raise PolicyInputError("%s must be a whole number from %d to %d." % (what, lo, hi))
+    return value
+
+
+def validate_mfa_provider(p):
+    """A second-factor provider as stored in ui.mfa_provider plus its decrypted secrets
+    (SPEC section 29). Returns a normalized copy:
+      duo:        id, type, enabled, secret (default server -> Duo proxy), primary_secret
+                  (Duo proxy -> radius-admin-mfa-primary); address 127.0.0.1, port
+                  DUO_PROXY_PORT, timeout MFA_TIMEOUT_DEFAULT are fixed.
+      radius-mfa: id, type, enabled, address (IP address, not a network), port, secret,
+                  timeout (5-60 s), require_ma (yes/no).
+    """
+    if not isinstance(p, dict):
+        raise PolicyInputError("Invalid second-factor provider.")
+    pid = p.get("id")
+    if not isinstance(pid, str) or not _MFA_ID_RE.fullmatch(pid):
+        raise PolicyInputError("Provider id must be 1-32 lower-case letters, digits or hyphens, starting with a letter.")
+    ptype = p.get("type")
+    if ptype not in MFA_TYPES:
+        raise PolicyInputError("Provider %s: type must be duo or radius-mfa." % pid)
+    out = {"id": pid, "type": ptype, "enabled": _truthy(p.get("enabled", False))}
+    try:
+        validate_secret(p.get("secret"))
+    except PolicyInputError as e:
+        raise PolicyInputError("Provider %s: %s" % (pid, e))
+    out["secret"] = p["secret"]
+    if ptype == "duo":
+        try:
+            validate_secret(p.get("primary_secret"))
+        except PolicyInputError as e:
+            raise PolicyInputError("Provider %s (password check): %s" % (pid, e))
+        out.update(primary_secret=p["primary_secret"], address="127.0.0.1", port=DUO_PROXY_PORT,
+                   timeout=MFA_TIMEOUT_DEFAULT, require_ma="yes")
+        return out
+    addr = validate_ipaddr(p.get("address") or "")
+    if "/" in addr:
+        raise PolicyInputError("Provider %s: the server address must be one address, not a network." % pid)
+    out["address"] = str(ipaddress.ip_address(addr))
+    out["port"] = _mfa_int(p.get("port", 1812), "Provider %s: port" % pid, 1, 65535)
+    out["timeout"] = _mfa_int(p.get("timeout", MFA_TIMEOUT_DEFAULT), "Provider %s: timeout" % pid, 5, 60)
+    ma = p.get("require_ma", "yes") or "yes"
+    if ma not in ("yes", "no"):
+        raise PolicyInputError("Provider %s: require Message-Authenticator must be yes or no." % pid)
+    out["require_ma"] = ma
+    return out
+
+
+def render_mfa(providers):
+    """The second-factor part of the clients file (SPEC section 29), deterministic: for every
+    enabled provider a home_server, home_server_pool and realm radius_admin_mfa_<id>; with an
+    enabled Duo provider also the listener of radius-admin-mfa-primary on 127.0.0.1 and its
+    one client (the Duo proxy). Empty without enabled providers."""
+    checked, seen = [], set()
+    for p in providers or ():
+        p = validate_mfa_provider(p)
+        if p["id"] in seen:
+            raise PolicyInputError("Duplicate second-factor provider %s." % p["id"])
+        seen.add(p["id"])
+        if p["enabled"]:
+            checked.append(p)
+    if not checked:
+        return ""
+    checked.sort(key=lambda p: p["id"])
+    duo = [p for p in checked if p["type"] == "duo"]
+    if len(duo) > 1:
+        raise PolicyInputError("Only one Duo provider can be enabled.")
+    out = ["\n#\n#  Second-factor providers (SPEC section 29): device admin logins that need a second\n"
+           "#  factor are proxied to realm " + MFA_REALM_PREFIX + "<id>.\n#\n"]
+    if duo:
+        out.append(
+            "listen {\n"
+            "\ttype = auth\n"
+            "\tipv4addr = 127.0.0.1\n"
+            "\tport = %d\n"
+            "\tproto = udp\n"
+            "\tvirtual_server = %s\n"
+            "\tclients = %s\n"
+            "}\n"
+            "\n"
+            "clients %s {\n"
+            "\tclient %s {\n"
+            "\t\tipv4addr = 127.0.0.1\n"
+            '\t\tsecret = "%s"\n'
+            "\t\tshortname = %s\n"
+            "\t\trequire_message_authenticator = yes\n"
+            "\t}\n"
+            "}\n"
+            % (MFA_PRIMARY_PORT, MFA_PRIMARY_SERVER, MFA_CLIENTS_SECTION, MFA_CLIENTS_SECTION,
+               MFA_PROXY_CLIENT, duo[0]["primary_secret"], MFA_PROXY_CLIENT))
+    for p in checked:
+        name = MFA_REALM_PREFIX + p["id"]
+        family = "ipv6addr" if ":" in p["address"] else "ipv4addr"
+        out.append(
+            "\nhome_server %s {\n"
+            "\ttype = auth\n"
+            "\t%s = %s\n"
+            "\tport = %d\n"
+            "\tproto = udp\n"
+            '\tsecret = "%s"\n'
+            "\trequire_message_authenticator = %s\n"
+            "\tresponse_window = %d\n"
+            "\tzombie_period = %d\n"
+            "\trevive_interval = 60\n"
+            "\tstatus_check = none\n"
+            "}\n"
+            "\n"
+            "home_server_pool %s {\n"
+            "\ttype = fail-over\n"
+            "\thome_server = %s\n"
+            "}\n"
+            "\n"
+            "realm %s {\n"
+            "\tauth_pool = %s\n"
+            "}\n"
+            % (name, family, p["address"], p["port"], p["secret"], p["require_ma"], p["timeout"],
+               2 * p["timeout"], name, name, name, name))
+    return "".join(out)
+
+
+def render_clients(clients, radsec=None, default_profile=None, mfa=None):
     """Full text of /etc/freeradius/radius-admin-clients.conf (deterministic).
 
     UDP clients are top-level client sections. RadSec clients (transport "radsec")
@@ -1327,7 +1730,7 @@ def render_clients(clients, radsec=None, default_profile=None):
         radsec_blocks.sort(key=lambda b: b[0])
         text += _render_radsec_listener(rs) + (
             "\nclients %s {\n" % RADSEC_CLIENTS_SECTION + "".join(b for _, b in radsec_blocks) + "}\n")
-    return text
+    return text + render_mfa(mfa)
 
 
 def _render_radsec_listener(rs):

@@ -923,6 +923,10 @@ phase_freeradius() {
         || ln -s ../sites-available/radius-admin-inner "$RA_RADDB/sites-enabled/radius-admin-inner"
     [[ -L $RA_RADDB/sites-enabled/radius-admin-peap ]] \
         || ln -s ../sites-available/radius-admin-peap "$RA_RADDB/sites-enabled/radius-admin-peap"
+    # the password check of device admin logins that need a second factor (SPEC section 29);
+    # it only receives requests while a Duo provider is enabled (listener in the clients file)
+    [[ -L $RA_RADDB/sites-enabled/radius-admin-mfa-primary ]] \
+        || ln -s ../sites-available/radius-admin-mfa-primary "$RA_RADDB/sites-enabled/radius-admin-mfa-primary"
     [[ -L $RA_RADDB/mods-enabled/mschap ]] || ln -s ../mods-available/mschap "$RA_RADDB/mods-enabled/mschap"
     if [[ -d $RA_RADDB/policy.d ]]; then chmod o-w "$RA_RADDB/policy.d"; fi
 

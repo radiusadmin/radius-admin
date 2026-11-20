@@ -392,6 +392,28 @@ and contains a disabled forwarding block for the SIEM. Passwords, TOTP codes, se
 tokens and RADIUS secrets are never logged; the helper redacts `secret = …` and
 `password = …` lines from radiusd output it returns.
 
+## Second factor for device admin logins (SPEC section 29)
+
+- **Fail closed.** A login whose rule names a provider is accepted only on that provider's
+  Access-Accept: provider turned off, not applied (no realm), no answer, a database error while
+  deciding, or (Duo) an answer without the Class of the local password check all reject. The
+  post-auth test is written so that a condition that cannot be evaluated lands in a reject branch.
+- **Order.** The management-subnet check runs before anything is proxied; for a remote server the
+  directory lookup runs first, so unknown names never leave the server. After a remote accept the
+  device admin group is still checked here. The provider's own reply attributes are removed before
+  the device's are added.
+- **Duo chain.** The Duo proxy reaches the password check only on 127.0.0.1:18121, as the single
+  client of the listener `radius-admin-mfa-primary`, with its own random secret
+  (`require_message_authenticator = yes`). Both secrets are stored encrypted with the data key
+  (AES-256-GCM, bound to the provider id) and written only into the clients file (root:freerad 0640).
+- **Remote servers** receive the device admin's password protected only by RADIUS's MD5-based
+  User-Password hiding (exception 1.1-1); use them on a trusted network. They are not offered in
+  FIPS mode.
+- **Break-glass.** Exempt local accounts (at most 10) never need a second factor; the rules page
+  warns when there is none. Exemptions and rule changes are audited (`integration.*`).
+- **Live decision.** `radius_admin_mfa_hex` gets the user name and the client shortname as hex only
+  (rule 2); the bench injection cases cover it.
+
 ## Universal edition additions (SPEC section 14)
 
 **Portal single sign-on (SAML).**

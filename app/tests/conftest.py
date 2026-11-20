@@ -297,6 +297,11 @@ def clean_db(superconn):
                     " radius_message='', radclient=''")
         cur.execute("DELETE FROM ui.setting")
         cur.execute("DELETE FROM ui.update_check")
+        # second-factor providers and rules (SPEC section 29); the two policy rows stay
+        cur.execute("UPDATE ui.mfa_policy SET enabled=false, provider_id=NULL, client_scope='all'")
+        cur.execute("DELETE FROM ui.mfa_policy_client")
+        cur.execute("DELETE FROM ui.mfa_exempt")
+        cur.execute("DELETE FROM ui.mfa_provider")
         cur.execute("INSERT INTO ui.setting (key, value) VALUES ('admin_subnet','192.0.2.0/24'),"
                     " ('admin_priv15','false'), ('custom_policy',''),"
                     " ('banner_text','This system is for authorized use only. Testing banner text.')")

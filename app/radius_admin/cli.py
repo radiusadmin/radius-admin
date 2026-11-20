@@ -114,9 +114,14 @@ def cmd_reset_mfa(cfg, args):
 
 def cmd_render(cfg, args):
     from . import services
+    from .crypto import DataKey
+    try:        # needed only for enabled second-factor providers (SPEC section 29)
+        key = DataKey.from_file(cfg["key_file"])
+    except OSError:
+        key = None
     conn = _conn(cfg)
     try:
-        policy, clients = services.render_all(conn)
+        policy, clients = services.render_all(conn, key)
     finally:
         conn.close()
     os.makedirs(args.out_dir, mode=0o700, exist_ok=True)

@@ -45,6 +45,15 @@ CUSTOM_CLIENT = dict(GENERIC_CLIENT, name="sw-custom", ipaddr="127.0.0.3", secre
 RADSEC_CLIENT = dict(name="ap-radsec", ipaddr="127.0.0.1", transport="radsec",
                      radsec_peer_name="pc1.example.net", nas_type="other", secret="", enabled=True)
 RADSEC = {"enabled": True, "port": 2083, "ocsp": True, "ocsp_url": "http://pki.example.net:8080/ocsp"}
+# Second-factor providers (SPEC section 29), served by fake-mfa-proxy.py: the Duo proxy
+# stand-in on 127.0.0.1:18120 (password check back to radius-admin-mfa-primary on :18121) and
+# a remote RADIUS MFA server on 127.0.0.1:18130 with a short timeout (the "no answer" case).
+# "ghost" is enabled in the database by the bench but never rendered (not applied).
+MFA_DUO = dict(id="duo", type="duo", enabled=True, secret="TestDuoProxySecret0123456",
+               primary_secret="TestMfaPrimarySecret01234")
+MFA_REMOTE = dict(id="remote-mfa", type="radius-mfa", enabled=True, address="127.0.0.1", port=18130,
+                  secret="TestRemoteMfaSecret012345", timeout=5, require_ma="yes")
+MFA_REMOTE_PASSWORD = "Remote-Mfa-Pass-2026"
 
 
 def main():
@@ -54,7 +63,8 @@ def main():
     with open(pos[0], "w") as fh:
         fh.write(unlang.render_policy("", vendors.default(), [vendors.builtin("generic-rfc"), CUSTOM_PROFILE]))
     with open(pos[1], "w") as fh:
-        fh.write(unlang.render_clients(clients + [GENERIC_CLIENT, CUSTOM_CLIENT, RADSEC_CLIENT], RADSEC))
+        fh.write(unlang.render_clients(clients + [GENERIC_CLIENT, CUSTOM_CLIENT, RADSEC_CLIENT], RADSEC, None,
+                                       [MFA_DUO, MFA_REMOTE]))
 
 
 if __name__ == "__main__":

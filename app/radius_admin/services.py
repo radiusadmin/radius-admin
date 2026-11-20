@@ -176,13 +176,16 @@ def load_clients(conn=None):
     return db.query("SELECT " + CLIENT_COLS + " FROM ui.radius_client ORDER BY name", conn=conn)
 
 
-def render_all(conn=None):
+def render_all(conn=None, datakey=None):
     """Return (policy_text, clients_text) rendered from the current DB state.
 
     SPEC section 10: access rules and settings are evaluated live by FreeRADIUS through
     SQL functions, so the policy file depends only on the custom policy body and on the
-    vendor profiles in use (SPEC section 26).
+    vendor profiles in use (SPEC section 26). The clients file also carries the enabled
+    second-factor providers (SPEC section 29), whose secrets need the data key: the
+    running app's, or `datakey` (the command line).
     """
+    from . import integrations
     u = unlang()
     settings = get_settings(conn)
     default_id = settings["default_vendor_profile"]
@@ -202,7 +205,8 @@ def render_all(conn=None):
                                          % (c["name"], pid))
             others[pid] = cat[pid]
     return (u.render_policy(settings["custom_policy"], cat[default_id], list(others.values())),
-            u.render_clients(clients, settings["radsec"], default_id))
+            u.render_clients(clients, settings["radsec"], default_id,
+                             integrations.render_inputs(conn, datakey)))
 
 
 LIVE_POLICY_MARKERS = ("radius_admin_vlan_hex(", "radius_admin_vlan_rule_hex(")

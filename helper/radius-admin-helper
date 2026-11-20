@@ -513,16 +513,104 @@ def _check_listen_tls(node, cert_dir):
                 raise HelperError("clients line %d: invalid OCSP url" % lineno)
 
 
+# Second-factor providers (SPEC section 29): per provider a home_server, home_server_pool and
+# realm named radius_admin_mfa_<id>; with a Duo provider also the listener of the virtual
+# server radius-admin-mfa-primary on 127.0.0.1 and its clients section with one client (the
+# Duo proxy). Every key and value is pinned, exactly as rendered by app/radius_admin/unlang.py.
+MFA_SECTION = "radius_admin_mfa"
+MFA_SERVER = "radius-admin-mfa-primary"
+MFA_NAME = re.compile(r"radius_admin_mfa_[a-z][a-z0-9-]{0,31}")
+MFA_MAX_PROVIDERS = 8
+
+
+def _is_mfa_listen(node):
+    return node["pairs"].get("virtual_server", ("",))[0] == MFA_SERVER
+
+
+def _check_mfa_listen(node):
+    _no_children(node)
+    _only_keys(node, {"type", "ipv4addr", "port", "proto", "virtual_server", "clients"},
+               ("type", "ipv4addr", "port", "proto", "virtual_server", "clients"))
+    _fixed(node, "type", "auth")
+    _fixed(node, "ipv4addr", "127.0.0.1")
+    _fixed(node, "proto", "udp")
+    _fixed(node, "clients", MFA_SECTION)
+    _int_value(node, "port", 1024, 65535)
+
+
+def _check_mfa_clients(node):
+    _only_keys(node, set())
+    if len(node["children"]) != 1:
+        raise HelperError("clients line %d: %s needs exactly one client" % (node["line"], MFA_SECTION))
+    c = node["children"][0]
+    if c["name"] != "client" or not c["arg"]:
+        raise HelperError("clients line %d: only a client section is allowed in %s" % (c["line"], MFA_SECTION))
+    _no_children(c)
+    _only_keys(c, {"ipv4addr", "secret", "shortname", "require_message_authenticator"},
+               ("ipv4addr", "secret", "require_message_authenticator"))
+    _fixed(c, "ipv4addr", "127.0.0.1")
+    _fixed(c, "require_message_authenticator", "yes")
+    for key, (val, lineno) in c["pairs"].items():
+        _check_client_value(key, val, lineno)
+
+
+def _mfa_name(node):
+    if not node["arg"] or not MFA_NAME.fullmatch(node["arg"]):
+        raise HelperError("clients line %d: %s must be named radius_admin_mfa_<id>" % (node["line"], node["name"]))
+    return node["arg"]
+
+
+def _check_home_server(node):
+    _no_children(node)
+    _only_keys(node, {"type", "ipv4addr", "ipv6addr", "port", "proto", "secret", "require_message_authenticator",
+                      "response_window", "zombie_period", "revive_interval", "status_check"},
+               ("type", "port", "proto", "secret", "require_message_authenticator", "response_window",
+                "status_check"))
+    if len(set(node["pairs"]) & {"ipv4addr", "ipv6addr"}) != 1:
+        raise HelperError("home_server %s: exactly one of ipv4addr/ipv6addr required" % node["arg"])
+    _fixed(node, "type", "auth")
+    _fixed(node, "proto", "udp")
+    _fixed(node, "require_message_authenticator", "yes", "no")
+    _fixed(node, "status_check", "none")
+    _int_value(node, "port", 1, 65535)
+    _int_value(node, "response_window", 1, 60)
+    for key, lo, hi in (("zombie_period", 1, 120), ("revive_interval", 10, 3600)):
+        if key in node["pairs"]:
+            _int_value(node, key, lo, hi)
+    for key in ("ipv4addr", "ipv6addr", "secret"):
+        if key in node["pairs"]:
+            val, lineno = node["pairs"][key]
+            _check_client_value(key, val, lineno)
+            if key != "secret" and "/" in val:
+                raise HelperError("clients line %d: a home server address must not be a network" % lineno)
+
+
+def _check_mfa_ref(node, kind, key, known):
+    _no_children(node)
+    _only_keys(node, {key} | ({"type"} if kind == "home_server_pool" else set()), (key,))
+    if kind == "home_server_pool":
+        _fixed(node, "type", "fail-over")
+    val, lineno = node["pairs"][key]
+    if val != node["arg"] or val not in known:
+        raise HelperError("clients line %d: %s %s must name its own %s" % (lineno, kind, node["arg"], key))
+
+
 def check_clients(data, cert_dir="/etc/freeradius/certs/site"):
     """Whitelist grammar: comments, blank lines, `client NAME {` ... `}` blocks with
     whitelisted `key = value` pairs, one per line; optionally one RadSec `listen {}`
-    section with one `clients radius_admin_radsec {}` section (both or neither).
-    Returns the number of clients."""
+    section with one `clients radius_admin_radsec {}` section (both or neither); optionally
+    the second-factor sections (SPEC section 29): per provider `home_server`,
+    `home_server_pool` and `realm radius_admin_mfa_<id>` (in that order), and one MFA
+    `listen {}` with one `clients radius_admin_mfa {}` (both or neither).
+    Returns the number of RADIUS clients (the Duo proxy's loopback client not counted)."""
     root = _parse_blocks(check_text(data, "clients"))
     names = set()
     count = 0
-    listens = [c for c in root["children"] if c["name"] == "listen"]
-    sections = [c for c in root["children"] if c["name"] == "clients"]
+    listens = [c for c in root["children"] if c["name"] == "listen" and not _is_mfa_listen(c)]
+    sections = [c for c in root["children"] if c["name"] == "clients" and c["arg"] == RADSEC_SECTION]
+    mfa_listens = [c for c in root["children"] if c["name"] == "listen" and _is_mfa_listen(c)]
+    mfa_sections = [c for c in root["children"] if c["name"] == "clients" and c["arg"] == MFA_SECTION]
+    homes, pools, realms = set(), set(), set()
     for c in root["children"]:
         if c["name"] == "client" and c["arg"]:
             clients = [c]
@@ -538,8 +626,37 @@ def check_clients(data, cert_dir="/etc/freeradius/certs/site"):
                 raise HelperError("RadSec clients section is empty")
             for tc in clients:
                 _check_tls_client(tc)
-        elif c["name"] == "listen" and c["arg"] is None and len(listens) == 1:
+        elif c["name"] == "listen" and c["arg"] is None and not _is_mfa_listen(c) and len(listens) == 1:
             _check_listen(c, cert_dir)
+            continue
+        elif c["name"] == "listen" and c["arg"] is None and _is_mfa_listen(c) and len(mfa_listens) == 1:
+            _check_mfa_listen(c)
+            continue
+        elif c["name"] == "clients" and c["arg"] == MFA_SECTION and len(mfa_sections) == 1:
+            _check_mfa_clients(c)
+            continue
+        elif c["name"] == "home_server":
+            name = _mfa_name(c)
+            if name in homes:
+                raise HelperError("clients line %d: duplicate home_server %s" % (c["line"], name))
+            _check_home_server(c)
+            homes.add(name)
+            if len(homes) > MFA_MAX_PROVIDERS:
+                raise HelperError("clients line %d: at most %d second-factor providers" % (c["line"], MFA_MAX_PROVIDERS))
+            continue
+        elif c["name"] == "home_server_pool":
+            name = _mfa_name(c)
+            if name in pools:
+                raise HelperError("clients line %d: duplicate home_server_pool %s" % (c["line"], name))
+            _check_mfa_ref(c, "home_server_pool", "home_server", homes)
+            pools.add(name)
+            continue
+        elif c["name"] == "realm":
+            name = _mfa_name(c)
+            if name in realms:
+                raise HelperError("clients line %d: duplicate realm %s" % (c["line"], name))
+            _check_mfa_ref(c, "realm", "auth_pool", pools)
+            realms.add(name)
             continue
         else:
             raise HelperError("clients line %d: expected 'client <name> {' or a comment" % c["line"])
@@ -550,6 +667,10 @@ def check_clients(data, cert_dir="/etc/freeradius/certs/site"):
             count += 1
     if len(listens) != len(sections):
         raise HelperError("RadSec needs both its listen section and its clients section")
+    if len(mfa_listens) != len(mfa_sections):
+        raise HelperError("the second-factor listener needs both its listen section and its clients section")
+    if not homes == pools == realms:
+        raise HelperError("every second-factor home_server needs its home_server_pool and realm")
     return count
 
 

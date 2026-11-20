@@ -805,6 +805,48 @@ Upgrade to this release: `sudo ./deploy/install.sh --phase postgres`, `--phase a
 `--phase freeradius --restart-freeradius` in a maintenance window. The old address
 `/switch-admins/` redirects to `/device-admins/`.
 
+### 6.9b A second factor for device admin logins (Integrations)
+
+A device admin login can be made to need a second factor (SPEC section 29): FreeRADIUS checks the
+management subnet, then sends the login to a multi-factor provider, which asks the person to
+approve it. 802.1X network access never uses a second factor.
+
+**Remote RADIUS MFA server** (directory accounts). Any RADIUS server that checks the password and
+asks for the second factor itself: a Network Policy Server with the Microsoft Entra multifactor
+extension, privacyIDEA, an Okta RADIUS agent on another host. FreeRADIUS looks the person up in the
+directory first (unknown names never leave the server) and, after the remote server's accept, still
+requires one of the device admin groups (§6.9a). Not offered in FIPS mode.
+
+1. On the remote server, add this RADIUS server as a client with a new shared secret (16–128
+   characters) and make sure it answers with Message-Authenticator (or untick that option below).
+2. UI → **Integrations → Add remote MFA server**: id, address, port, shared secret, how long to wait
+   for the person (5–60 s). Save (step-up), then **Apply changes**.
+3. UI → **Integrations → Change the rules**: *Directory accounts* → require a second factor with that
+   server, on all clients or on selected ones. Saved rules apply at the next login, no Apply.
+4. On each device, raise the RADIUS timeout so that it waits for the answer (for example about 60 s,
+   or the server's wait time plus a margin), with one retry. A device that gives up early shows a
+   failed login although the person approved.
+
+**Duo Authentication Proxy** (local and directory accounts). FreeRADIUS sends the login to the Duo
+proxy on this server (127.0.0.1:18120); Duo sends the password check back to the virtual server
+`radius-admin-mfa-primary` (127.0.0.1:18121), which checks it exactly like a normal device admin
+login, and only then asks for the push, phone call or passcode. Installing and configuring Duo from
+the portal comes in a later release; the FreeRADIUS side is in place.
+
+**Rules and break-glass.** Rules exist per account kind (local, directory) and can be limited to
+selected clients. Exempt local accounts (at most 10) never need a second factor: keep at least one,
+because a login that needs a second factor is rejected when the provider does not answer, is turned
+off, or was added but not applied yet.
+
+**Check.** Auth log: methods `pap-admin+mfa` and `admin-ldap+mfa`. Reject reasons: refused in the
+second-factor chain (Duo: wrong password, not a device admin, or denied), the second-factor server
+refused the login, the provider did not answer, the provider is turned off, the login did not reach
+its provider (apply the configuration), a remote server for a local account.
+
+Upgrade to this release: `sudo ./deploy/install.sh --phase postgres`, `--phase app`, then
+`--phase freeradius --restart-freeradius` in a maintenance window. Nothing changes until a provider
+and a rule are configured.
+
 ### 6.10 Device profiles (switches from other vendors)
 
 A **device profile** says which attributes this server sends to a RADIUS client (VLAN

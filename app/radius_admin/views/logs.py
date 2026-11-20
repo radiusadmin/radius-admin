@@ -48,7 +48,8 @@ def auth_log():
     if f["reply"] in ("Access-Accept", "Access-Reject"):
         where.append("reply = %s")
         params.append(f["reply"])
-    if f["method"] in ("eap-tls", "ttls-pap", "ttls-ldap", "peap", "peap-ldap", "pap-admin", "admin-ldap", "mab", "other"):
+    if f["method"] in ("eap-tls", "ttls-pap", "ttls-ldap", "peap", "peap-ldap", "pap-admin", "admin-ldap", "pap-admin+mfa",
+                       "admin-ldap+mfa", "mab", "other"):
         where.append("authmethod = %s")
         params.append(f["method"])
     if since:
@@ -84,7 +85,7 @@ def auth_detail(aid):
                             " FROM ui.access_rule WHERE id = %s", (r["rule_id"],))
     # device admin login with a directory account: the groups allowed now, to mark matches
     admin_groups = [g.lower() for g in get_settings()["admin_directory_groups"]] \
-        if r.get("authmethod") == "admin-ldap" else []
+        if r.get("authmethod") in ("admin-ldap", "admin-ldap+mfa") else []
     expiry = insight.cert_expiry(r.get("cert_expiry"))
     mac = oui.normalize(r["callingstationid"])
     mab = pending = None

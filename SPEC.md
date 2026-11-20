@@ -394,7 +394,7 @@ Staging path is fixed in helper.conf, never taken from the request. Helper safet
 checks: files ≤ 1 MiB, UTF-8, no NUL; clients file must consist only of `client <name> {`
 blocks containing whitelisted keys (ipaddr, ipv4addr, ipv6addr, secret, shortname,
 nas_type, require_message_authenticator, limit_proxy_state, radius_admin_profile (§26)) and
-comments; policy file
+comments, plus the RadSec (§14) and second-factor (§29) sections; policy file
 must not contain `$INCLUDE`, `$-INCLUDE`, `$ENV`, `$TEMPLATE`, `%{exec:`, `Exec-Program`,
 backticks. Helper logs every action to syslog (ident `radius-admin-helper`).
 
@@ -1423,3 +1423,95 @@ meta refresh stays only inside `<noscript>`, so every page still works without J
 - **Upgrade.** `--phase postgres` (settings, functions), `app`, and `freeradius` with a restart
   (default server: the new policy call and `Auth-Type ldap_user`). Directory accounts stay off
   until turned on; local device admins behave as before.
+
+## 29. Change (2026-11-20): second-factor providers for device admin logins
+
+First step of the MFA integrations: the FreeRADIUS chain, a remote RADIUS MFA server configured in
+the portal, and the live rules. Installing the Duo Authentication Proxy from the portal, its
+configuration file and the signed integrations catalog follow in later steps; the Duo chain is
+complete on the FreeRADIUS side and bench-tested with a stand-in.
+
+- **Scope.** Device admin logins (section 28: PAP, no EAP-Message, no NAS-Port-Type Ethernet, no
+  Called-Station-Id) only; never 802.1X. Provider types: `duo` (the Duo Authentication Proxy on this
+  server, 127.0.0.1) and `radius-mfa` (a remote RADIUS server that checks the password and the second
+  factor itself; directory accounts only).
+- **SQL** (`sql/101-mfa.sql`, additive): `ui.mfa_provider` (id `^[a-z][a-z0-9-]{0,31}$`, type, label,
+  enabled, `settings` jsonb with the non-secret values, `secrets_enc` = AES-256-GCM of a JSON object
+  with the shared secrets, additional data `radius-admin:mfa_provider:<id>`, plus install columns for
+  later steps); `ui.mfa_policy` (one row per account kind `local` / `directory`: enabled,
+  provider_id, client_scope `all`/`selected`; enabled needs a provider); `ui.mfa_policy_client`
+  (selected clients, cascades with the client); `ui.mfa_exempt` (local break-glass accounts,
+  case-insensitively unique). `radius_admin_mfa_hex(user_hex, client_hex, kind)` (SECURITY DEFINER,
+  execute for `radius_fr` only) → `'off'`, `'exempt'` (local accounts on the list), `'unavailable'`
+  (the rule's provider is off), `'<type>:<id>'`, or NULL for malformed input or an error. Live: read
+  on every login.
+- **Policy** (`radius_admin_admin_authorize`). After `radius_admin_admin_directory_hex`, the client
+  shortname goes to `&control:Tmp-String-5` and `radius_admin_mfa_hex('%{hex:User-Name}',
+  '%{hex:control:Tmp-String-5}', 'local'|'directory')` to `&control:Tmp-String-7` (kind `directory`
+  when the directory function said so). A provider →
+  `&control:Proxy-To-Realm := "radius_admin_mfa_<id>"`, `&control:Tmp-Integer-0` = 1 (duo) or 2
+  (remote), method `pap-admin+mfa` / `admin-ldap+mfa`, the management-subnet check (reject before
+  anything is proxied); for a remote server a directory account is looked up with `ldap_user`
+  (groups to `&control:Tmp-String-9`, no bind) and a local account is rejected; then `return`, so no
+  later module sets an Auth-Type. `'unavailable'` → reject "a second factor is required for this
+  login, but its provider is turned off"; anything other than `'off'`/`'exempt'` → reject "could not
+  determine whether this login needs a second factor". FreeRADIUS proxies only if the realm exists;
+  a realm that was never applied leaves the request unproxied and without an Auth-Type, so it is
+  rejected.
+- **Post-auth** (device admin branch). With `&control:Tmp-Integer-0`: reject unless
+  `&proxy-reply:Packet-Type == Access-Accept` ("… did not reach its provider (… not applied)"); for
+  Duo the proxy reply's Class must be `radius-admin:pap-admin` / `radius-admin:admin-ldap` matching
+  the method ("… did not carry the password check of radius-admin-mfa-primary"); a remote marker
+  with a local method is rejected. Then `update { &reply: !* ANY }` (the provider's own attributes
+  never reach the device) and: Duo → the profile's `admin_full` attributes when `admin_priv15` is on;
+  remote → the directory group check of section 28 on the groups looked up before proxying, then the
+  same attributes. Local logins without a second factor are unchanged.
+- **Reject reasons** (`radius_admin_reject`, only when no reason is set yet): a proxied login that the
+  provider refused → "refused in the second-factor chain (wrong password, not a device admin, or the
+  second factor was denied)" (Duo) or "the second-factor server refused the login (wrong password or
+  second factor denied)" (remote); no answer → "the second-factor provider did not answer".
+- **Password check for Duo** (`freeradius/sites-available/radius-admin-mfa-primary`, enabled by the
+  freeradius phase). Virtual server; the Duo proxy sends the login back here before the second
+  factor. authorize: `filter_username`, `radius_admin_mfa_primary_authorize` (reject without
+  User-Password or with EAP; directory accounts: `ldap_user` and `Auth-Type ldap_user`), `sql`,
+  `pap`; post-auth `radius_admin_mfa_primary_postauth`: directory group check or
+  `SQL-Group == "net-admins"`, then `reply:Class := "radius-admin:<method>"`, else reject. It writes
+  no authentication log (the default server does).
+- **Clients file** (`render_clients(..., mfa)` → `render_mfa(providers)`, deterministic, sorted by
+  id, enabled providers only): per provider `home_server` / `home_server_pool` (fail-over) / `realm`
+  named `radius_admin_mfa_<id>` (type auth, udp, `ipv4addr`/`ipv6addr` literal, port, secret,
+  `require_message_authenticator` yes (duo) or the setting (remote), `response_window` = timeout
+  (duo 60; remote 5–60), `zombie_period` = 2 × timeout, `revive_interval = 60`,
+  `status_check = none`); with an enabled Duo provider (at most one) also `listen { type = auth;
+  ipv4addr = 127.0.0.1; port = 18121; proto = udp; virtual_server = radius-admin-mfa-primary;
+  clients = radius_admin_mfa }` and `clients radius_admin_mfa` with one client
+  `radius-admin-duo-proxy` (127.0.0.1, the password-check secret, `require_message_authenticator =
+  yes`). The Duo proxy listens on 127.0.0.1:18120. Provider changes need Apply; `render_all` decrypts
+  the secrets with the data key (the app's, or `cli render` loads it from `key_file`).
+- **Helper** (section 6 clients grammar). Also accepted, with every key and value pinned: one MFA
+  `listen` (virtual_server `radius-admin-mfa-primary`, 127.0.0.1, port 1024–65535) with exactly one
+  `clients radius_admin_mfa` section holding one client (127.0.0.1, quoted secret,
+  `require_message_authenticator = yes`); up to 8 `home_server radius_admin_mfa_<id>` (keys above;
+  address literal, not a network; `response_window` 1–60, `zombie_period` 1–120,
+  `revive_interval` 10–3600), each with `home_server_pool` (type fail-over, its own home_server) and
+  `realm` (its own auth_pool) of the same name. The returned client count leaves out the Duo proxy.
+- **Portal.** Integrations page (`/integrations/`, navigation under Device admins; viewers see it):
+  rules, providers, available integrations. Admin + step-up: add/edit/remove a remote MFA server
+  (id, description, address, port, shared secret write-only, timeout 5–60, require
+  Message-Authenticator, on/off; a provider used by an enabled rule cannot be turned off, and one named
+  by any rule cannot be removed); Second-factor rules (`/integrations/policy`): per account kind on/off,
+  provider (must be on; a remote server only for directory accounts), all or selected clients
+  (at least one), exempt local device admins (at most 10, must be local device admins). Audit:
+  `integration.provider_create` / `_update` / `_delete` (detail without secrets: `shared_key_set`,
+  `shared_key_updated`), `integration.policy`. FIPS mode: remote servers are not offered and the rules
+  refuse them (the password would leave the server protected only by RADIUS's MD5-based hiding); in
+  standard mode no page mentions FIPS.
+- **Bench.** `tests/freeradius/fake-mfa-proxy.py` stands in for the Duo proxy (password check through
+  radius-admin-mfa-primary, then a scripted second factor) and for a remote server (own password,
+  extra reply attributes and a forged Class). Cases: rules off/on per kind, exemptions, selected
+  clients, Duo accept/deny/no Class/retransmit with one prompt, wrong password and non-admin without a
+  prompt, management subnet before proxying, provider off, provider not applied, remote server for a
+  local account, remote accept with group check, reply attributes dropped, remote no answer,
+  injection through the user name; the SQL audit checks the new hex-only call.
+- **Upgrade.** `--phase postgres` (tables, function), `app`, and `freeradius` with a restart (new
+  virtual server, new policy branches). Nothing changes until a provider and a rule are configured.
