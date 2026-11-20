@@ -1,5 +1,7 @@
 """Access rules (802.1X VLAN assignment). Live: FreeRADIUS evaluates them on every
 request through SQL function radius_admin_vlan() (SPEC section 10)."""
+import re
+
 from flask import Blueprint, abort, redirect, render_template, request, url_for
 
 from .. import db
@@ -98,12 +100,18 @@ def index():
                            wireless_port_type=WIRELESS_PORT_TYPE), (400 if test and test["errors"] else 200)
 
 
+ROLE_RE = re.compile(r"[A-Za-z0-9._-]{1,64}")
+
+
 def _parse():
     u = unlang()
     errors = {}
     d = {"connection": form_str("connection"), "ssid": form_str("ssid", maxlen=64) or None,
          "ad_group": form_str("ad_group", maxlen=128), "description": form_str("description", maxlen=200),
-         "enabled": form_bool("enabled")}
+         "enabled": form_bool("enabled"), "role": form_str("role", maxlen=80) or None}
+    # sent to devices whose vendor profile has role attributes (SPEC section 26)
+    if d["role"] is not None and not ROLE_RE.fullmatch(d["role"]):
+        errors["role"] = "A role is 1-64 letters, digits, '.', '_' or '-'."
     try:
         d["priority"] = int(form_str("priority") or "0")
         if not 0 <= d["priority"] <= 100000:
@@ -141,11 +149,12 @@ def new():
         d, errors = _parse()
         if not errors:
             row = db.execute_returning(
-                "INSERT INTO ui.access_rule (priority, connection, ssid, ad_group, vlan, description, enabled)"
-                " VALUES (%s,%s,%s,%s,%s,%s,%s) RETURNING id",
-                (d["priority"], d["connection"], d["ssid"], d["ad_group"], d["vlan"], d["description"], d["enabled"]))
+                "INSERT INTO ui.access_rule (priority, connection, ssid, ad_group, vlan, description, enabled, role)"
+                " VALUES (%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id",
+                (d["priority"], d["connection"], d["ssid"], d["ad_group"], d["vlan"], d["description"], d["enabled"],
+                 d["role"]))
             ev("rule.create", object_type="access_rule", object_id=row["id"],
-               detail={k: d[k] for k in ("priority", "connection", "ssid", "ad_group", "vlan", "enabled")})
+               detail={k: d[k] for k in ("priority", "connection", "ssid", "ad_group", "vlan", "enabled", "role")})
             flash("Rule added. It applies from the next authentication.", "success")
             return redirect(url_for("rules.index"))
     return render_template("rules/form.html", r=d, errors=errors, is_new=True), (400 if errors else 200)
@@ -161,12 +170,12 @@ def edit(rid):
         d["id"] = rid
         if not errors:
             db.execute("UPDATE ui.access_rule SET priority=%s, connection=%s, ssid=%s, ad_group=%s, vlan=%s,"
-                       " description=%s, enabled=%s, updated_at=now() WHERE id=%s",
+                       " description=%s, enabled=%s, role=%s, updated_at=now() WHERE id=%s",
                        (d["priority"], d["connection"], d["ssid"], d["ad_group"], d["vlan"],
-                        d["description"], d["enabled"], rid))
+                        d["description"], d["enabled"], d["role"], rid))
             ev("rule.update", object_type="access_rule", object_id=rid,
-               detail={"before": {k: existing[k] for k in ("priority", "connection", "ssid", "ad_group", "vlan", "enabled")},
-                       "after": {k: d[k] for k in ("priority", "connection", "ssid", "ad_group", "vlan", "enabled")}})
+               detail={"before": {k: existing[k] for k in ("priority", "connection", "ssid", "ad_group", "vlan", "enabled", "role")},
+                       "after": {k: d[k] for k in ("priority", "connection", "ssid", "ad_group", "vlan", "enabled", "role")}})
             flash("Rule saved. It applies from the next authentication.", "success")
             return redirect(url_for("rules.index"))
     return render_template("rules/form.html", r=d, errors=errors, is_new=False), (400 if errors else 200)

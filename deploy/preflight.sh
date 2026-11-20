@@ -213,6 +213,19 @@ if command -v pg_lsclusters >/dev/null 2>&1; then
         info "existing databases: ${DBS:-none}"
     fi
 fi
+NGX_V=$(nginx_installed_version || true)
+NGX_C=$(nginx_candidate_version || true)
+if [[ -n $NGX_V ]]; then
+    if nginx_version_ok "$NGX_V"; then
+        ok "nginx $NGX_V has the required security fixes ($RA_NGINX_MIN_VERSION or later)"
+    elif nginx_version_ok "$NGX_C"; then
+        warn "nginx $NGX_V lacks security fixes (needs $RA_NGINX_MIN_VERSION or later, see docs/SECURITY.md); the installer's nginx-update phase upgrades it to $NGX_C"
+    else
+        warn "nginx $NGX_V lacks security fixes (needs $RA_NGINX_MIN_VERSION or later, see docs/SECURITY.md) and the package lists offer ${NGX_C:-no candidate}; the nginx-update phase runs apt-get update and upgrades it if the mirror has a fixed build (enable the noble-security updates)"
+    fi
+elif [[ -n $NGX_C ]] && ! nginx_version_ok "$NGX_C"; then
+    warn "the package lists offer nginx $NGX_C, which lacks security fixes (needs $RA_NGINX_MIN_VERSION or later); run apt-get update or enable the noble-security updates before installing"
+fi
 if [[ -e /etc/nginx/sites-enabled ]]; then info "nginx sites enabled: $(find /etc/nginx/sites-enabled -mindepth 1 -maxdepth 1 -printf '%f ' 2>/dev/null)"; fi
 for u in radius-admin.service radius-admin-helper.socket; do
     systemctl list-unit-files --no-legend "$u" 2>/dev/null | grep -q . && info "$u already installed ($(systemctl is-active "$u" 2>/dev/null || true))"

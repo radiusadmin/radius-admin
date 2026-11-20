@@ -699,3 +699,18 @@ def test_radsec_sections_come_together(env):
                 text.replace(section, "\nclients radius_admin_radsec {\n}\n")):   # empty section
         env.stage(clients=bad.encode())
         assert env.call({"action": "validate"})["ok"] is False
+
+
+# Vendor profile of a client (SPEC section 26), read by the policy as %{client:radius_admin_profile}
+def test_clients_vendor_profile_ok(env):
+    env.stage(clients=b"client a {\n ipaddr = 192.0.2.1\n secret = \"0123456789abcdefg\"\n"
+                      b" radius_admin_profile = generic-rfc\n}\n")
+    assert env.call({"action": "validate"})["ok"] is True
+
+
+@pytest.mark.parametrize("value", [b"\"generic-rfc\"", b"Generic", b"-x", b"a" * 33, b"x y", b"${confdir}",
+                                   b"x\\n", b"%{exec:/bin/id}", b""])
+def test_clients_vendor_profile_refused(env, value):
+    env.stage(clients=b"client a {\n ipaddr = 192.0.2.1\n secret = \"0123456789abcdefg\"\n"
+                      b" radius_admin_profile = " + value + b"\n}\n")
+    assert env.call({"action": "validate"})["ok"] is False, value

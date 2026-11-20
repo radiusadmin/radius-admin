@@ -1,13 +1,14 @@
 """Live sessions (radacct) and CoA / Disconnect requests (SPEC section 13).
 
-Sessions come from RADIUS accounting (switch: aaa accounting dot1x start-stop group
+Sessions come from RADIUS accounting (Catalyst 1300: aaa accounting dot1x start-stop group
 radius). Each open session is matched to the RADIUS client by NAS address, to the
 latest Access-Accept for the same station (VLAN, method, record) and, when switch
 monitoring is on, to the port's live 802.1X state.
 
 Disconnect / re-authenticate / bounce are queued in ui.coa_request; the monitor
 service (the only component with network access) sends them with radclient to the
-switch's dynamic-authorization port (Catalyst 1300: UDP 1700, firmware 4.1.3.36+).
+switch's dynamic-authorization port: the client's own, else its vendor profile's (SPEC section 26;
+Catalyst 1300: UDP 1700, firmware 4.1.3.36+). Actions its profile lacks are not offered.
 
 One request or many go through the same POST (SPEC section 24): every open session
 chosen gets its own ui.coa_request row and audit event. The sessions page shows the
@@ -17,7 +18,7 @@ import datetime
 
 from flask import Blueprint, abort, g, jsonify, redirect, render_template, request, url_for
 
-from .. import db, oui, paging
+from .. import db, oui, paging, vendors
 from ..flashing import flash
 from ..listnav import list_url
 from ..insight import ClientIndex, port_status
@@ -46,6 +47,7 @@ COA_ACTIONS = {
     "disconnect": ("Disconnect", "The switch ends the session; the device must authenticate again.",
                    "The switches end these sessions; the devices must authenticate again."),
 }
+COA_VERBS = {"reauth": "re-authenticate a session", "bounce": "bounce a port", "disconnect": "disconnect a session"}
 # The latest request for the session, shown in its row while it waits and for a while after.
 COA_JOIN = (
     " LEFT JOIN LATERAL (SELECT r.id AS coa_id, r.action AS coa_action, r.done_at AS coa_done_at,"
@@ -97,7 +99,7 @@ def _decorate(rows, idx, ports):
                           and r["acctupdatetime"] is not None)
         r["port"] = None
         if c and c["id"] in ports:
-            r["port"] = port_status(ports[c["id"]]["ports"], r["nasportid"])
+            r["port"] = port_status(ports[c["id"]]["ports"], r["nasportid"], c["profile"])
     return rows
 
 
@@ -115,7 +117,21 @@ def _accounting_overview(idx):
     switches = [c for c in idx.by_id.values() if c["is_switch"] and c["enabled"]]
     silent = sorted((c for c in switches if c["id"] not in seen), key=lambda c: c["name"])
     return {"switches": len(switches), "sending": len([c for c in switches if c["id"] in seen]),
-            "silent": silent, "any": bool(rows)}
+            "silent": silent, "any": bool(rows),
+            "setup": setup_for(silent or switches or idx.by_id.values(), "accounting")}
+
+
+def setup_for(clients, topic):
+    """[(profile label, device commands or None)] for the vendor profiles of `clients`,
+    or of the default profile when there are none."""
+    profiles = {}
+    for c in clients:
+        profiles.setdefault(c["profile"]["id"], c["profile"])
+    if not profiles:
+        cat = vendors.catalog()
+        d = vendors.resolve(None, vendors.load_default_id(cat=cat), cat)
+        profiles[d["id"]] = d
+    return [(p["label"], p["setup"][topic]) for _, p in sorted(profiles.items(), key=lambda kv: kv[1]["label"].lower())]
 
 
 @bp.route("/")
@@ -194,6 +210,8 @@ def _queue(action, sids):
             reason = "%s is disabled in this console" % c["name"]
         elif s["waiting"]:
             reason = "an earlier request for it is still waiting"
+        elif c["profile"]["coa"].get(action) is None:
+            reason = "%s (%s) cannot %s" % (c["name"], c["profile"]["label"], COA_VERBS[action])
         else:
             reason = None
         if reason:
@@ -291,7 +309,8 @@ def coa_result(rid):
     if r is None:
         abort(404)
     mon = db.query_one("SELECT radclient, heartbeat_at FROM ui.monitor_state WHERE id = 1")
-    port = db.query_one("SELECT coa_port FROM ui.snmp_profile WHERE id = 1")
+    client = ClientIndex.load().by_id.get(r["client_id"])
+    profile = client["profile"] if client else vendors.default()
     session = None
     if r.get("radacct_id"):
         session = db.query_one("SELECT acctstarttime, acctstoptime, acctterminatecause FROM radacct"
@@ -299,7 +318,8 @@ def coa_result(rid):
     return render_template("sessions/coa.html", r=r, mon=mon, actions=COA_ACTIONS, session=session,
                            closed_causes=CLOSED_CAUSES,
                            vendor=oui.vendor(r["calling_station_id"]),
-                           coa_port=port["coa_port"] if port else 1700, blocked=is_blocked(r["message"]))
+                           coa_port=vendors.coa_port(client or {}, profile), profile=profile,
+                           blocked=is_blocked(r["message"]))
 
 
 @bp.route("/actions")

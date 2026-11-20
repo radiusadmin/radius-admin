@@ -1,5 +1,5 @@
 #!/bin/bash
-# Upgrades keep the live LDAP connection settings (CLAUDE.md rule 10): install.sh's
+# Upgrades keep the live LDAP connection settings: install.sh's
 # carry_over_secrets merges the live mods-available/ldap into the staged template, and
 # ldap_bind_check tests the bind with the CA file FreeRADIUS will use. Fixtures only (example
 # values in a temporary directory); needs python3, no FreeRADIUS and no directory server.

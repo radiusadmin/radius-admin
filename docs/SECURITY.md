@@ -164,6 +164,20 @@ Verified in the sandbox: TLS 1.1 refused; ChaCha20 refused; negotiated
   reject, VLAN). That is why custom policy is admin-only, requires step-up
   re-authentication, is shown as a diff, validated, applied with a backup and fully
   audited. Keep the number of admin accounts minimal and review custom-policy changes.
+* **Custom device profiles (SPEC section 26)** are admin-supplied data that becomes reply
+  attributes in the generated policy, so they get the same controls as custom policy
+  (admin-only, step-up, Apply with validation, backup and audit), but they are not free text:
+  every field is checked on save, on import and again on every read. Attribute names follow a
+  strict pattern and may not be server-internal, secret or raw (`Auth-Type`, `Exec-Program*`,
+  `Tmp-*`, `*-Password`, `Attr-<n>`, `Vendor-*`, packet framing, CoA session attributes); values
+  are printable ASCII without `" \ % $ ` { }` (no string escape, xlat or config reference);
+  placeholders are whole values (`{vlan}`, `{role}`) that render as attribute references.
+  Names must exist in the FreeRADIUS dictionary when it is available, and `radiusd -XC` checks
+  the result before anything is installed. A custom profile can still send any ordinary
+  attribute to the devices that use it (for example a different VLAN attribute or an
+  `Filter-Id` the device refuses), so treat profile changes like policy changes and test them
+  on one device first. Imported files are untrusted input: they are validated like the form,
+  always saved as "not tested", and cannot replace a built-in profile.
 * **`exec` module removed.** `rlm_exec` is disabled (in `modules-to-disable.txt`) and no
   longer called from post-auth or accounting, so `Exec-Program` / `Exec-Program-Wait`
   attributes have no effect even if they appear in a reply.
@@ -285,6 +299,27 @@ material, and never by the component that talks to the network.
   is installed like any other build (mitigations: the reviewer on `release`, protected
   branches, notify mode as the default). The bundle's FreeRADIUS package is checked by the
   signed manifest (it is inside the bundle) in addition to its own `.sha384`.
+
+### 2.v nginx security floor (SPEC section 27)
+
+The portal is served by the distribution's nginx, so its security fixes arrive from Ubuntu.
+`RA_NGINX_MIN_VERSION` in `deploy/lib.sh` is the oldest nginx package with the fixes the
+portal's site needs; preflight warns below it, and the installer's `nginx-update` phase (also
+chosen by `update.sh`) upgrades nginx from the configured mirror and restarts it.
+
+| Advisory | Affects the site because | Fixed in (Ubuntu 24.04) |
+|---|---|---|
+| 2026-11-18, CVE-2026-123007 (HTTP/2 flow control, worker code execution) | `listen … ssl http2` | `1.24.0-2ubuntu7.20` (USN-9159-1) |
+| 2026-11-18, CVE-2026-123633 (HTTP/2 use-after-free) | HTTP/2 and `proxy_pass` to gunicorn | `1.24.0-2ubuntu7.20` |
+| 2026-11-18, CVE-2026-118899 (TLS 1.3 request body, worker stalls) | TLS 1.3 enabled | `1.24.0-2ubuntu7.20` |
+
+Not applicable to the shipped site (keep it that way, or raise the floor when Ubuntu fixes
+them): CVE-2026-121810 (HTTP/3: no QUIC listener), CVE-2026-123634 (`resolver` is used only for
+OCSP; `proxy_pass` names a fixed `upstream`, no `mirror` or SSI), CVE-2026-113425 (no mail
+proxy), CVE-2026-120967, CVE-2026-123640 and CVE-2026-120993 (no `stream` block),
+CVE-2026-125283 (no `try_files` with `alias` and `map` captures; not yet fixed by Ubuntu).
+Exposure is limited further by the network ACL in nginx and nftables (admin subnet only).
+Until a server is upgraded, removing `http2` from the `listen` line closes the two HTTP/2 bugs.
 
 ## 3. NIST SP 800-171 Rev. 2 — how the UI supports the requirements
 

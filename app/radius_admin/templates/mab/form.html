@@ -7,7 +7,7 @@
 <form method="post" class="stack">
   {{ m.csrf() }}
   <label for="mac">MAC address</label>
-  <input id="mac" name="mac" value="{{ d.mac or '' }}" required maxlength="40" class="mono" placeholder="00-1A-2B-3C-4D-5E" aria-describedby="mac-hint"{{ m.described(errors, 'mac', True) }}>
+  <input id="mac" name="mac" value="{{ d.mac or '' }}" required maxlength="40" class="mono" placeholder="00-1A-2B-3C-4D-5E"{{ m.described(errors, 'mac', True) }}>
   <p id="mac-hint" class="small muted">Any common format; stored as AA-BB-CC-DD-EE-FF.{% if d.mac and d.mac|vendor %} Vendor: {{ d.mac|vendor }}.{% endif %}</p>
   {{ m.field_error(errors, 'mac') }}
   <label for="vlan">VLAN</label>
@@ -16,7 +16,7 @@
   <label for="description">Description</label>
   <input id="description" name="description" value="{{ d.description or '' }}" maxlength="200" placeholder="Printer, 2nd floor east">
   <label for="expires">Expires after (optional)</label>
-  <input id="expires" name="expires" type="date" value="{{ d.expires or '' }}" class="select-auto" aria-describedby="expires-hint"{{ m.described(errors, 'expires', True) }}>
+  <input id="expires" name="expires" type="date" value="{{ d.expires or '' }}" class="select-auto"{{ m.described(errors, 'expires', True) }}>
   <p id="expires-hint" class="small muted">Access ends at the end of this day (UTC). Leave empty for no expiry. Expired devices are rejected but stay listed so they can be renewed.</p>
   {{ m.field_error(errors, 'expires') }}
   <label class="check"><input type="checkbox" name="enabled" value="1" {{ 'checked' if d.enabled else '' }}> Enabled</label>

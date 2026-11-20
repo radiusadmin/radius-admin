@@ -72,12 +72,6 @@ def index():
                 raise ValueError
         except ValueError:
             errors["poll_minutes"] = "Enter a number of minutes between 5 and 1440."
-        try:
-            form["coa_port"] = int(form_str("coa_port") or "1700")
-            if not 1 <= form["coa_port"] <= 65535:
-                raise ValueError
-        except ValueError:
-            errors["coa_port"] = "Enter a UDP port from 1 to 65535 (Catalyst 1300: 1700)."
         if form["auth_protocol"] not in AUTH_PROTOCOLS:
             errors["auth_protocol"] = "Choose SHA-256, SHA-384 or SHA-512."
         if form["username"] or form["enabled"]:
@@ -99,9 +93,9 @@ def index():
         if not errors:
             key = current_app.config["RA_DATA_KEY"]
             sets = ["enabled=%s", "username=%s", "auth_protocol=%s", "poll_minutes=%s",
-                    "auto_update_ports=%s", "coa_port=%s", "updated_at=now()", "updated_by=%s"]
+                    "auto_update_ports=%s", "updated_at=now()", "updated_by=%s"]
             params = [form["enabled"], form["username"], form["auth_protocol"], form["poll_minutes"],
-                      form["auto_update_ports"], form["coa_port"], g.user["username"]]
+                      form["auto_update_ports"], g.user["username"]]
             if auth_pass:
                 sets.append("auth_pass_enc=%s")
                 params.append(encrypt_pass(key, "auth", auth_pass))
@@ -112,7 +106,7 @@ def index():
                 sets.append("refresh_requested_at=now()")
             db.execute("UPDATE ui.snmp_profile SET " + ", ".join(sets) + " WHERE id = 1", tuple(params))
             changed = {k: form[k] for k in ("enabled", "username", "auth_protocol", "poll_minutes",
-                                            "auto_update_ports", "coa_port") if form[k] != p[k]}
+                                            "auto_update_ports") if form[k] != p[k]}
             ev("snmp.settings", object_type="snmp_profile", object_id=1,
                detail={"changed": changed, "auth_pass_changed": bool(auth_pass),
                        "priv_pass_changed": bool(priv_pass)})

@@ -22,17 +22,17 @@
 <section class="panel flush">
 {% if clients %}
 <div class="table-wrap table-wrap-fits"><table class="clients-table">
-  <thead><tr><th scope="col">Name</th><th scope="col">Address</th><th scope="col" class="col-opt">RADIUS options</th><th scope="col">Secret</th><th scope="col">802.1X ports</th>{% if mon and mon.enabled %}<th scope="col">Switch (SNMP)</th>{% endif %}<th scope="col">Status</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead>
+  <thead><tr><th scope="col">Name</th><th scope="col">Address</th><th scope="col" class="col-opt">Device profile / options</th><th scope="col">Secret</th><th scope="col">802.1X ports</th>{% if mon and mon.enabled %}<th scope="col">Switch (SNMP)</th>{% endif %}<th scope="col">Status</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead>
   <tbody>
   {% for c in clients %}
   <tr class="{{ '' if c.enabled else 'is-off' }}">
     <td class="name-cell"><span class="mono nowrap">{{ c.name }}</span>{% if c.description %}<span class="cell-sub">{{ c.description }}</span>{% endif %}</td>
     <td class="mono nowrap">{{ c.ipaddr }}</td>
     {% if c.transport == 'radsec' %}
-    <td class="nowrap col-opt">{{ c.nas_type }}<span class="cell-sub"><span class="tag tag-ok" title="RADIUS over TLS (RFC 6614), TCP port of the RadSec listener">RadSec</span></span></td>
+    <td class="nowrap col-opt">{{ (vendor_profile(c.vendor_profile) or {}).label or c.vendor_profile }}<span class="cell-sub">{{ c.nas_type }} · <span class="tag tag-ok" title="RADIUS over TLS (RFC 6614), TCP port of the RadSec listener">RadSec</span></span></td>
     <td class="nowrap"><span class="muted" title="RadSec clients authenticate with a certificate from the site CA">Certificate</span>{% if c.radsec_peer_name %}<span class="cell-sub mono">{{ c.radsec_peer_name }}</span>{% endif %}</td>
     {% else %}
-    <td class="nowrap col-opt">{{ c.nas_type }}<span class="cell-sub" title="require_message_authenticator / limit_proxy_state">Msg-Auth {{ c.require_ma }} · Proxy-State {{ c.limit_proxy_state }}</span></td>
+    <td class="nowrap col-opt">{{ (vendor_profile(c.vendor_profile) or {}).label or c.vendor_profile }}<span class="cell-sub" title="nas_type / require_message_authenticator / limit_proxy_state">{{ c.nas_type }} · Msg-Auth {{ c.require_ma }} · Proxy-State {{ c.limit_proxy_state }}</span></td>
     <td class="nowrap">{% if c.key_status == 'encrypted' %}<span class="tag tag-warn" title="The switch exported an encrypted (type 7/AES) key. FreeRADIUS needs the plaintext shared secret; the client stays disabled until one is set.">Encrypted key</span>
       {% elif c.key_status == 'missing' %}<span class="tag tag-warn" title="No shared secret is known. FreeRADIUS needs the plaintext shared secret.">No key</span>
       {% elif has_role('admin') %}<a href="{{ url_for('clients.reveal', cid=c.id) }}" class="mask" aria-label="Reveal secret for {{ c.name }}">••••••••</a>{% else %}<span class="mask" aria-label="hidden">••••••••</span>{% endif %}

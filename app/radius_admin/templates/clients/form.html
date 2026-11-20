@@ -14,12 +14,19 @@
 <form method="post" class="stack">
   {{ m.csrf() }}
   <label for="name">Name</label>
-  <input id="name" name="name" value="{{ c.name or '' }}" required maxlength="63" pattern="[A-Za-z0-9._\-]{1,63}" class="mono" aria-describedby="name-hint"{{ m.described(errors, 'name', True) }}>
+  <input id="name" name="name" value="{{ c.name or '' }}" required maxlength="63" pattern="[A-Za-z0-9._\-]{1,63}" class="mono"{{ m.described(errors, 'name', True) }}>
   <p id="name-hint" class="small muted">Letters, digits, dot, underscore, hyphen. Example: sw-192-0-2-26</p>
   {{ m.field_error(errors, 'name') }}
   <label for="ipaddr">IP address or network</label>
   <input id="ipaddr" name="ipaddr" value="{{ c.ipaddr or '' }}" required maxlength="64" class="mono" placeholder="192.0.2.26"{{ m.described(errors, 'ipaddr') }}>
   {{ m.field_error(errors, 'ipaddr') }}
+  <label for="vendor_profile">Device profile</label>
+  <select id="vendor_profile" name="vendor_profile"{{ m.described(errors, 'vendor_profile', True) }}>
+    <option value="" {{ 'selected' if not c.vendor_profile else '' }}>Default: {{ default_profile.label }}</option>
+    {% for pid, label, pstatus in vendor_choices %}<option value="{{ pid }}" {{ 'selected' if c.vendor_profile == pid else '' }}>{{ label }}</option>{% endfor %}
+  </select>
+  <p id="vendor_profile-hint" class="small muted">The attributes this server sends to the device (VLAN, full admin rights), the session actions it offers and how it names ports. Takes effect after Apply.</p>
+  {{ m.field_error(errors, 'vendor_profile') }}
   {% set tr = c.transport or 'udp' %}
   <fieldset>
     <legend>Transport</legend>
@@ -29,7 +36,7 @@
   </fieldset>
   <div id="radsec-box" class="reveal-box">
     <label for="radsec_peer_name">Expected certificate name</label>
-    <input id="radsec_peer_name" name="radsec_peer_name" value="{{ c.radsec_peer_name or '' }}" maxlength="253" class="mono" placeholder="ap1.example.net" aria-describedby="radsec_peer_name-hint"{{ m.described(errors, 'radsec_peer_name', True) }}>
+    <input id="radsec_peer_name" name="radsec_peer_name" value="{{ c.radsec_peer_name or '' }}" maxlength="253" class="mono" placeholder="ap1.example.net"{{ m.described(errors, 'radsec_peer_name', True) }}>
     <p id="radsec_peer_name-hint" class="small muted">The device must connect from the address above and present a certificate issued by the site CA (the CA of the 802.1X certificates). Enter the certificate's common name or DNS name to accept only that certificate; leave it empty to accept any certificate from the CA. No shared secret is needed.</p>
     {{ m.field_error(errors, 'radsec_peer_name') }}
     {% if not radsec_enabled %}<p class="flash flash-info">The RadSec listener is off. {% if has_role('admin') %}Turn it on under <a href="{{ url_for('clients.radsec') }}">RadSec listener</a>{% else %}An admin must turn it on{% endif %} before RadSec clients can connect.</p>{% endif %}
@@ -43,7 +50,7 @@
     <label class="check"><input type="radio" name="secret_mode" value="set" data-reveals="secret-set" {{ 'checked' if sm == 'set' else '' }}> Enter a secret</label>
     <div id="secret-set" class="reveal-box">
       <label for="secret">Secret</label>
-      <input id="secret" name="secret" type="password" autocomplete="off" maxlength="128" class="mono" aria-describedby="secret-hint"{{ m.described(errors, 'secret', True) }}>
+      <input id="secret" name="secret" type="password" autocomplete="off" maxlength="128" class="mono"{{ m.described(errors, 'secret', True) }}>
       <p id="secret-hint" class="small muted">16–128 printable characters, no spaces, quotes or backslashes.</p>
     </div>
     {{ m.field_error(errors, 'secret') }}
@@ -72,10 +79,14 @@
       <option value="server" {{ 'selected' if c.key_scope == 'server' else '' }}>server (per-server key)</option>
       <option value="global" {{ 'selected' if c.key_scope == 'global' else '' }}>global (radius-server key)</option></select>
       {{ m.field_error(errors, 'key_scope') }}</div>
+    <div><label for="coa_port">Session-action port (UDP)</label>
+      <input id="coa_port" name="coa_port" type="number" min="1" max="65535" value="{{ c.coa_port or '' }}" placeholder="{{ (vendor_profile(c.vendor_profile) or default_profile).coa.port }}"{{ m.described(errors, 'coa_port', True) }}>
+      {{ m.field_error(errors, 'coa_port') }}</div>
   </div>
+  <p id="coa_port-hint" class="small muted">Where the device listens for disconnect / re-authenticate (RFC 5176 dynamic authorization). Leave empty for the device profile's port:{% for pid, label, pstatus in vendor_choices %} {{ label }} {{ vendor_profile(pid).coa.port }}{{ ';' if not loop.last else '.' }}{% endfor %}</p>
   </div>{# udp-box #}
   <label for="dot1x_ports">802.1X ports</label>
-  <textarea id="dot1x_ports" name="dot1x_ports" rows="2" maxlength="1000" class="mono" aria-describedby="dot1x_ports-hint"{{ m.described(errors, 'dot1x_ports', True) }}>{{ c.dot1x_ports or '' }}</textarea>
+  <textarea id="dot1x_ports" name="dot1x_ports" rows="2" maxlength="1000" class="mono"{{ m.described(errors, 'dot1x_ports', True) }}>{{ c.dot1x_ports or '' }}</textarea>
   <p id="dot1x_ports-hint" class="small muted">Informational, as exported from the switch, for example <span class="mono">gi1/0/1-20,gi1/0/23</span>. Up to 1000 characters.</p>
   {% if c.dot1x_ports %}<p class="small">Current: {{ m.ports(c.dot1x_ports, 'ports-edit', c.name or '') }}</p>{% endif %}
   {{ m.field_error(errors, 'dot1x_ports') }}
@@ -101,7 +112,7 @@
     {% if status.uptime_seconds is not none %}{% set days = status.uptime_seconds // 86400 %}<dt>Uptime</dt><dd>{{ days }} day{{ "" if days == 1 else "s" }}</dd>{% endif %}
     <dt>802.1X ports</dt><dd>{% if status.dot1x_supported %}<span class="mono">{{ status.dot1x_ports or 'none' }}</span>
       {% if not same_ports(c.dot1x_ports or '', status.dot1x_ports) %} <span class="tag tag-warn">Differs from the recorded list</span>{% endif %}
-      {% else %}<span class="muted">not reported (IEEE 802.1X MIB not available)</span>{% endif %}</dd>
+      {% else %}<span class="muted">not reported: the device does not offer the IEEE 802.1X MIB over SNMP (common on access points, controllers and some switches). Its system and RADIUS server details are still polled.</span>{% endif %}</dd>
     <dt>Polled</dt><dd>{{ status.polled_at|dt }}</dd>
   </dl>
   {% if status.radius_servers %}

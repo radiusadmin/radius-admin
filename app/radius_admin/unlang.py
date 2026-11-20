@@ -20,6 +20,8 @@ import hashlib
 import ipaddress
 import re
 
+from . import vendors
+
 __all__ = [
     "PolicyInputError",
     "render_policy",
@@ -448,16 +450,116 @@ _DIRECTORY_GROUPS_HEX = (
 )
 
 
-def render_policy(custom=""):
+def _reply_lines(profile, list_name, indent):
+    """The vendor profile's reply attributes for one purpose (SPEC section 26), as
+    unlang update-section lines. Values were validated by vendors.validate()."""
+    pad = "\t" * indent
+    return "".join("%s&%s %s %s\n" % (pad, e["attr"], e["op"], vendors.format_value(e["value"], _REPLY_REFS))
+                   for e in profile["reply"][list_name])
+
+
+# What each placeholder of a reply value becomes in the policy.
+_REPLY_REFS = {"{vlan}": "&control:Tmp-String-0", "{role}": "&control:Tmp-String-4"}
+# The client's vendor profile when it is not the default (render_clients writes it).
+_CLIENT_PROFILE = "%{client:radius_admin_profile}"
+
+
+def _reply_block(default, others, list_name, indent):
+    """`update reply` with one purpose's attributes. With other profiles in use whose
+    attributes differ from the default's, one branch per distinct attribute list, chosen
+    by the client's radius_admin_profile; the default profile's list in the else branch.
+    Profile ids are validated ([a-z0-9-]), so they are safe inside the quoted literal."""
+    def update(p, ind):
+        pad = "\t" * ind
+        if not p["reply"][list_name]:           # optional list left empty: nothing to send
+            return pad + "noop\n"
+        return pad + "update reply {\n" + _reply_lines(p, list_name, ind + 1) + pad + "}\n"
+    groups = []                 # [attribute list, [profile ids], a profile with that list]
+    for p in others:
+        lst = p["reply"][list_name]
+        if lst == default["reply"][list_name]:
+            continue
+        for grp in groups:
+            if grp[0] == lst:
+                grp[1].append(p["id"])
+                break
+        else:
+            groups.append([lst, [p["id"]], p])
+    if not groups:
+        return update(default, indent)
+    pad = "\t" * indent
+    out = []
+    for i, (_, ids, p) in enumerate(groups):
+        cond = " || ".join('"' + _CLIENT_PROFILE + '" == "' + pid + '"' for pid in ids)
+        out.append(pad + ("if" if i == 0 else "elsif") + " (" + cond + ") {\n" + update(p, indent + 1) + pad + "}\n")
+    out.append(pad + "else {\n" + update(default, indent + 1) + pad + "}\n")
+    return "".join(out)
+
+
+def _profile_is(ids):
+    return " || ".join('"' + _CLIENT_PROFILE + '" == "' + pid + '"' for pid in ids)
+
+
+def _mab_port_condition(default, others):
+    """Which NAS-Port-Type values start MAB, per client profile (vendors.MAB_PORT_TYPES).
+    Every profile in use Ethernet-only (Catalyst 1300): the original condition."""
+    profiles = [default] + list(others)
+    parts = []
+    for t in vendors.MAB_PORT_TYPES:
+        yes = [p["id"] for p in others if t in p["mab"]["port_types"]]
+        if t in default["mab"]["port_types"]:
+            no = [p["id"] for p in others if t not in p["mab"]["port_types"]]
+            test = "!(" + _profile_is(no) + ")" if no else None
+        elif yes:
+            test = "(" + _profile_is(yes) + ")"
+        else:
+            continue
+        parts.append("&NAS-Port-Type == " + t + ("" if test is None else " && " + test))
+    if parts == ["&NAS-Port-Type == Ethernet"] or not any(t != "Ethernet" for p in profiles for t in p["mab"]["port_types"]):
+        return "&NAS-Port-Type && &NAS-Port-Type == Ethernet"
+    return "&NAS-Port-Type && (" + " || ".join("(" + x + ")" for x in parts) + ")"
+
+
+def _role_block(default, others, indent):
+    """After the VLAN of an 802.1X accept: the matched access rule's role (ui.access_rule.role,
+    looked up by rule id through radius_admin_rule_role), sent with the profile's role
+    attributes. Nothing when no profile in use has any."""
+    if not default["reply"]["role"] and not any(p["reply"]["role"] for p in others):
+        return ""
+    pad = "\t" * indent
+    return (pad + "# the matched rule's role (SPEC section 26); the rule id is digits only\n"
+            + pad + "if (&control:Tmp-String-6 && &control:Tmp-String-6 =~ /^[0-9]{1,10}$/) {\n"
+            + pad + "\tupdate control {\n"
+            + pad + "\t\t&Tmp-String-4 := \"%{sql:SELECT radius_admin_rule_role(%{control:Tmp-String-6})}\"\n"
+            + pad + "\t}\n"
+            + pad + "\tif (&control:Tmp-String-4 && &control:Tmp-String-4 =~ /^[A-Za-z0-9._-]{1,64}$/) {\n"
+            + _reply_block(default, others, "role", indent + 2)
+            + pad + "\t}\n"
+            + pad + "}\n")
+
+
+def render_policy(custom="", profile=None, others=()):
     """Full text of /etc/freeradius/policy.d/radius-admin (deterministic).
 
     Access rules and the admin settings are NOT rendered: FreeRADIUS evaluates them
     live through the SQL functions of sql/40-live-policy.sql on every request
-    (SPEC section 10). Only the admin-supplied custom policy body varies.
+    (SPEC section 10). Only the admin-supplied custom policy body and the vendor
+    profiles' reply attributes (SPEC section 26) vary: `profile` is the default one,
+    `others` those that some client names in the clients file.
     """
     if custom is None:
         custom = ""
     validate_custom_policy(custom)
+    profile = vendors.validate(profile) if profile is not None else vendors.default()
+    seen = {profile["id"]}
+    checked = []
+    for p in others or ():
+        p = vendors.validate(p)
+        if p["id"] not in seen:
+            seen.add(p["id"])
+            checked.append(p)
+    others = sorted(checked, key=lambda p: p["id"])
+    mab_ports = _mab_port_condition(profile, others)
 
     mac_rx = "/^" + _MAC_GRAMMAR + "$/i"
     mac_norm = '"%{toupper:%{1}-%{2}-%{3}-%{4}-%{5}-%{6}}"'
@@ -471,7 +573,7 @@ def render_policy(custom=""):
         "#  Accepts only MACs registered (and enabled) in mab_device. Not EAP.\n"
         "#\n"
         "radius_admin_mab {\n"
-        "\tif (!&EAP-Message && &NAS-Port-Type && &NAS-Port-Type == Ethernet && &User-Name && &User-Name =~ " + mac_rx + ") {\n"
+        "\tif (!&EAP-Message && " + mab_ports + " && &User-Name && &User-Name =~ " + mac_rx + ") {\n"
         "\t\tupdate control {\n"
         '\t\t\t&Tmp-String-1 := "mab"\n'
         "\t\t\t&Tmp-String-2 := " + mac_norm + "\n"
@@ -799,13 +901,9 @@ def render_policy(custom=""):
         "\t# MAC Authentication Bypass (accepted in authorize by radius_admin_mab)\n"
         "\t# The request shape is re-checked so that a Tmp-String-1 added by another module\n"
         "\t# (users file, SQL radcheck, LDAP) can never select this branch.\n"
-        "\tif (!&EAP-Message && &NAS-Port-Type && &NAS-Port-Type == Ethernet && &User-Name && &User-Name =~ " + mac_rx + " && \\\n"
+        "\tif (!&EAP-Message && " + mab_ports + " && &User-Name && &User-Name =~ " + mac_rx + " && \\\n"
         '\t    &control:Tmp-String-1 && &control:Tmp-String-1 == "mab" && &control:Tmp-String-0 && &control:Tmp-String-0 =~ /^[0-9]{1,4}$/) {\n'
-        "\t\tupdate reply {\n"
-        "\t\t\t&Tunnel-Type := VLAN\n"
-        "\t\t\t&Tunnel-Medium-Type := IEEE-802\n"
-        "\t\t\t&Tunnel-Private-Group-Id := &control:Tmp-String-0\n"
-        "\t\t}\n"
+        + _reply_block(profile, others, "vlan", 2) +
         "\t}\n"
         "\n"
         "\t# Switch/device admin logins (plain PAP, no port type or SSID).\n"
@@ -852,9 +950,7 @@ def render_policy(custom=""):
         "\t\t}\n"
         "\t\telsif (SQL-Group == \"net-admins\") {\n"
         "\t\t\tif (\"%{sql:SELECT radius_admin_priv15()}\" == \"t\") {\n"
-        "\t\t\t\tupdate reply {\n"
-        '\t\t\t\t\t&Cisco-AVPair += "shell:priv-lvl=15"\n'
-        "\t\t\t\t}\n"
+        + _reply_block(profile, others, "admin_full", 4) +
         "\t\t\t}\n"
         "\t\t}\n"
         "\t\telse {\n"
@@ -925,11 +1021,7 @@ def render_policy(custom=""):
         "\t\t\t}\n"
         "\t\t}\n"
         "\t\tif (&control:Tmp-String-0 && &control:Tmp-String-0 =~ /^[0-9]{1,4}$/) {\n"
-        "\t\t\tupdate reply {\n"
-        "\t\t\t\t&Tunnel-Type := VLAN\n"
-        "\t\t\t\t&Tunnel-Medium-Type := IEEE-802\n"
-        "\t\t\t\t&Tunnel-Private-Group-Id := &control:Tmp-String-0\n"
-        "\t\t\t}\n"
+        + _reply_block(profile, others, "vlan", 3) + _role_block(profile, others, 3) +
         "\t\t}\n"
         "\t\telse {\n"
         "\t\t\tupdate request {\n"
@@ -1007,11 +1099,7 @@ def render_policy(custom=""):
         "\t\t\t}\n"
         "\t\t}\n"
         "\t\tif (&control:Tmp-String-0 && &control:Tmp-String-0 =~ /^[0-9]{1,4}$/) {\n"
-        "\t\t\tupdate reply {\n"
-        "\t\t\t\t&Tunnel-Type := VLAN\n"
-        "\t\t\t\t&Tunnel-Medium-Type := IEEE-802\n"
-        "\t\t\t\t&Tunnel-Private-Group-Id := &control:Tmp-String-0\n"
-        "\t\t\t}\n"
+        + _reply_block(profile, others, "vlan", 3) + _role_block(profile, others, 3) +
         "\t\t}\n"
         "\t\telse {\n"
         "\t\t\tupdate request {\n"
@@ -1040,7 +1128,17 @@ def render_policy(custom=""):
     return "".join(o)
 
 
-def render_clients(clients, radsec=None):
+def _client_profile_line(c, default_id, indent):
+    """radius_admin_profile for a client whose vendor profile is not the default."""
+    pid = c.get("vendor_profile") or ""
+    if not pid or pid == default_id:
+        return ""
+    if not vendors.valid_id(pid):
+        raise PolicyInputError("Client %s: invalid vendor profile." % c.get("name"))
+    return "%sradius_admin_profile = %s\n" % ("\t" * indent, pid)
+
+
+def render_clients(clients, radsec=None, default_profile=None):
     """Full text of /etc/freeradius/radius-admin-clients.conf (deterministic).
 
     UDP clients are top-level client sections. RadSec clients (transport "radsec")
@@ -1048,7 +1146,10 @@ def render_clients(clients, radsec=None):
     rendered only while RadSec is enabled and at least one RadSec client is enabled.
     The file is $INCLUDEd at the top level of radiusd.conf (via clients.conf), where
     listen and clients sections are valid, so no further file needs installing.
+    A client whose vendor profile differs from `default_profile` (an id; default
+    vendors.DEFAULT_ID) carries it as radius_admin_profile (SPEC section 26).
     """
+    default_id = default_profile or vendors.DEFAULT_ID
     blocks, radsec_blocks = [], []
     seen_names, seen_addrs, seen_tls_addrs = set(), set(), set()
     for c in clients or []:
@@ -1079,9 +1180,11 @@ def render_clients(clients, radsec=None):
                 '\t\tsecret = "%s"\n'
                 "\t\tshortname = %s\n"
                 "\t\tnas_type = %s\n"
+                "%s"
                 '\t\tradsec_peer_name = "%s"\n'
                 "\t}\n"
-            ) % (name, family, addr, RADSEC_SECRET, name, nas_type, peer.lower())))
+            ) % (name, family, addr, RADSEC_SECRET, name, nas_type, _client_profile_line(c, default_id, 2),
+                 peer.lower())))
             continue
         if key in seen_addrs:
             raise PolicyInputError("Duplicate RADIUS client address %s (client %s)." % (addr, name))
@@ -1102,10 +1205,11 @@ def render_clients(clients, radsec=None):
             '\tsecret = "%s"\n'
             "\tshortname = %s\n"
             "\tnas_type = %s\n"
+            "%s"
             "\trequire_message_authenticator = %s\n"
             "\tlimit_proxy_state = %s\n"
             "}\n"
-        ) % (name, family, addr, secret, name, nas_type, ma, lps)))
+        ) % (name, family, addr, secret, name, nas_type, _client_profile_line(c, default_id, 1), ma, lps)))
     blocks.sort(key=lambda b: b[0])
     text = _HEADER + "".join("\n" + b for _, b in blocks)
     rs = validate_radsec_settings(radsec if radsec is not None else {})

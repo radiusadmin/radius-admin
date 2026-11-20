@@ -8,7 +8,7 @@
   {{ m.csrf() }}
   <input type="hidden" name="return_to" value="{{ url_for('admins.new') }}">
   <label for="username">Username</label>
-  <input id="username" name="username" value="{{ d.username or '' }}" required maxlength="64" pattern="[a-z0-9._\-]{2,64}" class="mono" autocapitalize="none" aria-describedby="username-hint"{{ m.described(errors, 'username', True) }}>
+  <input id="username" name="username" value="{{ d.username or '' }}" required maxlength="64" pattern="[a-z0-9._\-]{2,64}" class="mono" autocapitalize="none"{{ m.described(errors, 'username', True) }}>
   <p id="username-hint" class="small muted">2–64 lowercase letters, digits, dot, underscore or hyphen.</p>
   {{ m.field_error(errors, 'username') }}
   <label for="display_name">Full name</label>

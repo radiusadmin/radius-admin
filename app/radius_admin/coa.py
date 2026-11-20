@@ -6,15 +6,17 @@ no new cryptographic implementation. The shared secret is handed over in a priva
 0600 file (-S), never on the command line. Attribute values come from accounting
 records and are validated against strict patterns before use.
 
-Actions (Catalyst 1300 firmware 4.1.3.36+, Cisco AV-pair commands):
+The packet type and attributes of each action (reauth, bounce, disconnect) and the way
+the session is named come from the client's vendor profile (vendors.py, SPEC section 26).
+The Catalyst 1300 profile, for example, sends
   reauth      CoA-Request   Cisco-AVPair = "subscriber:command=reauthenticate"
   bounce      CoA-Request   Cisco-AVPair = "subscriber:command=bounce-host-port"
   disconnect  Disconnect-Request
-
-The session is named by Calling-Station-Id (the device's MAC) and NAS-Port-Id, with the
-switch's NAS-IP-Address and an Event-Timestamp. Acct-Session-Id is sent only when the
-accounting record has no MAC: a Catalyst 1300 finds no session when the request names one
-(CoA-NAK Session-Context-Not-Found) and needs NAS-IP-Address (else Missing-Attribute).
+and names the session by Calling-Station-Id (the device's MAC) and NAS-Port-Id, with the
+switch's NAS-IP-Address and an Event-Timestamp ("mac-then-session"): Acct-Session-Id is
+sent only when the accounting record has no MAC, because a Catalyst 1300 finds no session
+when the request names one (CoA-NAK Session-Context-Not-Found) and needs NAS-IP-Address
+(else Missing-Attribute).
 """
 import ipaddress
 import os
@@ -24,6 +26,7 @@ import subprocess
 import tempfile
 import time
 
+from . import vendors
 from .snmp import blocked_message
 
 # the bundled radius-admin-freeradius package first, so it wins over a distribution radclient
@@ -36,11 +39,7 @@ _STATION_RE = re.compile(r"^[0-9A-Fa-f]{2}([:.\-]?[0-9A-Fa-f]{2}){5}$|^[0-9A-Fa-
 _PORT_RE = re.compile(r"^[A-Za-z0-9/._:\-]{1,64}$")
 _SECRET_RE = re.compile(r"^[\x21-\x7e]{1,128}$")
 
-ACTIONS = {
-    "reauth": ("coa", 'Cisco-AVPair = "subscriber:command=reauthenticate"'),
-    "bounce": ("coa", 'Cisco-AVPair = "subscriber:command=bounce-host-port"'),
-    "disconnect": ("disconnect", None),
-}
+ACTIONS = vendors.COA_ACTIONS
 
 
 NO_REPLY = "No reply from the switch"       # start of the message when every try timed out
@@ -76,34 +75,50 @@ def find_dict_dir(radclient, configured=""):
     raise CoaError("FreeRADIUS dictionaries not found (set radius_dict_dir in radius-admin.conf)")
 
 
-def build_request(action, nas_ip, acct_session_id="", calling_station_id="", nas_port_id=""):
-    """Attribute lines for radclient. Raises CoaError for unusable input."""
+def _action(action, profile):
+    profile = profile or vendors.default()
     if action not in ACTIONS:
         raise CoaError("unknown action")
+    spec = profile["coa"][action]
+    if spec is None:
+        raise CoaError("the %s profile has no %s action" % (profile["label"], action))
+    return profile, spec
+
+
+def build_request(action, nas_ip, acct_session_id="", calling_station_id="", nas_port_id="", profile=None):
+    """Attribute lines for radclient. Raises CoaError for unusable input.
+    `profile` is a validated vendor profile (default: the built-in default)."""
+    profile, spec = _action(action, profile)
     try:
         ip = ipaddress.ip_address(str(nas_ip))
     except ValueError:
         raise CoaError("bad NAS address") from None
     lines = []
-    if calling_station_id:
-        if not _STATION_RE.match(calling_station_id):
-            raise CoaError("station id is not a MAC address")
+    if not calling_station_id and not acct_session_id:
+        raise CoaError("the session has neither an accounting session id nor a station MAC")
+    if calling_station_id and not _STATION_RE.match(calling_station_id):
+        raise CoaError("station id is not a MAC address")
+    if profile["coa"]["identify"] == "session-and-mac":
+        if acct_session_id:
+            if not _SESSION_RE.match(acct_session_id):
+                raise CoaError("accounting session id has unexpected characters")
+            lines.append('Acct-Session-Id = "%s"' % acct_session_id)
+        if calling_station_id:
+            lines.append('Calling-Station-Id = "%s"' % calling_station_id)
+    elif calling_station_id:    # mac-then-session
         lines.append('Calling-Station-Id = "%s"' % calling_station_id)
-    elif acct_session_id:       # no MAC in the accounting record: the session id is all there is
+    else:                       # no MAC in the accounting record: the session id is all there is
         if not _SESSION_RE.match(acct_session_id):
             raise CoaError("accounting session id has unexpected characters")
         lines.append('Acct-Session-Id = "%s"' % acct_session_id)
-    else:
-        raise CoaError("the session has neither an accounting session id nor a station MAC")
-    if nas_port_id:
+    if nas_port_id and profile["coa"]["send_nas_port_id"]:
         if not _PORT_RE.match(nas_port_id):
             raise CoaError("port id has unexpected characters")
         lines.append('NAS-Port-Id = "%s"' % nas_port_id)
     lines.append(("NAS-IPv6-Address = %s" if ip.version == 6 else "NAS-IP-Address = %s") % ip)
     lines.append("Event-Timestamp = %d" % int(time.time()))
-    extra = ACTIONS[action][1]
-    if extra:
-        lines.append(extra)
+    for e in spec["attrs"]:
+        lines.append("%s = %s" % (e["attr"], vendors.format_value(e["value"])))
     lines.append("Message-Authenticator = 0x00")
     return "\n".join(lines) + "\n"
 
@@ -126,7 +141,7 @@ def parse_reply(out, host=""):
     return False, "The switch refused (%s: %s)." % (kind, why)
 
 
-def send(action, host, port, secret, request_text, radclient, dict_dir, timeout=3, retries=2):
+def send(action, host, port, secret, request_text, radclient, dict_dir, timeout=3, retries=2, profile=None):
     """Send one request. Returns (ok, message)."""
     try:
         ip = ipaddress.ip_address(str(host))
@@ -134,7 +149,10 @@ def send(action, host, port, secret, request_text, radclient, dict_dir, timeout=
         return False, "bad switch address"
     if not _SECRET_RE.match(secret or ""):
         return False, "the switch's shared secret cannot be used (empty or unusual characters)"
-    kind = ACTIONS[action][0]
+    try:
+        kind = _action(action, profile)[1]["packet"]
+    except CoaError as e:
+        return False, str(e)
     target = ("[%s]:%d" % (ip, port)) if ip.version == 6 else ("%s:%d" % (ip, port))
     d = tempfile.mkdtemp(prefix="ra-coa.")
     try:

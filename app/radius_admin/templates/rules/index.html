@@ -53,7 +53,7 @@
     <thead><tr><th scope="col" class="num">Order</th><th scope="col">AD group</th><th scope="col" class="num">VLAN</th><th scope="col">Description</th><th scope="col">Status</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead>
     <tbody>{% for r in rules %}
     <tr class="{{ '' if r.enabled else 'is-off' }}">
-      <td class="num">{{ r.priority }}</td><td class="mono">{{ r.ad_group }}</td><td class="num"><span class="vlan">{{ r.vlan }}</span></td>
+      <td class="num">{{ r.priority }}</td><td class="mono">{{ r.ad_group }}</td><td class="num"><span class="vlan">{{ r.vlan }}</span>{% if r.role %}<span class="cell-sub mono" title="Role sent to devices whose profile uses roles">{{ r.role }}</span>{% endif %}</td>
       <td>{{ r.description }}</td><td>{{ m.onoff(r.enabled) }}</td>
       <td class="row-actions">{% if has_role('operator') %}
         {% if not loop.first %}{{ m.post_button(url_for('rules.move', rid=r.id), 'Up', 'btn btn-quiet btn-small', confirm='Move this rule up? The new order applies to the next authentication.', fields={'direction': 'up'}) }}{% endif %}

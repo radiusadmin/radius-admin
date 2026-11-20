@@ -133,8 +133,15 @@ sudo ./deploy/make-csr.sh                 # ECDSA P-384; add --ip <management-IP
 cat /etc/radius-admin/tls/server.csr      # submit to pki.example.net (TLS Web Server template)
 # when issued (leaf first, then Example-IssuingCA):
 sudo install -o root -g root -m 0644 radius.example.net-chain.pem /etc/radius-admin/tls/server.crt
-sudo ./deploy/install.sh --phase packages,users -y     # no service impact
+sudo ./deploy/install.sh --phase packages,nginx-update,users -y     # no service impact
 ```
+
+`nginx-update` upgrades nginx when it is older than the oldest build with the security fixes
+the portal needs (`RA_NGINX_MIN_VERSION` in `deploy/lib.sh`, currently `1.24.0-2ubuntu7.20`;
+see SECURITY.md 2.v). Preflight warns about an old nginx; the phase refreshes the package lists
+if needed, upgrades it when the mirror has a fixed build and restarts it if it was running. If
+the mirror has none (no `noble-security`), it warns and the install continues. Check with
+`dpkg-query -W nginx`.
 
 Verify: `id radius-admin`, `ls -l /etc/radius-admin/keys/data.key` →
 `-r-------- radius-admin radius-admin 32`. **Back up `data.key` offline** (encrypted
@@ -583,9 +590,11 @@ Going back to a list (*Back to sessions*, *Back to log*, *Cancel* on a form, or 
 action) returns to the filters and page you had; the menu links open the plain list.
 
 These are RADIUS Change-of-Authorization messages (RFC 5176) sent by the monitoring
-service with `radclient` from your FreeRADIUS build, to UDP **1700** on the switch
-(Catalyst 1300; changeable under Switch monitoring → Session actions). Requirements on
-each switch (firmware **4.1.3.36 or later**):
+service with `radclient` from your FreeRADIUS build, to the client's **session-action port**
+(Clients → edit; empty = its device profile's: UDP **1700** for the Catalyst 1200/1300
+profile, **3799** for the Generic profile). Only the actions the device profile has are
+offered: the Generic profile has Disconnect only. Requirements on each Catalyst 1300
+(firmware **4.1.3.36 or later**):
 
 ```
 aaa server radius dynamic-author
@@ -764,6 +773,50 @@ EAP-TTLS and PEAP with their inner servers `radius-admin-inner` and `radius-admi
 `mschap` module and the `ldap_user` section of `mods-available/ldap`; your directory settings
 are kept as before). Both methods stay off until you turn them on in Settings. EAP-TLS, MAB and switch logins behave as before.
 
+### 6.10 Device profiles (switches from other vendors)
+
+A **device profile** says which attributes this server sends to a RADIUS client (VLAN
+assignment, full admin rights on a management login), which session actions it offers and
+how its SNMP port names map to the names it sends in RADIUS. Built-in profiles:
+
+| Profile | Use for |
+|---|---|
+| Cisco Catalyst 1200/1300 (default) | Catalyst 1200/1300 |
+| Generic (RFC standard attributes) | Devices without a profile of their own: VLAN by the RFC 3580 tunnel attributes, an access rule's role as `Filter-Id`, admin rights by `Service-Type = Administrative-User`, MAB from wired ports and access points, Disconnect only, on UDP 3799 |
+
+A built-in profile that does not work with a device: Device profiles → **Report a problem**
+opens an issue form on GitHub with the profile id and version filled in (nothing else from
+this server). Add the device model and firmware and what went wrong, without secrets, host
+names or addresses.
+
+* **Custom profiles:** Network access → **Device profiles** (admins). *Copy* a built-in profile
+  (or *New profile*), adjust the attributes, the MAB port types, the session actions and the
+  port-name rules, and save; each line of an attribute box is `Attribute := value`. Attribute
+  names must exist in the FreeRADIUS dictionary (vendor dictionaries included, for example
+  `Aruba-User-Role`). Try a custom profile on one device first. *Export JSON* downloads any
+  profile; *Import JSON* on another server adds it (tick *Replace* to update an existing custom
+  profile). A profile in use or chosen as the default cannot be deleted. After changing a
+  profile that clients use, **Apply** for the reply attributes; session actions and port names
+  use it at once.
+* **Per client:** Clients → edit → *Device profile* (leave on *Default* to follow the
+  installation default) and *Session-action port* (leave empty for the profile's port).
+* **Default:** Settings → Devices → *Default device profile*, used by every client that does
+  not name one.
+* **CSV import:** an optional `vendor_profile` column (`default`, `cisco-c1300`, `generic-rfc`).
+* **Roles:** Access rules → edit → *Role* (optional). Devices whose profile uses roles get it
+  with the VLAN (the Generic profile sends it as `Filter-Id`: the device must know a filter or
+  role of that name, or it may refuse the session); others get the VLAN only. Takes effect at
+  the next authentication, like any rule change.
+* **MAB from access points:** registered MAC addresses are accepted from access points and
+  controllers whose profile allows it (Generic). Choose on the device which SSIDs use MAC
+  authentication; the MAB device's VLAN applies on every one of them.
+
+Both changes reach FreeRADIUS at the next **Apply** (the clients file names the client's
+profile and the policy picks the attributes from it). Test a management login and an 802.1X
+or MAB login from the device afterwards. Upgrades keep every client on the profile it used:
+existing clients follow the default, which stays Catalyst 1200/1300, and a session-action port
+changed under the old single setting is copied to each client.
+
 ## 7. Backup and restore
 
 What to back up:
@@ -881,7 +934,8 @@ the package to your home directory on the server, checks the SHA-256 there and r
 How `update.sh` chooses what to run: it unpacks the release to
 `/opt/radius-admin-src/releases/<UTC time>-<hash>` (root-owned), compares it with
 `/opt/radius-admin-src/current`, and runs `install.sh` with `packages` only if the package
-list changed, `postgres` if `sql/` or `deploy/postgres/` changed, always `app`, and `nginx`
+list changed, `nginx-update` if the installed nginx is older than the new release's security
+floor (it upgrades nginx from the mirror and restarts it), `postgres` if `sql/` or `deploy/postgres/` changed, always `app`, and `nginx`
 or `firewall` if their templates changed (the plan then shows the portal settings they keep from
 this server, see section 13.1; extra `install.sh` options go after `--`). FreeRADIUS files are only installed with
 `-WithFreeradius`; FreeRADIUS is never restarted by an update. The first push (no previous
@@ -1038,7 +1092,7 @@ nothing; the Release run then shows the warning "No release published". Rename
 `## Unreleased` before the merge to `main`, or the run warns "Empty release notes" and the
 release is published without notes.
 
-**On a server.** Administration → **Updates** shows the installed and the latest build on the
+**On a server.** Settings → **Updates** shows the installed and the latest build on the
 channel, what changed in between, and whether the update restarts FreeRADIUS.
 - **Channel:** main (stable releases) for production; testing and dev for test servers.
   Switching to a channel whose newest build is older offers it as a downgrade, which needs an

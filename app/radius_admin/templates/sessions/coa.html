@@ -23,7 +23,8 @@
   {% elif 'Session-Context-Not-Found' in r.message %}
   <p class="small">The switch has no session for this device on this port: the device has left or authenticated again since the accounting record was written, and the switch did not send Accounting-Stop. Nothing needs to be done on the switch.</p>
   {% else %}
-  <p class="small">Check that the switch has dynamic authorization configured for this server with the same shared key (RUNBOOK §6.4), runs firmware 4.1.3.36 or later, and that UDP {{ coa_port }} on the switch is reachable from this server.</p>
+  <p class="small">Check that the switch has dynamic authorization configured for this server with the same shared key (RUNBOOK §6.4) and that UDP {{ coa_port }} on the switch is reachable from this server. Device profile: {{ profile.label }}{% if profile.description %} ({{ profile.description }}){% endif %}.</p>
+  {% if profile.setup.coa %}<pre class="code">{{ profile.setup.coa }}</pre>{% endif %}
   {% endif %}
 {% endif %}
 <dl class="kv small">

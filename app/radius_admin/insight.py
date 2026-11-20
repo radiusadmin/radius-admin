@@ -156,7 +156,18 @@ class ClientIndex:
 
     @classmethod
     def load(cls, conn=None):
-        return cls(db.query("SELECT id, name, ipaddr, is_switch, enabled FROM ui.radius_client", conn=conn))
+        """Each client row carries `profile`, its vendor profile (SPEC section 26)."""
+        from . import vendors
+        rows = db.query("SELECT id, name, ipaddr, is_switch, enabled, vendor_profile, coa_port FROM ui.radius_client",
+                        conn=conn)
+        cat = vendors.catalog(conn)
+        default_id = vendors.load_default_id(conn, cat)
+        for r in rows:
+            try:
+                r["profile"] = vendors.resolve(r["vendor_profile"], default_id, cat)
+            except vendors.ProfileError:
+                r["profile"] = vendors.resolve(None, default_id, cat)
+        return cls(rows)
 
     def find(self, addr):
         if addr is None:
@@ -171,12 +182,13 @@ class ClientIndex:
         return None
 
 
-def port_status(ports, port_name):
-    """Find a port in switch_status.ports by name (gi1/0/4 == gi4 on standalone)."""
+def port_status(ports, port_name, profile=None):
+    """Find a port in switch_status.ports by its NAS-Port-Id, named by the switch's vendor
+    profile (Catalyst 1300: gi1/0/4 == gi4 on standalone)."""
     if not ports or not port_name:
         return None
     from .snmp import cli_port_name
-    want = cli_port_name(str(port_name)).lower()
+    want = cli_port_name(str(port_name), profile).lower()
     for p in ports:
         if str(p.get("name", "")).lower() == want:
             return p
