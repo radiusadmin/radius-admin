@@ -1,4 +1,4 @@
-"""RBAC, step-up, CRUD pages, switch-admin PBKDF2 rows, apply flow, audit chain, CLI."""
+"""RBAC, step-up, CRUD pages, device-admin PBKDF2 rows, apply flow, audit chain, CLI."""
 import os
 import re
 
@@ -19,7 +19,7 @@ def expire_stepup(superconn):
 
 
 # ------------------------------------------------------------------ RBAC
-VIEW_PAGES = ["/dashboard", "/clients/", "/switch-admins/", "/rules/", "/mab/",
+VIEW_PAGES = ["/dashboard", "/clients/", "/device-admins/", "/rules/", "/mab/",
               "/apply/", "/auth-log", "/audit-log", "/account/"]
 
 
@@ -37,12 +37,12 @@ def test_viewer_cannot_mutate(browser, superconn, logged_in):
     for path, data in [("/clients/new", {"name": "x", "ipaddr": "10.0.0.1", "secret_mode": "generate"}),
                        ("/mab/new", {"mac": "00:11:22:33:44:55", "vlan": "40"}),
                        ("/rules/new", {"connection": "wired", "ad_group": "G", "vlan": "5", "priority": "1"}),
-                       ("/switch-admins/new", {"username": "x", "password": "a" * 20, "confirm": "a" * 20}),
+                       ("/device-admins/new", {"username": "x", "password": "a" * 20, "confirm": "a" * 20}),
                        ("/apply/validate", {}), ("/apply/apply", {}), ("/apply/rollback", {"backup_id": "20260101T000000Z"}),
                        ("/audit-log/verify", {})]:
         r = browser.post(path, data, csrf=tok)
         assert r.status_code == 403, path
-    for p in ("/clients/new", "/mab/new", "/rules/new", "/switch-admins/new", "/settings", "/custom-policy",
+    for p in ("/clients/new", "/mab/new", "/rules/new", "/device-admins/new", "/settings", "/custom-policy",
               "/ui-admins/"):
         assert browser.get(p).status_code == 403, p
     assert q(superconn, "SELECT count(*) FROM mab_device")[0][0] == 0
@@ -140,12 +140,12 @@ def test_client_crud(browser, superconn, logged_in):
         assert "Explicit-Secret" not in (d or "") and row[2] not in (d or "")
 
 
-# ---------------------------------------------------------- switch admins
+# ---------------------------------------------------------- device admins
 def test_switch_admin_lifecycle(browser, superconn, logged_in):
     from radius_admin.crypto import fr_pbkdf2_verify
     logged_in("operator")
-    pw = "Switch-Admin-Pass-2026"
-    r = browser.post("/switch-admins/new", {"username": "netops1", "password": pw, "confirm": pw})
+    pw = "Device-Admin-Pass-2026"
+    r = browser.post("/device-admins/new", {"username": "netops1", "password": pw, "confirm": pw})
     assert r.status_code == 302
     rows = q(superconn, "SELECT attribute, op, value FROM radcheck WHERE username='netops1'")
     assert len(rows) == 1 and rows[0][0] == "Password-With-Header" and rows[0][1] == ":="
@@ -155,17 +155,17 @@ def test_switch_admin_lifecycle(browser, superconn, logged_in):
     assert q(superconn, "SELECT groupname FROM radusergroup WHERE username='netops1'") == [("net-admins",)]
     # Policy: too short / forbidden chars / mismatch
     for bad in ("short", 'has"quote-in-it-xxxxx', "back\\slash-in-it-xxxx"):
-        r = browser.post("/switch-admins/netops1/password", {"password": bad, "confirm": bad})
+        r = browser.post("/device-admins/netops1/password", {"password": bad, "confirm": bad})
         assert r.status_code == 400, bad
-    r = browser.post("/switch-admins/netops1/password", {"password": pw + "x", "confirm": pw + "y"})
+    r = browser.post("/device-admins/netops1/password", {"password": pw + "x", "confirm": pw + "y"})
     assert r.status_code == 400
     # Disable / enable
-    browser.post("/switch-admins/netops1/disable", {}, csrf_page="/switch-admins/")
+    browser.post("/device-admins/netops1/disable", {}, csrf_page="/device-admins/")
     assert ("Auth-Type", ":=", "Reject") in q(superconn, "SELECT attribute, op, value FROM radcheck WHERE username='netops1'")
-    assert "is-off" in browser.text(browser.get("/switch-admins/"))
-    browser.post("/switch-admins/netops1/enable", {}, csrf_page="/switch-admins/")
+    assert "is-off" in browser.text(browser.get("/device-admins/"))
+    browser.post("/device-admins/netops1/enable", {}, csrf_page="/device-admins/")
     assert q(superconn, "SELECT count(*) FROM radcheck WHERE username='netops1' AND attribute='Auth-Type'")[0][0] == 0
-    browser.post("/switch-admins/netops1/delete", {}, csrf_page="/switch-admins/")
+    browser.post("/device-admins/netops1/delete", {}, csrf_page="/device-admins/")
     assert q(superconn, "SELECT count(*) FROM radcheck WHERE username='netops1'")[0][0] == 0
     assert q(superconn, "SELECT count(*) FROM radusergroup WHERE username='netops1'")[0][0] == 0
 
@@ -174,18 +174,18 @@ def test_legacy_crypt_password_badge_and_reset(browser, superconn, logged_in):
     q(superconn, "INSERT INTO radcheck (username, attribute, op, value) VALUES ('old','Crypt-Password',':=','$6$abc$def')")
     q(superconn, "INSERT INTO radusergroup (username, groupname, priority) VALUES ('old','net-admins',1)")
     logged_in("operator")
-    assert "Legacy hash" in browser.text(browser.get("/switch-admins/"))
+    assert "Legacy hash" in browser.text(browser.get("/device-admins/"))
     pw = "Replacement-Password-1"
-    r = browser.post("/switch-admins/old/password", {"password": pw, "confirm": pw})
+    r = browser.post("/device-admins/old/password", {"password": pw, "confirm": pw})
     assert r.status_code == 302
     attrs = [a for (a,) in q(superconn, "SELECT attribute FROM radcheck WHERE username='old'")]
     assert attrs == ["Password-With-Header"]
-    assert "Legacy hash" not in browser.text(browser.get("/switch-admins/"))
+    assert "Legacy hash" not in browser.text(browser.get("/device-admins/"))
 
 
 def test_switch_admin_sql_injection_is_inert(browser, superconn, logged_in):
     logged_in("operator")
-    r = browser.post("/switch-admins/new", {"username": "x'; DROP TABLE radcheck; --", "password": "a" * 20,
+    r = browser.post("/device-admins/new", {"username": "x'; DROP TABLE radcheck; --", "password": "a" * 20,
                                             "confirm": "a" * 20})
     assert r.status_code == 400
     assert q(superconn, "SELECT count(*) FROM radcheck")[0][0] == 0

@@ -553,6 +553,15 @@ def test_rollback_bad_id(env, bid):
     assert r["ok"] is False
 
 
+def test_rollback_id_trailing_newline_refused(env):
+    # `$` matches before a trailing newline; the id must be refused by validation,
+    # not merely because no backup of that name exists
+    env.stage()
+    bid = env.call({"action": "apply"})["backup_id"]
+    r = env.call({"action": "rollback", "backup_id": bid + "\n"})
+    assert r["ok"] is False and "invalid backup_id" in r["message"], r
+
+
 def test_rollback_missing(env):
     r = env.call({"action": "rollback", "backup_id": "20000101T000000Z"})
     assert r["ok"] is False and "not found" in r["message"]

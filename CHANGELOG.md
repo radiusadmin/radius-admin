@@ -5,6 +5,32 @@ Each release has a section here. `main` builds are the stable releases (`0.2.0`)
 show the "Unreleased" section plus their commits. Bump `VERSION` on `dev` right after a
 release, so previews sort after it.
 
+## 0.2.5 - 2026-11-20
+
+### Added
+- **Directory accounts for device admin logins.** Members of chosen directory groups can log in
+  to switches, access points and firewalls with their directory password (LDAP bind over the
+  existing LDAPS connection, nested groups included). Settings → Device admin logins turns it on
+  and lists the groups; a local account of the same name always wins, and logins from outside
+  the management subnet never reach the directory. Auth log method `admin-ldap` with the groups
+  seen.
+
+### Changed
+- "Switch admins" are now **device admins** everywhere in the console. The page moved to
+  `/device-admins/`; the old address redirects.
+- The installer loads the SQL files in numeric order, so files numbered from 100 load last.
+
+### Fixed
+- **Upgrades no longer reset the EAP-TLS certificates and OCSP responder.** The freeradius
+  phase installed the shipped `mods-available/eap` (`certs/site/…`, OCSP responder
+  `pki.example.net`), so after an upgrade with `--with-freeradius` every EAP-TLS login was
+  rejected with "Couldn't connect to OCSP responder". It now keeps the live certificate, CA,
+  CRL and OCSP settings, as it does for LDAP. Affects 0.2.0 to 0.2.4: after such an upgrade,
+  check `ocsp { url }` and the certificate paths in `mods-available/eap` against the backup
+  the phase made (`/var/backups/radius-admin/freeradius-*.tar.gz`).
+- Device profiles: "Used by" now counts the clients left on *Default*, under the default
+  profile. They were counted only when a client named the profile itself.
+
 ## 0.2.4 - 2026-11-19
 
 ### Added

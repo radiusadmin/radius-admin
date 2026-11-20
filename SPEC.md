@@ -275,6 +275,14 @@ roles and database `radius` loaded from these files.
    inner instance `eap radius_admin_inner_eap` (mschapv2 only; section 20). Remove md5, psk, gtc. Remove `ca_path = ${cadir}` (test CA lives there). Set
    `reject_unknown_intermediate_ca = yes` (certs/site/ca.pem = Example-IssuingCA + Example-RootCA,
    sizes match). cipher_list = FIPS list (§7). Keep OCSP as is.
+   Upgrades keep the site's values (`install.sh` `carry_over_secrets`, when the live file was
+   installed by radius-admin, i.e. has a `radius-admin:` comment; a stock eap is not merged): in
+   `tls-config tls-common` outside its sub-sections `private_key_password`, `private_key_file`,
+   `certificate_file`, `ca_file`, `ca_path`, `check_crl`, `check_all_crl`, `check_cert_issuer`,
+   `check_cert_cn`, and in its `ocsp { }` `enable`, `override_cert_url`, `url`, `use_nonce`,
+   `timeout`, `softfail` (set, added or commented out to match the live file; a live file
+   without `ocsp { }` keeps OCSP off). Ciphers, TLS versions and the method blocks come from the
+   release. The installer prints the names of the kept keys, never their values.
 6. `mods-available/ldap`: `ldap_debug = 0x0000`, `tls_min_version = "1.2"`,
    `cipher_list` = FIPS list. Nothing else.
 7. Modules to remove from mods-enabled: chap, digest, dpsk, dynamic_clients, echo,
@@ -356,7 +364,7 @@ Actions:
   for active and UDP 1812 listening; on failure restore backup + restart and return
   `{"ok":false, "rolled_back":true, ...}`; success → `{"ok":true, "backup_id":..,
   "policy_sha256":.., "clients_sha256":..}`.
-- `rollback` `{"backup_id": "<ts>"}` (format `^\d{8}T\d{6}Z$`) → restore that backup,
+- `rollback` `{"backup_id": "<ts>"}` (format `^\d{8}T\d{6}Z\Z`) → restore that backup,
   validate, restart, same failure handling.
 - `update_status` → `{"ok":true, "installed": {version, channel, commit, built} from
   `build_file`, "key_present": bool, "key_fingerprint": sha256 of the pinned key's DER,
@@ -1187,7 +1195,7 @@ meta refresh stays only inside `<noscript>`, so every page still works without J
   | `label`, `description` | Display text, 1-64 / up to 300 printable characters |
   | `status` | `supported` (passed the bench and real hardware) or `unverified` |
   | `reply.vlan` | Attributes sent with an accepted MAB / 802.1X request. One value must be `{vlan}` |
-  | `reply.admin_full` | Attributes added to a switch-admin login when `admin_priv15` is on |
+  | `reply.admin_full` | Attributes added to a device admin login (local or directory account) when `admin_priv15` is on |
   | `reply.role` | Optional (absent = empty). Attributes added to an 802.1X accept when the matched access rule has a role; one value must be `{role}` |
   | `mab.port_types` | Optional (absent = `["Ethernet"]`). NAS-Port-Type values that start MAB: `Ethernet`, `Wireless-802.11` (access points and controllers) |
   | `coa.port` | UDP port of the device's dynamic-authorization server, used when the client sets none |
@@ -1303,7 +1311,8 @@ meta refresh stays only inside `<noscript>`, so every page still works without J
     list, CSV import, the sessions page, CoA and SNMP in the monitor.
   - **Pages** (`views/profiles.py`, nav *Network access → Device profiles*). `/profiles/` (all
     roles): every profile with type ("Built-in" or "Custom"; `status` is not shown), the number of
-    clients using it and the default marker; Export JSON for each; for admins Copy, New, Import,
+    clients using it (a client that names no profile counts for the default) and the default
+    marker; Export JSON for each; for admins Copy, New, Import,
     and Delete for custom ones; for built-in profiles **Report a problem**: a link to
     `https://github.com/<update_repo>/issues/new?template=device-profile.yml&title=…&profile=<id>&version=<installed version>`
     (`vendors.report_url`; `update_repo` must be `owner/name`, else no link), the issue form
@@ -1360,3 +1369,57 @@ meta refresh stays only inside `<noscript>`, so every page still works without J
   health check (nginx active and listening on 443) covers the restart.
 - Tests: `tests/installer/test_nginx_update.sh` (version comparison, every branch of the phase
   with stubbed apt/dpkg/systemctl/nginx, the update.sh choice, preflight wiring).
+
+## 28. Change (2026-11-19): device admins; directory accounts for device admin logins
+
+- **Name.** "Switch admins" are shown as **device admins** (switches, access points, firewalls and
+  other RADIUS clients' management logins): navigation, page titles, settings, logs, reports, the
+  setup checklist and the reject reasons FreeRADIUS writes. Internal names are unchanged so audit
+  history and upgrades stay consistent: the group `net-admins`, the blueprint `switch_admins`, the
+  audit actions `switch_admin.*`, the setting keys `admin_subnet`/`admin_priv15`, the authmethod
+  `pap-admin`. The page moves to `/device-admins/`; `/switch-admins/…` answers 308 to the same path
+  there (query string kept). The log hints match the old and the new reason texts.
+- **Settings** (`sql/100-device-admins.sql`, ui.setting; Settings → Device admin logins, admin +
+  step-up, audited as `settings.update`): `admin_directory` (`'false'` by default) and
+  `admin_directory_groups` (directory group names, one per line; the console trims them, drops blank
+  lines and duplicates in any case, checks each with `validate_ad_group`, allows at most 50, and
+  refuses to turn directory accounts on with no group). Live: read by FreeRADIUS on every login.
+- **SQL** (SECURITY DEFINER, execute for `radius_fr` only):
+  `radius_admin_admin_directory_hex(user_hex)` → `'local'` when the name has any `radcheck` or
+  `radusergroup` row (case-insensitive: a local account always wins), `'off'` when the setting is
+  off or no group is configured, else `'directory'`; NULL for malformed hex (1–253 bytes).
+  `radius_admin_admin_group_hex(groups_hex)` → true when the setting is on and one of the
+  `,<hex>` group names equals a configured group (case-insensitive); false otherwise and on
+  malformed input. `radius_admin_admin_directory_groups()` (internal) parses the setting.
+- **SQL file order.** The two-digit names were used up: `install.sh` and `tools/ci/setup.sh` load
+  `sql/[0-9]*-*.sql` in version order (`sort -V`: `00-`, …, `99-`, `100-`). Every file stays
+  idempotent and is re-applied on each `postgres` phase.
+- **Policy** `radius_admin_admin_authorize`, called in the default server's authorize after
+  `-ldap`, before `expiration`/`pap`. For a device admin login (no EAP-Message, no NAS-Port-Type
+  Ethernet, no Called-Station-Id) with User-Password and no Auth-Type yet, it asks
+  `radius_admin_admin_directory_hex('%{hex:User-Name}')`. On `'directory'`: marker
+  `control:Tmp-String-1 = "admin-ldap"`; the management-subnet check (as in post-auth) runs first,
+  so a device outside it never makes the server bind (reject "device admin login from an address
+  outside the management subnet"); then `ldap_user` (the section of SPEC 19: user filter, group
+  cache in `control:ldap_user-LDAP-Group`, nested groups): `notfound` → reject "no such device admin
+  (not a local account, not found in the directory)", other failures → reject "the directory could
+  not be searched for this user"; else `Auth-Type := ldap_user` and the groups go to
+  `control:Tmp-String-9`. Default server: new `Auth-Type ldap_user { ldap_user }` (LDAP bind as the
+  user). A refused bind reaches `radius_admin_reject`, which replaces rlm_ldap's own reason (none, or
+  "… Bind credentials incorrect / Invalid credentials") with "the directory refused the password
+  (wrong password, or a disabled, locked or expired account)"; other LDAP failures keep their text.
+- **Post-auth** (device admin branch): the marker `pap-admin` is set unless it is already
+  `admin-ldap`; the subnet check is unchanged; for `admin-ldap` the groups are hex-encoded into
+  `control:Tmp-String-3` (as for EAP-TTLS, each name once, `"x"` when one is too long), checked
+  against `^(,[0-9a-f]+)*$` and passed to `radius_admin_admin_group_hex`; true → accept, with
+  the profile's `admin_full` attributes when `admin_priv15` is on (same setting as local admins);
+  false → reject "the directory account is not in a device admin group". Local accounts still
+  need `SQL-Group == "net-admins"`.
+- **Log/UI.** `authmethod = 'admin-ldap'` with the groups in `ad_groups_hex`; the auth log record
+  shows the groups seen and marks the ones allowed now; hints for the new reasons. The Device admins
+  page shows whether directory accounts are accepted and for which groups; the privileged-access
+  report lists the groups; the setup step "device admins" also counts as done with directory
+  groups. Sessions label `admin (directory)`.
+- **Upgrade.** `--phase postgres` (settings, functions), `app`, and `freeradius` with a restart
+  (default server: the new policy call and `Auth-Type ldap_user`). Directory accounts stay off
+  until turned on; local device admins behave as before.

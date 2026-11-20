@@ -54,7 +54,7 @@ DEFAULT_CONFIG = "/etc/radius-admin/helper.conf"
 MAX_REQUEST = 64 * 1024
 MAX_STAGED = 1024 * 1024
 OUTPUT_LINES = 200
-BACKUP_ID_RE = re.compile(r"^\d{8}T\d{6}Z$")
+BACKUP_ID_RE = re.compile(r"^\d{8}T\d{6}Z\Z")
 SAFE_ENV = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C", "LC_ALL": "C"}
 ACTIONS = ("status", "validate", "apply", "rollback", "update_status", "update_check",
            "update_install", "update_log")

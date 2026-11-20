@@ -235,7 +235,7 @@ def test_outer_branch_needs_the_inner_marker(policy):
     assert ('elsif (&EAP-Message && &session-state:Tmp-String-1 && (&session-state:Tmp-String-1 == "ttls-pap"'
             ' || &session-state:Tmp-String-1 == "ttls-ldap" || &session-state:Tmp-String-1 == "peap"'
             ' || &session-state:Tmp-String-1 == "peap-ldap") && &session-state:Stripped-User-Name)') in ttls
-    assert pa.index("# Switch/device admin logins") < pa.index("# 802.1X with a username") < pa.index("# 802.1X EAP-TLS")
+    assert pa.index("# Device admin logins") < pa.index("# 802.1X with a username") < pa.index("# 802.1X EAP-TLS")
     assert ("%{sql:SELECT radius_admin_dot1x_vlan_rule_hex('%{hex:control:Stripped-User-Name}', "
             "%{control:Tmp-String-7}, '%{control:Tmp-String-8}')}") in ttls
     assert '"%{control:Tmp-String-8}" =~ /^([0-9a-f]{2})*$/' in ttls

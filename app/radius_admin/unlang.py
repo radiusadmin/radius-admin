@@ -183,7 +183,7 @@ def validate_ipaddr(value):
 
 
 def validate_admin_subnet(value):
-    """Admin subnet for switch-admin logins. Returns ipaddress network object."""
+    """Admin subnet for device admin logins. Returns ipaddress network object."""
     _require_str(value, "Admin subnet")
     try:
         net = ipaddress.ip_network(value.strip(), strict=True)
@@ -427,27 +427,75 @@ def _append_group_hex(indent):
     )
 
 
-# The directory groups that the inner site copied to &control:Tmp-String-9, as the hex list
-# radius_admin_vlan_rule_hex() takes (attribute copy + %{hex:...} per item, like EAP-TLS,
-# each name once); "x" (no match) when a group name is too long for the hex xlat. Two tabs
-# of indent.
-_DIRECTORY_GROUPS_HEX = (
-    "\t\tupdate control {\n"
-    '\t\t\t&Tmp-String-3 := ""\n'
-    "\t\t\t&Tmp-String-7 !* ANY\n"
-    "\t\t}\n"
-    "\t\tupdate control {\n"
-    "\t\t\t&Tmp-String-7 += &control:Tmp-String-9[*]\n"
-    "\t\t}\n"
-    "\t\tforeach &control:Tmp-String-7 {\n"
-    + _append_group_hex(3) +
-    "\t\t}\n"
-    "\t\tif (\"%{control:Tmp-String-3}\" !~ /^(,[0-9a-f]+)*$/) {\n"
-    "\t\t\tupdate control {\n"
-    '\t\t\t\t&Tmp-String-3 := "x"\n'
-    "\t\t\t}\n"
-    "\t\t}\n"
-)
+def _directory_groups_hex(indent):
+    """Unlang: the directory groups in &control:Tmp-String-9 (copied there from
+    &control:ldap_user-LDAP-Group) as the hex list radius_admin_vlan_rule_hex() and
+    radius_admin_admin_group_hex() take, in &control:Tmp-String-3 (attribute copy + %{hex:...}
+    per item, like EAP-TLS, each name once); "x" (no match) when a group name is too long for
+    the hex xlat."""
+    t = "\t" * indent
+    return (
+        t + "update control {\n"
+        + t + '\t&Tmp-String-3 := ""\n'
+        + t + "\t&Tmp-String-7 !* ANY\n"
+        + t + "}\n"
+        + t + "update control {\n"
+        + t + "\t&Tmp-String-7 += &control:Tmp-String-9[*]\n"
+        + t + "}\n"
+        + t + "foreach &control:Tmp-String-7 {\n"
+        + _append_group_hex(indent + 1)
+        + t + "}\n"
+        + t + "if (\"%{control:Tmp-String-3}\" !~ /^(,[0-9a-f]+)*$/) {\n"
+        + t + "\tupdate control {\n"
+        + t + '\t\t&Tmp-String-3 := "x"\n'
+        + t + "\t}\n"
+        + t + "}\n"
+    )
+
+
+# The directory groups that the inner site copied to &control:Tmp-String-9 (two tabs of indent).
+_DIRECTORY_GROUPS_HEX = _directory_groups_hex(2)
+
+# A device admin login: plain PAP/CHAP from a device's management plane (no EAP, no port
+# type Ethernet, no SSID). radius_admin_admin_authorize and radius_admin_postauth use the same
+# test.
+_ADMIN_REQUEST = "!&EAP-Message && (!&NAS-Port-Type || &NAS-Port-Type != Ethernet) && !&Called-Station-Id"
+
+
+def _admin_source_check(indent):
+    """Unlang: &control:Tmp-String-8 := "t" when the packet source address is inside the
+    management subnet (radius_admin_admin_source_ok_hex), else "f". The address goes to SQL
+    as hex: IPv4 = the 4 raw octets (8 digits); IPv6 = hex of its printed text form."""
+    t = "\t" * indent
+    return (
+        t + "if (&Packet-Src-IP-Address) {\n"
+        + t + "\tupdate control {\n"
+        + t + "\t\t&Tmp-IP-Address-0 := \"%{Packet-Src-IP-Address}\"\n"
+        + t + "\t}\n"
+        + t + "\tupdate control {\n"
+        + t + "\t\t&Tmp-String-4 := \"%{hex:control:Tmp-IP-Address-0}\"\n"
+        + t + "\t}\n"
+        + t + "}\n"
+        + t + "elsif (&Packet-Src-IPv6-Address) {\n"
+        + t + "\tupdate control {\n"
+        + t + "\t\t&Tmp-String-5 := \"%{Packet-Src-IPv6-Address}\"\n"
+        + t + "\t}\n"
+        + t + "\tupdate control {\n"
+        + t + "\t\t&Tmp-String-4 := \"%{hex:control:Tmp-String-5}\"\n"
+        + t + "\t}\n"
+        + t + "}\n"
+        + t + "update control {\n"
+        + t + '\t&Tmp-String-8 := "f"\n'
+        + t + "}\n"
+        + t + "if (&control:Tmp-String-4 && &control:Tmp-String-4 =~ /^[0-9a-f]{8}$|^([0-9a-f]{2}){2,64}$/) {\n"
+        + t + "\tupdate control {\n"
+        + t + "\t\t&Tmp-String-8 := \"%{sql:SELECT radius_admin_admin_source_ok_hex('%{control:Tmp-String-4}')}\"\n"
+        + t + "\t}\n"
+        + t + "}\n"
+    )
+
+
+_OUTSIDE_SUBNET = "radius-admin: device admin login from an address outside the management subnet"
 
 
 def _reply_lines(profile, list_name, indent):
@@ -672,9 +720,70 @@ def render_policy(custom="", profile=None, others=()):
         "}\n\n"
     )
 
+    # ---------------------------------------------------------------- device admins, directory
+    o.append(
+        "#\n"
+        "#  Device admin logins with a directory account (SPEC section 28). Called in\n"
+        "#  authorize after sql and before pap. A name that is not a local account, while\n"
+        "#  directory accounts are on (radius_admin_admin_directory_hex), is looked up in the\n"
+        "#  directory (ldap_user, which also caches its group names) and its password is\n"
+        "#  checked with an LDAP bind as that person. The management subnet is checked first,\n"
+        "#  so a device outside it never makes the server bind. radius_admin_postauth then\n"
+        "#  requires one of the configured directory groups.\n"
+        "#\n"
+        "radius_admin_admin_authorize {\n"
+        "\tif (" + _ADMIN_REQUEST + " && &User-Name && &User-Password && !&control:Auth-Type) {\n"
+        "\t\tupdate control {\n"
+        "\t\t\t&Tmp-String-0 := \"%{sql:SELECT radius_admin_admin_directory_hex('%{hex:User-Name}')}\"\n"
+        "\t\t}\n"
+        "\t\tif (&control:Tmp-String-0 && &control:Tmp-String-0 == \"directory\") {\n"
+        "\t\t\tupdate control {\n"
+        '\t\t\t\t&Tmp-String-1 := "admin-ldap"\n'
+        "\t\t\t\t&Tmp-String-0 !* ANY\n"
+        "\t\t\t}\n"
+        + _admin_source_check(3) +
+        "\t\t\tif (!&control:Tmp-String-8 || &control:Tmp-String-8 != \"t\") {\n"
+        "\t\t\t\tupdate request {\n"
+        "\t\t\t\t\t&Module-Failure-Message := \"" + _OUTSIDE_SUBNET + "\"\n"
+        "\t\t\t\t}\n"
+        "\t\t\t\treject\n"
+        "\t\t\t}\n"
+        "\t\t\tldap_user\n"
+        "\t\t\tif (notfound) {\n"
+        "\t\t\t\tupdate request {\n"
+        "\t\t\t\t\t&Module-Failure-Message := \"radius-admin: no such device admin (not a local account, not found in the directory)\"\n"
+        "\t\t\t\t}\n"
+        "\t\t\t\treject\n"
+        "\t\t\t}\n"
+        "\t\t\telsif (!ok && !updated) {\n"
+        "\t\t\t\tupdate request {\n"
+        "\t\t\t\t\t&Module-Failure-Message := \"radius-admin: the directory could not be searched for this user\"\n"
+        "\t\t\t\t}\n"
+        "\t\t\t\treject\n"
+        "\t\t\t}\n"
+        "\t\t\tupdate control {\n"
+        "\t\t\t\t&Auth-Type := ldap_user\n"
+        "\t\t\t\t&Tmp-String-9 !* ANY\n"
+        "\t\t\t}\n"
+        "\t\t\tupdate control {\n"
+        "\t\t\t\t&Tmp-String-9 += &control:ldap_user-LDAP-Group[*]\n"
+        "\t\t\t}\n"
+        "\t\t}\n"
+        "\t\telse {\n"
+        "\t\t\tupdate control {\n"
+        "\t\t\t\t&Tmp-String-0 !* ANY\n"
+        "\t\t\t}\n"
+        "\t\t}\n"
+        "\t}\n"
+        "\telse {\n"
+        "\t\tnoop\n"
+        "\t}\n"
+        "}\n\n"
+    )
+
     # ---------------------------------------------------------------- EAP-TTLS inner tunnel
     # Local 802.1X accounts only (ui.dot1x_user): the inner tunnel never reads radcheck,
-    # so a switch admin's password cannot open a network port.
+    # so a device admin's password cannot open a network port.
     pbkdf2_rx = "/^\\{X-PBKDF2\\}HMACSHA2\\+256:[A-Za-z0-9+\\/=]+:[A-Za-z0-9+\\/=]+:[A-Za-z0-9+\\/=]+$/"
     o.append(
         "#\n"
@@ -787,6 +896,14 @@ def render_policy(custom="", profile=None, others=()):
         "#  gets that round's method, user and reason.\n"
         "#\n"
         "radius_admin_reject {\n"
+        "\t# A directory device admin whose LDAP bind was refused (radius_admin_admin_authorize):\n"
+        "\t# rlm_ldap's own message (\"Bind credentials incorrect\") becomes the plain reason; any\n"
+        "\t# other failure (directory unreachable, ...) keeps its text.\n"
+        "\tif (&control:Tmp-String-1 && &control:Tmp-String-1 == \"admin-ldap\" && (!&Module-Failure-Message || &Module-Failure-Message =~ /(Bind credentials incorrect|Invalid credentials)/)) {\n"
+        "\t\tupdate request {\n"
+        "\t\t\t&Module-Failure-Message := \"radius-admin: the directory refused the password (wrong password, or a disabled, locked or expired account)\"\n"
+        "\t\t}\n"
+        "\t}\n"
         "\tif (!&control:Tmp-String-1 && &session-state:Tmp-String-4 && &session-state:Tmp-String-4 =~ /^(ttls-pap|ttls-ldap|peap|peap-ldap)$/) {\n"
         "\t\tupdate control {\n"
         "\t\t\t&Tmp-String-1 := &session-state:Tmp-String-4\n"
@@ -906,47 +1023,40 @@ def render_policy(custom="", profile=None, others=()):
         + _reply_block(profile, others, "vlan", 2) +
         "\t}\n"
         "\n"
-        "\t# Switch/device admin logins (plain PAP, no port type or SSID).\n"
-        "\t# Source subnet and priv15 come live from ui.setting via SQL functions;\n"
-        "\t# an empty result (e.g. database down) means reject.\n"
+        "\t# Device admin logins (switches, access points, firewalls: plain PAP, no port\n"
+        "\t# type or SSID). Local accounts (radcheck + group net-admins) or, marked\n"
+        "\t# admin-ldap by radius_admin_admin_authorize, directory accounts in a configured\n"
+        "\t# group. Source subnet, groups and priv15 come live from ui.setting via SQL\n"
+        "\t# functions; an empty result (e.g. database down) means reject.\n"
         "\t# SECURITY: request/directory data is passed to %{sql:...} ONLY as hex\n"
         "\t# (%{hex:...}, alphabet [0-9a-f]); FreeRADIUS un-escapes backslash sequences\n"
         "\t# in %{sql:...} arguments after SQL escaping, so raw strings could inject SQL.\n"
-        "\telsif (!&EAP-Message && (!&NAS-Port-Type || &NAS-Port-Type != Ethernet) && !&Called-Station-Id) {\n"
-        "\t\tupdate control {\n"
-        '\t\t\t&Tmp-String-1 := "pap-admin"\n'
-        "\t\t}\n"
-        "\t\t# The packet source address in hex: IPv4 = the 4 raw octets (8 digits);\n"
-        "\t\t# IPv6 = hex of its printed text form.\n"
-        "\t\tif (&Packet-Src-IP-Address) {\n"
+        "\telsif (" + _ADMIN_REQUEST + ") {\n"
+        "\t\tif (!&control:Tmp-String-1 || &control:Tmp-String-1 != \"admin-ldap\") {\n"
         "\t\t\tupdate control {\n"
-        "\t\t\t\t&Tmp-IP-Address-0 := \"%{Packet-Src-IP-Address}\"\n"
-        "\t\t\t}\n"
-        "\t\t\tupdate control {\n"
-        "\t\t\t\t&Tmp-String-4 := \"%{hex:control:Tmp-IP-Address-0}\"\n"
+        '\t\t\t\t&Tmp-String-1 := "pap-admin"\n'
         "\t\t\t}\n"
         "\t\t}\n"
-        "\t\telsif (&Packet-Src-IPv6-Address) {\n"
-        "\t\t\tupdate control {\n"
-        "\t\t\t\t&Tmp-String-5 := \"%{Packet-Src-IPv6-Address}\"\n"
-        "\t\t\t}\n"
-        "\t\t\tupdate control {\n"
-        "\t\t\t\t&Tmp-String-4 := \"%{hex:control:Tmp-String-5}\"\n"
-        "\t\t\t}\n"
-        "\t\t}\n"
-        "\t\tupdate control {\n"
-        '\t\t\t&Tmp-String-8 := "f"\n'
-        "\t\t}\n"
-        "\t\tif (&control:Tmp-String-4 && &control:Tmp-String-4 =~ /^[0-9a-f]{8}$|^([0-9a-f]{2}){2,64}$/) {\n"
-        "\t\t\tupdate control {\n"
-        "\t\t\t\t&Tmp-String-8 := \"%{sql:SELECT radius_admin_admin_source_ok_hex('%{control:Tmp-String-4}')}\"\n"
-        "\t\t\t}\n"
-        "\t\t}\n"
+        + _admin_source_check(2) +
         "\t\tif (!&control:Tmp-String-8 || &control:Tmp-String-8 != \"t\") {\n"
         "\t\t\tupdate request {\n"
-        "\t\t\t\t&Module-Failure-Message := \"radius-admin: switch admin login from an address outside the management subnet\"\n"
+        "\t\t\t\t&Module-Failure-Message := \"" + _OUTSIDE_SUBNET + "\"\n"
         "\t\t\t}\n"
         "\t\t\treject\n"
+        "\t\t}\n"
+        "\t\telsif (&control:Tmp-String-1 == \"admin-ldap\") {\n"
+        + _directory_groups_hex(3) +
+        "\t\t\tif (\"%{control:Tmp-String-3}\" =~ /^(,[0-9a-f]+)*$/ && \"%{sql:SELECT radius_admin_admin_group_hex('%{control:Tmp-String-3}')}\" == \"t\") {\n"
+        "\t\t\t\tif (\"%{sql:SELECT radius_admin_priv15()}\" == \"t\") {\n"
+        + _reply_block(profile, others, "admin_full", 5) +
+        "\t\t\t\t}\n"
+        "\t\t\t}\n"
+        "\t\t\telse {\n"
+        "\t\t\t\tupdate request {\n"
+        "\t\t\t\t\t&Module-Failure-Message := \"radius-admin: the directory account is not in a device admin group\"\n"
+        "\t\t\t\t}\n"
+        "\t\t\t\treject\n"
+        "\t\t\t}\n"
         "\t\t}\n"
         "\t\telsif (SQL-Group == \"net-admins\") {\n"
         "\t\t\tif (\"%{sql:SELECT radius_admin_priv15()}\" == \"t\") {\n"
@@ -955,7 +1065,7 @@ def render_policy(custom="", profile=None, others=()):
         "\t\t}\n"
         "\t\telse {\n"
         "\t\t\tupdate request {\n"
-        "\t\t\t\t&Module-Failure-Message := \"radius-admin: user is not a switch admin (not in group net-admins)\"\n"
+        "\t\t\t\t&Module-Failure-Message := \"radius-admin: user is not a device admin (not in group net-admins)\"\n"
         "\t\t\t}\n"
         "\t\t\treject\n"
         "\t\t}\n"

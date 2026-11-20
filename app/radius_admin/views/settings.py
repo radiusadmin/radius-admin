@@ -7,12 +7,29 @@ from .. import vendors
 from ..crypto import sha256_hex
 from ..flashing import flash
 from ..security import SESSION_LIMITS, cfg, role_required, stepup_required
-from ..services import (get_settings, render_all, session_limits, set_setting, timezones, unlang,
-                        valid_timezone)
+from ..services import (directory_groups, get_settings, render_all, session_limits, set_setting, timezones,
+                        unlang, valid_timezone)
 from . import ev, form_bool
 from .auth import inline_stepup
 
 bp = Blueprint("settings", __name__)
+
+MAX_ADMIN_GROUPS = 50
+
+
+def _admin_groups(text, enabled):
+    """(groups, error) for the device admin directory groups textarea, one name per line."""
+    groups = directory_groups(text.replace("\r\n", "\n"))
+    if len(groups) > MAX_ADMIN_GROUPS:
+        return groups, "Enter at most %d groups." % MAX_ADMIN_GROUPS
+    for name in groups:
+        try:
+            unlang().validate_ad_group(name)
+        except ValueError as e:
+            return groups, "%s (%s)" % (e, name[:64])
+    if enabled and not groups:
+        return groups, "Enter at least one directory group, or turn directory accounts off."
+    return groups, None
 
 
 @bp.route("/settings", methods=["GET", "POST"])
@@ -37,6 +54,10 @@ def index():
         if default_profile not in vendors.catalog():
             errors["default_vendor_profile"] = "Choose a device profile from the list."
         priv15 = form_bool("admin_priv15")
+        admin_dir = form_bool("admin_directory")
+        admin_groups, groups_error = _admin_groups(request.form.get("admin_directory_groups", ""), admin_dir)
+        if groups_error:
+            errors["admin_directory_groups"] = groups_error
         ttls = form_bool("dot1x_ttls")
         ttls_dir = form_bool("dot1x_ttls_directory")
         peap = form_bool("dot1x_peap") and not cfg()["require_fips"]    # MD4/DES: standard mode only
@@ -68,6 +89,12 @@ def index():
             if priv15 != s["admin_priv15"]:
                 set_setting("admin_priv15", "true" if priv15 else "false")
                 changed["admin_priv15"] = {"from": s["admin_priv15"], "to": priv15}
+            if admin_dir != s["admin_directory"]:
+                set_setting("admin_directory", "true" if admin_dir else "false")
+                changed["admin_directory"] = {"from": s["admin_directory"], "to": admin_dir}
+            if admin_groups != s["admin_directory_groups"]:
+                set_setting("admin_directory_groups", "\n".join(admin_groups))
+                changed["admin_directory_groups"] = {"from": s["admin_directory_groups"], "to": admin_groups}
             if ttls != s["dot1x_ttls"]:
                 set_setting("dot1x_ttls", "true" if ttls else "false")
                 changed["dot1x_ttls"] = {"from": s["dot1x_ttls"], "to": ttls}
@@ -93,7 +120,8 @@ def index():
             ev("settings.update", object_type="setting", detail=changed)
             flash("Settings saved." if changed else "No changes.", "success" if changed else "info")
             return redirect(url_for("settings.index"))
-        s = dict(s, admin_subnet=subnet, admin_priv15=priv15, dot1x_ttls=ttls, default_vendor_profile=default_profile,
+        s = dict(s, admin_subnet=subnet, admin_priv15=priv15, admin_directory=admin_dir,
+                 admin_directory_groups=admin_groups, dot1x_ttls=ttls, default_vendor_profile=default_profile,
                  dot1x_ttls_directory=ttls_dir, dot1x_peap=peap,
                  dot1x_peap_directory=peap_dir, banner_text=banner, display_timezone=zone,
                  limits=dict(s["limits"], **{k: request.form.get(k, "") for k in SESSION_LIMITS}))

@@ -26,7 +26,7 @@ REPORTS = {
                 "when, from where and what changed (the audit log). Sign-ins can be included.", True, "viewer"),
     "auth_summary": ("Authentication summary", "Accepts and rejects per switch and method, top reject reasons and "
                      "the stations rejected most often.", True, "viewer"),
-    "privileged": ("Privileged access", "Switch admin accounts (priv 15 setting, password scheme, disabled) and "
+    "privileged": ("Privileged access", "Device admin accounts and directory groups (priv 15 setting, password scheme, disabled) and "
                    "console administrators (role, two-factor method, last sign-in).", False, "admin"),
     "sessions": ("Network sessions", "Who was connected where and when, from RADIUS accounting.", True, "viewer"),
     "clients": ("RADIUS clients", "Inventory of switches and other RADIUS clients with key and monitoring state.",
@@ -124,9 +124,13 @@ def build(key, start, end, opts):
         for a in switch_admins():
             cred = "PBKDF2-HMAC-SHA-256" if a["pbkdf2"] and not a["legacy"] else (
                 "legacy hash (migrate)" if a["legacy"] else "none")
-            rep["rows"].append([a["username"], "switch admin (RADIUS)",
-                                "priv 15" if st["admin_priv15"] else "switch default", cred,
+            rep["rows"].append([a["username"], "device admin (RADIUS)",
+                                "priv 15" if st["admin_priv15"] else "device default", cred,
                                 "disabled" if a["disabled"] else "enabled", "n/a", ""])
+        for grp in st["admin_directory_groups"]:
+            rep["rows"].append([grp, "device admin directory group (RADIUS)",
+                                "priv 15" if st["admin_priv15"] else "device default", "directory password",
+                                "enabled" if st["admin_directory"] else "disabled", "n/a", ""])
         for u in db.query("SELECT username, role, mfa_method, enabled, locked_until, last_login_at, host(last_login_ip)"
                           " AS ip, must_change_password FROM ui.admin_user ORDER BY username"):
             status = "disabled" if not u["enabled"] else (
@@ -137,8 +141,11 @@ def build(key, start, end, opts):
                                 {"totp": "authenticator app (TOTP)", "cert": "client certificate"}.get(
                                     u["mfa_method"], "not enrolled"),
                                 "%s %s" % (_fmt(u["last_login_at"]), u["ip"] or "")])
-        rep["notes"].append("Switch admin logins are accepted only from %s; priv 15 is %s." % (
+        rep["notes"].append("Device admin logins are accepted only from %s; priv 15 is %s." % (
             st["admin_subnet"], "granted" if st["admin_priv15"] else "not granted"))
+        rep["notes"].append("Directory accounts for device admin logins are %s." % (
+            "accepted for members of the directory groups listed" if st["admin_directory"]
+            and st["admin_directory_groups"] else "not accepted"))
     elif key == "sessions":
         idx = insight.ClientIndex.load()
         rows = db.query("SELECT username, callingstationid, host(nasipaddress) AS nas, nasportid, acctstarttime,"

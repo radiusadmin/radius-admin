@@ -16,7 +16,7 @@
 
 radius-admin turns a FreeRADIUS 3.2 server into a network access control service you run
 from the browser. Instead of hand-editing configuration files and SQL tables, you manage RADIUS
-clients, access rules, MAC authentication and switch administrators in an audited, role-based,
+clients, access rules, MAC authentication and device administrators in an audited, role-based,
 MFA-protected portal. Every change is validated before FreeRADIUS sees it, and rolled back
 automatically if FreeRADIUS does not come back up.
 
@@ -56,7 +56,8 @@ automatically if FreeRADIUS does not come back up.
 - Access rules: directory group → VLAN for wired or per-SSID connections. Changes take effect on the
   next authentication, with no restart, and a rule tester shows which rule would match.
 - MAB devices and the unknown-device approval queue.
-- Switch administrator accounts (PBKDF2-hashed).
+- Device administrator logins for switches, access points and firewalls: local accounts
+  (PBKDF2-hashed) or members of chosen directory groups with their directory password (LDAPS).
 - Custom unlang policy for administrators, checked before it is installed.
 
 **Operations**
@@ -167,7 +168,7 @@ FreeRADIUS when you click **Apply**. More detail: [SPEC.md](SPEC.md) and
    one-time password the installer printed, choose your own password and set up two-factor
    authentication.
 4. **Follow the setup checklist** on the dashboard: add RADIUS clients, create access rules, set
-   the switch-admin subnet and apply. Optional steps include single sign-on, RadSec, switch
+   the device admin subnet and apply. Optional steps include single sign-on, RadSec, switch
    monitoring and alert e-mail.
 
 The full procedure, including migration from an existing FreeRADIUS server, is in

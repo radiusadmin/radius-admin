@@ -3,7 +3,7 @@ import json
 import socket
 
 MAX_LINE = 1024 * 1024  # responses may carry up to 200 lines of radiusd output
-BACKUP_ID_RE = r"^\d{8}T\d{6}Z$"
+BACKUP_ID_RE = r"^\d{8}T\d{6}Z\Z"
 
 
 class HelperError(Exception):
