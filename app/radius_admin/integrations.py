@@ -105,3 +105,33 @@ def providers_in_use(conn=None):
     """Provider ids that an account kind's policy names (enabled or not)."""
     return {r["provider_id"] for r in db.query(
         "SELECT provider_id FROM ui.mfa_policy WHERE provider_id IS NOT NULL", conn=conn)}
+
+
+# ---------------------------------------------------------------- Duo on this server (SPEC section 29.2)
+DUO_ID = "duo"
+DUO_FILE_RE = r"duoauthproxy-(\d{1,4}\.\d{1,4}\.\d{1,4})-src\.tgz"
+UPLOAD_MAX = 128 * 1024 * 1024
+
+
+def ensure_duo(key, conn=None):
+    """The Duo provider row, created (off, with new random shared secrets) when missing."""
+    from .crypto import ALNUM, random_string
+    p = get_provider(DUO_ID, conn)
+    if p is not None:
+        return p
+    secrets = {"secret": random_string(32, ALNUM), "primary_secret": random_string(32, ALNUM)}
+    db.execute("INSERT INTO ui.mfa_provider (id, type, label, enabled, settings, secrets_enc)"
+               " VALUES (%s, 'duo', 'Duo Authentication Proxy on this server', false, %s::jsonb, %s)",
+               (DUO_ID, json.dumps({"failmode": "secure", "factors": "auto"}),
+                encrypt_secrets(key, DUO_ID, secrets)), conn=conn)
+    return get_provider(DUO_ID, conn)
+
+
+def duo_secrets(key, p):
+    return decrypt_secrets(key, DUO_ID, p["secrets_enc"])
+
+
+def duo_configured(key, p):
+    """True when ikey, skey and API hostname are set (the provider can be turned on)."""
+    s = p["settings"]
+    return bool(s.get("ikey") and s.get("api_host") and duo_secrets(key, p).get("skey"))

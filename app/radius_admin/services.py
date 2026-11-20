@@ -209,6 +209,35 @@ def render_all(conn=None, datakey=None):
                              integrations.render_inputs(conn, datakey)))
 
 
+def _require_fips():
+    try:
+        return bool(current_app.config["RA"]["require_fips"])
+    except (RuntimeError, KeyError):
+        return False
+
+
+PROVIDER_FILES = ("provider-duo",)
+
+
+def render_provider_files(conn=None, datakey=None):
+    """{staged name: text} for the providers installed on this server (SPEC section 29.2): the
+    Duo Authentication Proxy's configuration while a Duo provider is enabled."""
+    from . import integrations
+    u = unlang()
+    out = {}
+    for p in integrations.render_inputs(conn, datakey):
+        if p["type"] == "duo":
+            out["provider-duo"] = u.render_duo_config(p, fips=_require_fips())
+    return out
+
+
+def providers_sha256(files):
+    """One hash over the provider files ('' when there are none), for ui.apply_log."""
+    if not files:
+        return ""
+    return sha256_hex("".join("%s\0%s\0" % (k, files[k]) for k in sorted(files)))
+
+
 LIVE_POLICY_MARKERS = ("radius_admin_vlan_hex(", "radius_admin_vlan_rule_hex(")
 OPS_POLICY_MARKER = "radius_admin_mab_hex("
 
@@ -230,7 +259,7 @@ def policy_format_upgrade(applied_policy, new_policy):
 
 def last_applied(conn=None):
     return db.query_one(
-        "SELECT id, at, actor, action, policy_sha256, clients_sha256, backup_id, message"
+        "SELECT id, at, actor, action, policy_sha256, clients_sha256, providers_sha256, backup_id, message"
         " FROM ui.apply_log WHERE success AND action IN ('apply','rollback')"
         " ORDER BY id DESC LIMIT 1", conn=conn)
 
@@ -241,6 +270,7 @@ def pending_state(conn=None):
         return g.pending_state
     try:
         policy, clients = render_all(conn)
+        xh = providers_sha256(render_provider_files(conn))
     except Exception as e:  # validation error in stored data or broken unlang module
         state = {"pending": True, "error": str(e), "policy": True, "clients": True}
     else:
@@ -248,11 +278,13 @@ def pending_state(conn=None):
         ph, ch = sha256_hex(policy), sha256_hex(clients)
         if last is None:
             state = {"pending": True, "never_applied": True, "policy": True, "clients": True,
-                     "policy_sha256": ph, "clients_sha256": ch}
+                     "providers": bool(xh), "policy_sha256": ph, "clients_sha256": ch, "providers_sha256": xh}
         else:
-            state = {"pending": ph != last["policy_sha256"] or ch != last["clients_sha256"],
+            lx = last.get("providers_sha256") or ""
+            state = {"pending": ph != last["policy_sha256"] or ch != last["clients_sha256"] or xh != lx,
                      "policy": ph != last["policy_sha256"], "clients": ch != last["clients_sha256"],
-                     "policy_sha256": ph, "clients_sha256": ch, "last": last, "format_upgrade": False}
+                     "providers": xh != lx, "policy_sha256": ph, "clients_sha256": ch, "providers_sha256": xh,
+                     "last": last, "format_upgrade": False}
             if state["policy"]:
                 try:
                     state["format_upgrade"] = policy_format_upgrade(read_applied()["policy"], policy)
@@ -286,11 +318,39 @@ def staging_dir():
     return current_app.config["RA"]["staging_dir"]
 
 
-def write_staging(policy, clients, base=None):
+def _put_provider_files(d, providers):
+    """Write the provider files into d and remove those not given (SPEC section 29.2)."""
+    for name in PROVIDER_FILES:
+        path = os.path.join(d, name)
+        if name in providers:
+            _write_0600(path, providers[name])
+        else:
+            try:
+                os.unlink(path)
+            except FileNotFoundError:
+                pass
+
+
+def _get_provider_files(d):
+    out = {}
+    for name in PROVIDER_FILES:
+        try:
+            with open(os.path.join(d, name), encoding="utf-8") as fh:
+                out[name] = fh.read()
+        except OSError:
+            pass
+    return out
+
+
+def write_staging(policy, clients, base=None, providers=None):
+    """Stage the files for the helper. `providers` (render_provider_files) replaces the staged
+    provider files; None leaves them as they are (the command line render)."""
     base = base or staging_dir()
     os.makedirs(base, mode=0o700, exist_ok=True)
     _write_0600(os.path.join(base, "policy"), policy)
     _write_0600(os.path.join(base, "clients"), clients)
+    if providers is not None:
+        _put_provider_files(base, providers)
 
 
 def read_staging(base=None):
@@ -319,10 +379,11 @@ def read_applied(base=None):
                 out[name] = fh.read()
         except OSError:
             out[name] = None
+    out["providers"] = _get_provider_files(d)
     return out
 
 
-def save_applied(policy, clients, base=None, backup_id=None):
+def save_applied(policy, clients, base=None, backup_id=None, providers=None):
     """Record what is now live. The helper's backup <backup_id> holds the files that
     were live BEFORE this apply, so the previous applied copy is archived under
     applied/history/<backup_id>/ for a later rollback to that backup."""
@@ -334,8 +395,11 @@ def save_applied(policy, clients, base=None, backup_id=None):
         os.makedirs(h, mode=0o700, exist_ok=True)
         _write_0600(os.path.join(h, "policy"), prev["policy"])
         _write_0600(os.path.join(h, "clients"), prev["clients"])
+        _put_provider_files(h, prev["providers"])
     _write_0600(os.path.join(d, "policy"), policy)
     _write_0600(os.path.join(d, "clients"), clients)
+    if providers is not None:
+        _put_provider_files(d, providers)
 
 
 def restore_applied_from_history(backup_id, base=None, new_backup_id=None):
@@ -351,6 +415,7 @@ def restore_applied_from_history(backup_id, base=None, new_backup_id=None):
         os.makedirs(nh, mode=0o700, exist_ok=True)
         _write_0600(os.path.join(nh, "policy"), prev["policy"])
         _write_0600(os.path.join(nh, "clients"), prev["clients"])
+        _put_provider_files(nh, prev["providers"])
     h = os.path.join(d, "history", backup_id)
     try:
         with open(os.path.join(h, "policy"), encoding="utf-8") as fh:
@@ -366,6 +431,11 @@ def restore_applied_from_history(backup_id, base=None, new_backup_id=None):
         return None
     _write_0600(os.path.join(d, "policy"), policy)
     _write_0600(os.path.join(d, "clients"), clients)
+    # The helper does not put Duo's own sample back on a rollback (SPEC section 29.2): an
+    # archived set without a Duo file leaves the applied Duo copy as it is.
+    old = _get_provider_files(h)
+    if old:
+        _put_provider_files(d, dict(_get_provider_files(d), **old))
     return policy, clients
 
 

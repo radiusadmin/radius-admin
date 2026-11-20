@@ -4,10 +4,13 @@ Providers (ui.mfa_provider) reach FreeRADIUS through the clients file, so adding
 or removing one needs Apply. The policy (which logins need a second factor) and the
 exemptions are read live by FreeRADIUS on every login. Admin + step-up for every change.
 """
+import hashlib
 import json
+import os
 import re
+import tempfile
 
-from flask import Blueprint, abort, redirect, render_template, request, url_for
+from flask import Blueprint, abort, current_app, g, jsonify, redirect, render_template, request, url_for
 
 from .. import db, integrations as ig
 from ..flashing import flash
@@ -149,6 +152,9 @@ def delete(pid):
     p = ig.get_provider(pid)
     if p is None:
         abort(404)
+    if p["type"] == "duo":
+        flash("Duo is set up and removed on its own page.", "error")
+        return redirect(url_for("integrations.duo"))
     if pid in ig.providers_in_use():
         flash("%s is chosen in the second-factor rules. Choose another provider there first." % pid, "error")
         return redirect(url_for("integrations.index"))
@@ -242,3 +248,256 @@ def policy():
                            providers=providers, clients=clients, kind_labels=ig.KIND_LABELS,
                            type_labels=ig.TYPE_LABELS, unapplied=unapplied,
                            exempt_max=ig.EXEMPT_MAX), (400 if errors else 200)
+
+
+# ---------------------------------------------------------------- Duo on this server (SPEC section 29.2)
+_DUO_FILE = re.compile(ig.DUO_FILE_RE)
+_INTEGRATION_ACTIVE = ("queued", "installing", "removing")
+
+
+def _helper(action, timeout=30, **params):
+    from .. import helper_client
+    try:
+        return helper_client.call(cfg()["helper_socket"], action, timeout=timeout, **params)
+    except helper_client.HelperError as e:
+        return {"ok": False, "message": str(e)}
+
+
+def _duo_files():
+    """Duo source builds in integration_dir (downloaded or uploaded), newest version first."""
+    try:
+        names = os.listdir(cfg()["integration_dir"])
+    except OSError:
+        return []
+    found = [(tuple(int(x) for x in m.group(1).split(".")), n) for n in names if (m := _DUO_FILE.fullmatch(n))]
+    return [n for _, n in sorted(found, reverse=True)]
+
+
+def _duo_page(test=None, preflight=None, errors=None, status_code=200):
+    from ..integration_fetch import read_status
+    key = current_app.config["RA_DATA_KEY"]
+    st = _helper("integration_status")
+    duo = (st.get("integrations") or {}).get("duo") or {} if st.get("ok") else {}
+    cat = _helper("integration_catalog")
+    entries = [e for e in (cat.get("entries") or []) if e.get("provider") == "duo" and not e.get("withdrawn")]
+    if _fips():
+        entries = [e for e in entries if e.get("fips")]
+    entries.sort(key=lambda e: tuple(int(x) for x in e["version"].split(".")), reverse=True)
+    p = ig.get_provider(ig.DUO_ID)
+    secrets = ig.duo_secrets(key, p) if p is not None else {}
+    state = duo.get("state") or {}
+    return render_template(
+        "integrations/duo.html", helper_ok=bool(st.get("ok")), helper_message=st.get("message", ""),
+        duo=duo, state=state, running=state.get("state") in _INTEGRATION_ACTIVE, catalog=entries,
+        catalog_serial=cat.get("serial", 0) if cat.get("ok") else None, catalog_message=cat.get("message", ""),
+        fetch=read_status(cfg()["integration_dir"], "duo"), files=_duo_files(), provider=p,
+        has_skey=bool(secrets.get("skey")), in_use=ig.DUO_ID in ig.providers_in_use(), test=test,
+        preflight=preflight, errors=errors or {}, fips=_fips(), factors=unlang().DUO_FACTORS,
+        upload_mib=ig.UPLOAD_MAX // (1024 * 1024)), status_code
+
+
+@bp.route("/duo")
+@login_required
+def duo():
+    return _duo_page()
+
+
+@bp.route("/duo/status")
+@login_required
+def duo_status():
+    """For the page's progress indicators: wait=fetch (the download) or wait=install (an
+    install or removal)."""
+    from ..integration_fetch import read_status
+    if request.args.get("wait") == "fetch":
+        f = read_status(cfg()["integration_dir"], "duo")
+        busy = f.get("state") == "downloading"
+        return jsonify(done=not busy, message="Downloading %s…" % f.get("file", "") if busy else "")
+    st = _helper("integration_status")
+    if not st.get("ok"):
+        return jsonify(done=False, message="Waiting for the helper (%s)…" % st.get("message", ""))
+    s = ((st.get("integrations") or {}).get("duo") or {}).get("state") or {}
+    busy = s.get("state") in _INTEGRATION_ACTIVE
+    msg = ("%s…" % (s.get("message") or "working")) if busy else ""
+    return jsonify(done=not busy, message=msg[:1].upper() + msg[1:], state=s.get("state", ""))
+
+
+@bp.route("/duo/log")
+@login_required
+def duo_log():
+    """The install log from byte `offset` (helper integration_log), for the Details drop-down."""
+    from .updates import clean_log
+    raw = request.args.get("offset", "0")
+    offset = int(raw) if raw.isdigit() and len(raw) <= 15 else 0
+    r = _helper("integration_log", id="duo", offset=offset)
+    if not r.get("ok"):
+        return jsonify(available=False, running=False, message="The install log is not available: %s" % r.get("message", ""))
+    state = r.get("state") or {}
+    return jsonify(available=True, running=state.get("state") in _INTEGRATION_ACTIVE, name=r.get("log", ""),
+                   offset=int(r.get("offset") or 0), skipped=int(r.get("skipped") or 0),
+                   text=clean_log(r.get("text", "")), message=r.get("message", ""))
+
+
+@bp.route("/duo/check", methods=["POST"])
+@role_required("admin")
+@stepup_required
+def duo_check():
+    p = ig.get_provider(ig.DUO_ID)
+    params = {"id": "duo"}
+    if p is not None and p["settings"].get("api_host"):
+        params["api_host"] = p["settings"]["api_host"]
+    r = _helper("integration_preflight", **params)
+    return _duo_page(preflight=r)
+
+
+@bp.route("/duo/fetch", methods=["POST"])
+@role_required("admin")
+@stepup_required
+def duo_fetch():
+    version = form_str("version", maxlen=20)
+    if not re.fullmatch(r"\d{1,4}\.\d{1,4}\.\d{1,4}", version):
+        flash("Choose a version.", "error")
+        return redirect(url_for("integrations.duo"))
+    r = _helper("integration_fetch", id="duo", version=version)
+    ev("integration.fetch", success=bool(r.get("ok")), object_type="integration", object_id="duo",
+       detail={"version": version, "listed": r.get("listed"), "message": r.get("message", "")[:300]})
+    if not r.get("ok"):
+        flash("The download was not started: %s" % r.get("message"), "error")
+    return redirect(url_for("integrations.duo"))
+
+
+@bp.route("/duo/upload", methods=["POST"])
+@role_required("admin")
+@stepup_required
+def duo_upload():
+    f = request.files.get("build")
+    name = os.path.basename((f.filename or "") if f else "")
+    if f is None or not _DUO_FILE.fullmatch(name):
+        flash("Choose Duo's source build, a file named like duoauthproxy-6.8.1-src.tgz.", "error")
+        return redirect(url_for("integrations.duo"))
+    d = cfg()["integration_dir"]
+    fd, tmp = tempfile.mkstemp(prefix=".upload-", dir=d)
+    size = 0
+    h = hashlib.sha256()
+    try:
+        with os.fdopen(fd, "wb") as out:
+            while True:
+                chunk = f.stream.read(1 << 20)
+                if not chunk:
+                    break
+                size += len(chunk)
+                if size > ig.UPLOAD_MAX:
+                    raise ValueError("larger than %d MiB" % (ig.UPLOAD_MAX // (1024 * 1024)))
+                h.update(chunk)
+                out.write(chunk)
+        if size == 0:
+            raise ValueError("the file is empty")
+        os.chmod(tmp, 0o640)
+        os.replace(tmp, os.path.join(d, name))
+    except (OSError, ValueError) as e:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        flash("The upload was not saved: %s" % e, "error")
+        return redirect(url_for("integrations.duo"))
+    ev("integration.upload", object_type="integration", object_id="duo",
+       detail={"file": name, "size": size, "sha256": h.hexdigest()})
+    flash("%s uploaded (SHA-256 %s). Install it below." % (name, h.hexdigest()), "success")
+    return redirect(url_for("integrations.duo"))
+
+
+@bp.route("/duo/install", methods=["POST"])
+@role_required("admin")
+@stepup_required
+def duo_install():
+    name = form_str("file", maxlen=100)
+    if not _DUO_FILE.fullmatch(name) or name not in _duo_files():
+        flash("That build is not here any more. Download or upload it again.", "error")
+        return redirect(url_for("integrations.duo"))
+    params = {"id": "duo", "file": name, "actor": g.user["username"]}
+    pasted = form_str("sha256", maxlen=80).lower()
+    if pasted and not _fips():
+        if not re.fullmatch(r"[0-9a-f]{64}", pasted):
+            flash("The SHA-256 must be 64 hexadecimal digits.", "error")
+            return redirect(url_for("integrations.duo"))
+        if request.form.get("confirm_unverified") != "1":
+            flash("Confirm that you compared the SHA-256 with the value Duo publishes.", "error")
+            return redirect(url_for("integrations.duo"))
+        params["sha256"] = pasted
+    r = _helper("integration_install", timeout=120, **params)
+    ev("integration.install_requested", success=bool(r.get("ok")), object_type="integration", object_id="duo",
+       detail={"file": name, "verified": r.get("verified", ""), "sha256": r.get("sha256", ""),
+               "message": r.get("message", "")[:300]})
+    if not r.get("ok"):
+        flash("The install was not started: %s" % r.get("message"), "error")
+    return redirect(url_for("integrations.duo"))
+
+
+@bp.route("/duo/settings", methods=["POST"])
+@role_required("admin")
+@stepup_required
+def duo_settings():
+    key = current_app.config["RA_DATA_KEY"]
+    p = ig.ensure_duo(key)
+    secrets = ig.duo_secrets(key, p)
+    errors = {}
+    s = {"ikey": form_str("ikey", maxlen=40).upper(), "api_host": form_str("api_host", maxlen=64).lower(),
+         "failmode": "secure" if _fips() else (form_str("failmode", maxlen=10) or "secure"),
+         "factors": ",".join(x for x in request.form.getlist("factors") if x in unlang().DUO_FACTORS) or "auto"}
+    skey = form_str("skey", maxlen=64)
+    enabled = form_bool("enabled")
+    try:
+        unlang().validate_duo_settings(dict(s, skey=skey or secrets.get("skey") or "", secret=secrets["secret"],
+                                            primary_secret=secrets["primary_secret"]), _fips())
+    except ValueError as e:
+        msg = str(e)
+        field = ("ikey" if "Integration key" in msg else "skey" if "Secret key" in msg
+                 else "api_host" if "API hostname" in msg else "failmode" if "Fail mode" in msg else "factors")
+        errors[field] = msg
+    duo = ((_helper("integration_status").get("integrations") or {}).get("duo") or {})
+    if enabled and not duo.get("installed"):
+        errors["enabled"] = "Install the Duo Authentication Proxy first."
+    if not enabled and p["enabled"] and ig.DUO_ID in {r["provider_id"] for r in db.query(
+            "SELECT provider_id FROM ui.mfa_policy WHERE enabled AND provider_id IS NOT NULL")}:
+        errors["enabled"] = "A second-factor rule uses Duo. Change the rule first."
+    if errors:
+        return _duo_page(errors=errors, status_code=400)
+    if skey:
+        secrets["skey"] = skey
+        db.execute("UPDATE ui.mfa_provider SET secrets_enc=%s WHERE id=%s",
+                   (ig.encrypt_secrets(key, ig.DUO_ID, secrets), ig.DUO_ID))
+    db.execute("UPDATE ui.mfa_provider SET settings=%s::jsonb, enabled=%s, updated_at=now() WHERE id=%s",
+               (json.dumps(s), enabled, ig.DUO_ID))
+    changed = {k: {"from": p["settings"].get(k), "to": v} for k, v in s.items() if p["settings"].get(k) != v}
+    if p["enabled"] != enabled:
+        changed["enabled"] = {"from": p["enabled"], "to": enabled}
+    if skey:
+        changed["duo_skey_updated"] = True
+    ev("integration.configure", object_type="mfa_provider", object_id=ig.DUO_ID, detail=changed)
+    flash("Duo settings saved. Apply changes to send them to the Duo proxy and FreeRADIUS.", "success")
+    return redirect(url_for("integrations.duo"))
+
+
+@bp.route("/duo/test", methods=["POST"])
+@role_required("operator")
+def duo_test():
+    r = _helper("integration_test", timeout=150, id="duo")
+    ev("integration.test", success=bool(r.get("ok") and r.get("passed")), object_type="integration", object_id="duo",
+       detail={"message": r.get("message", "")[:300]})
+    return _duo_page(test=r)
+
+
+@bp.route("/duo/remove", methods=["POST"])
+@role_required("admin")
+@stepup_required
+def duo_remove():
+    p = ig.get_provider(ig.DUO_ID)
+    if p is not None and p["enabled"]:
+        flash("Turn the Duo provider off and apply the changes before you remove Duo.", "error")
+        return redirect(url_for("integrations.duo"))
+    r = _helper("integration_remove", id="duo", actor=g.user["username"])
+    ev("integration.remove_requested", success=bool(r.get("ok")), object_type="integration", object_id="duo",
+       detail={"message": r.get("message", "")[:300]})
+    if not r.get("ok"):
+        flash("Duo was not removed: %s" % r.get("message"), "error")
+    return redirect(url_for("integrations.duo"))

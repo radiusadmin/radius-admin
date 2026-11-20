@@ -25,6 +25,10 @@ release, so previews sort after it.
   with a hardened systemd unit and configures it from the portal: applying changes writes Duo's
   configuration and restarts it before FreeRADIUS, restoring both if either fails. Removal and
   Duo's connectivity check through the root helper. Checked with Duo 6.8.1.
+- **Duo set up from the portal.** Integrations → Duo Authentication Proxy: check the server,
+  download or upload Duo, install it with a live log, enter its keys, test the connection, remove
+  it. Duo then serves local and directory device admin accounts; its configuration is applied, shown
+  as a diff and rolled back together with FreeRADIUS's files.
 
 ### Changed
 - **Licence: from the GNU AGPL to the Business Source License 1.1 (source available).**

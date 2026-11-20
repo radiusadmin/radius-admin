@@ -55,6 +55,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS mfa_exempt_lower ON ui.mfa_exempt (lower(usern
 GRANT SELECT, INSERT, UPDATE, DELETE ON ui.mfa_provider, ui.mfa_policy, ui.mfa_policy_client, ui.mfa_exempt
 	TO radius_admin;
 
+-- What an apply also installed besides policy and clients: SHA-256 over the provider files
+-- (the Duo Authentication Proxy's configuration, SPEC section 29.2); NULL/'' = none.
+ALTER TABLE ui.apply_log ADD COLUMN IF NOT EXISTS providers_sha256 text;
+
 -- Device admin login, authorize: does it need a second factor, and from which provider?
 -- p_user_hex = hex(User-Name), p_client_hex = hex(client shortname), p_kind = 'local' or
 -- 'directory' (literal from the policy, as decided by radius_admin_admin_directory_hex).

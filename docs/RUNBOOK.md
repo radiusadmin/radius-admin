@@ -857,6 +857,19 @@ as `radius-admin-integration-install@<provider>` with the log in
 `/var/log/radius-admin/integration-<provider>-<time>.log`. A checkout (not a release bundle) has no
 signed catalog: builds then need the SHA-256 entered, and nothing installs in FIPS mode.
 
+**Setting up Duo** (Integrations → Duo Authentication Proxy):
+
+1. In the Duo Admin Panel, protect an application of type *RADIUS*; note its integration key,
+   secret key and API hostname. Allow outbound HTTPS from this server to that hostname.
+2. *Check this server*, then *Download* a build the catalog lists (or *Upload* Duo's unmodified
+   source file). A build that is not in the catalog can be installed outside FIPS mode after you
+   enter its SHA-256 from Duo's checksum page; it shows as *Unverified*.
+3. *Install* (a few minutes; the Details drop-down shows the log).
+4. *Connect to Duo*: keys, API hostname, fail mode, factors; tick *On*, save, then **Apply
+   changes** (this starts the Duo proxy and restarts FreeRADIUS).
+5. *Run the check*, then choose Duo in **Change the rules** for local and/or directory accounts,
+   keep a break-glass account exempt, and raise the devices' RADIUS timeout to about 60 s.
+
 **Duo on this server** (SPEC section 29.2). The install builds Duo's source as the unprivileged
 user `radius-admin-build` (about two minutes; build packages are added when missing), runs Duo's
 installer into `/opt/duoauthproxy` (service user `duo_authproxy_svc`, unit `duoauthproxy.service`,

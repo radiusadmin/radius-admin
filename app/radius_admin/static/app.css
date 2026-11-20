@@ -738,3 +738,12 @@ td.coa-state { display: table-cell; white-space: normal; }
 .coa-state .cell-sub { margin-top: .1rem; }
 .row-actions .coa-state { margin-right: .5rem; }
 @media print { .bulk-bar, .check-cell { display: none !important; } }
+
+/* Integrations: Duo page (SPEC section 29.2) */
+.check-results { list-style: none; padding: 0; margin: .75rem 0 0; }
+.check-results li { margin: .3rem 0; }
+.inline-form { display: flex; flex-wrap: wrap; align-items: flex-end; gap: .5rem; margin: .75rem 0; }
+.inline-form label { flex-basis: 100%; }
+.install-form { border-top: 1px solid var(--line); padding-top: .75rem; margin-top: .75rem; }
+.panel-head-actions { display: flex; flex-wrap: wrap; gap: .5rem; }
+.catalog-action { margin: .5rem 0 0; }

@@ -1648,3 +1648,40 @@ unreachable). The portal pages that drive this follow.
   `<integration_remove_unit>@<id>.service`. `integration_test {"id"}`: runs Duo's
   `usr/local/bin/authproxy_connectivity_tool` (root-owned, writable only by root) for at most
   120 s; `{passed, output}` with lines naming skey, secret or password redacted.
+
+### 29.3 Duo in the portal
+
+- **Provider row.** `ui.mfa_provider` id `duo`, type `duo`, created on the first save of the Duo
+  settings (off) with two random 32-character secrets (`secret`: default server → Duo proxy;
+  `primary_secret`: Duo proxy → radius-admin-mfa-primary). Settings: ikey, api_host, failmode,
+  factors; secrets (encrypted): skey and the two shared secrets. It can be turned on only while the
+  helper reports Duo installed, and turned off only when no enabled rule names it. It is not removed
+  through the providers table.
+- **Staging.** `services.render_provider_files()` → `{"provider-duo": render_duo_config(...)}`
+  while the Duo provider is on (FIPS mode from `require_fips`). The apply page stages it next to
+  policy and clients (`write_staging(..., providers=)` writes it, or removes it when Duo is off),
+  shows its diff with `skey`, `secret` and `radius_secret_N` masked, includes
+  `providers_sha256` (one SHA-256 over the provider files, '' without any) in the "expected" token
+  and in `ui.apply_log.providers_sha256` (new column, sql/101-mfa.sql); `pending_state` compares it
+  with the last apply (NULL counts as ''). The applied copy and its history keep the provider files;
+  a rollback to a set without a Duo file leaves the applied Duo copy, like the helper.
+- **Page** `/integrations/duo` (viewers: state; operators: test; admin + step-up: everything else):
+  state (installed version, catalog-checked or Unverified, service running and listening, provider
+  on/off, last install or removal), live progress and the install log (`/integrations/duo/status`,
+  `/integrations/duo/log`, the updates page's indicators); 1. Check this server
+  (`integration_preflight`, with the API hostname when set); 2. Get and install: the catalog's builds
+  (FIPS mode: FIPS-capable only; withdrawn hidden) with Download (`integration_fetch`), without
+  catalog entries a version field (standard mode only), the download's state from
+  `fetch-duo.json`, Upload, and Install for each build in `integration_dir` (with, in standard mode
+  only, a SHA-256 field and a required confirmation that it was compared with Duo's published value);
+  3. Connect to Duo (ikey, skey write-only, API hostname, fail mode (standard mode only), factors,
+  on/off); 4. Test (`integration_test`); Remove (refused while the provider is on).
+- **Upload** `POST /integrations/duo/upload`: multipart field `build`; the file name (directory part
+  dropped) must be `duoauthproxy-X.Y.Z-src.tgz`; at most 128 MiB, written to a temporary file in
+  `integration_dir` and renamed (0640). The request size limit is 2 MiB everywhere else; this path
+  allows 129 MiB (`app.request_class`), and nginx `client_max_body_size 130m` for exactly this
+  location. The portal service may write `/var/lib/radius-admin/integrations`.
+- **Audit:** `integration.fetch`, `integration.upload` (file, size, SHA-256),
+  `integration.install_requested` (file, verified, SHA-256), `integration.configure` (changes;
+  `duo_skey_updated`, never the key), `integration.test`, `integration.remove_requested`; the outcome
+  of an install or removal is `integration.install` / `integration.remove` (section 29.2).

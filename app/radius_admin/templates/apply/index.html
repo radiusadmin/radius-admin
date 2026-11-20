@@ -19,7 +19,7 @@
   <div class="apply-actions">
     <form method="post" action="{{ url_for('apply.validate') }}" class="inline" data-busy="Validating…">{{ m.csrf() }}<button class="btn" type="submit">Validate</button></form>
     <form method="post" action="{{ url_for('apply.apply') }}" class="inline" data-confirm="Apply the configuration and restart FreeRADIUS now?" data-busy="Applying…">
-      {{ m.csrf() }}<input type="hidden" name="expected" value="{{ policy_sha }}:{{ clients_sha }}">
+      {{ m.csrf() }}<input type="hidden" name="expected" value="{{ policy_sha }}:{{ clients_sha }}:{{ providers_sha }}">
       <input type="hidden" name="return_to" value="{{ url_for('apply.index') }}">
       <button class="btn btn-primary" type="submit">Apply and restart</button></form>
   </div>
@@ -28,7 +28,7 @@
 {% if format_upgrade %}<p class="flash flash-info" role="status"><strong>Policy format updated; apply once.</strong> This release changes the generated policy file: access rules and settings are evaluated live, rejects record their reason and the matching rule, and MAB checks expiry dates and queues unknown devices for approval. The running file still uses the previous format; apply it once (FreeRADIUS restarts briefly). After that, rule, setting and MAB edits never show up here.</p>{% endif %}
 {% if not have_applied %}<p class="flash flash-info">No copy of a previously applied configuration exists yet, so the full files are shown as additions.</p>{% endif %}
 
-{% for name, label, path in [('policy', 'Policy file (custom policy)', '/etc/freeradius/policy.d/radius-admin'), ('clients', 'RADIUS clients', '/etc/freeradius/radius-admin-clients.conf')] %}
+{% for name, label, path in [('policy', 'Policy file (custom policy)', '/etc/freeradius/policy.d/radius-admin'), ('clients', 'RADIUS clients', '/etc/freeradius/radius-admin-clients.conf'), ('provider-duo', 'Duo Authentication Proxy', '/opt/duoauthproxy/conf/authproxy.cfg')] if name in diffs %}
 <section class="panel flush">
   <div class="panel-head"><h2>{{ label }} <span class="small muted mono">{{ path }}</span></h2>
   <span class="small">{% if diffs[name] %}{{ diffs[name]|selectattr(0, 'equalto', 'add')|list|length }} added, {{ diffs[name]|selectattr(0, 'equalto', 'del')|list|length }} removed{% else %}No changes{% endif %}</span></div>

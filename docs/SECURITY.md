@@ -423,6 +423,10 @@ tokens and RADIUS secrets are never logged; the helper redacts `secret = …` an
   root-only directory (O_NOFOLLOW, single link, owner and size checked) and hashes that copy; the
   install unit checks it again and runs only the release's root-owned installer. The provider id is
   the only thing the request chooses; file names, URLs, services and ports are fixed in the helper.
+- **Duo pages** (section 29.3). Every change needs an admin with step-up and is audited; the
+  secret key is write-only and never shown or logged; the apply page masks Duo's secrets. Only the
+  upload path accepts large requests (129 MiB in the app, 130 MiB in nginx); the uploaded file is
+  only stored, and the root helper decides whether it may be installed.
 - **Duo install** (section 29.2). Duo's source is unpacked with Python's tarfile `data` filter and
   built by a dedicated unprivileged user; the tree is made root-owned and read-only before Duo's
   installer runs as root, so nothing the build user can change afterwards runs with privileges.

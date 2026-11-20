@@ -37,7 +37,7 @@ UMask=0077
 # --- sandboxing ---
 NoNewPrivileges=yes
 ProtectSystem=strict
-ReadWritePaths=/var/lib/radius-admin/staging
+ReadWritePaths=/var/lib/radius-admin/staging -/var/lib/radius-admin/integrations
 ProtectHome=yes
 PrivateTmp=yes
 PrivateDevices=yes
