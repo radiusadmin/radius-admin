@@ -5,6 +5,21 @@ Each release has a section here. `main` builds are the stable releases (`0.2.0`)
 show the "Unreleased" section plus their commits. Bump `VERSION` on `dev` right after a
 release, so previews sort after it.
 
+## Unreleased
+
+### Added
+- **Directory accounts for device admin logins.** Members of chosen directory groups can log in
+  to switches, access points and firewalls with their directory password (LDAP bind over the
+  existing LDAPS connection, nested groups included). Settings → Device admin logins turns it on
+  and lists the groups; a local account of the same name always wins, and logins from outside
+  the management subnet never reach the directory. Auth log method `admin-ldap` with the groups
+  seen.
+
+### Changed
+- "Switch admins" are now **device admins** everywhere in the console. The page moved to
+  `/device-admins/`; the old address redirects.
+- The installer loads the SQL files in numeric order, so files numbered from 100 load last.
+
 ## 0.2.4 - 2026-11-19
 
 ### Added

@@ -773,6 +773,34 @@ EAP-TTLS and PEAP with their inner servers `radius-admin-inner` and `radius-admi
 `mschap` module and the `ldap_user` section of `mods-available/ldap`; your directory settings
 are kept as before). Both methods stay off until you turn them on in Settings. EAP-TLS, MAB and switch logins behave as before.
 
+### 6.9a Device admins with directory accounts
+
+**Device admins** (formerly *switch admins*) are the logins to the management of switches, access
+points, firewalls and other RADIUS clients. Besides the local accounts on the Device admins page,
+members of chosen directory groups can log in with their directory account and password:
+
+1. **Prerequisite.** The directory connection works (the same one EAP-TLS and EAP-TTLS directory
+   accounts use; RUNBOOK §6.9 step 4). Nothing else to install.
+2. UI → **Settings → Device admin logins**: tick *Also accept directory accounts* and list the
+   directory groups allowed to log in, one per line (for example `Network-Admins`). Nested groups
+   count. Save (step-up). Takes effect at the next login; no Apply, no restart.
+3. On the device, keep RADIUS login as today (PAP from the management subnet). Users type their
+   user name or `user@domain` and their directory password. *Grant full admin rights* applies to
+   directory accounts as well.
+4. **Check.** Auth log, method `admin-ldap`: the record lists the user's directory groups and marks
+   the allowed ones. Rejects say why: outside the management subnet, not found in the directory,
+   the directory refused the password (wrong, disabled, locked or expired), not in a device admin
+   group, or the directory could not be searched.
+
+A local device admin of the same name always wins (its own password and disabled state), so keep
+one or two local accounts as a break-glass path for when the directory is unreachable. Repeated
+wrong passwords count against the directory account's lockout policy, as for any LDAP bind; logins
+from outside the management subnet never reach the directory.
+
+Upgrade to this release: `sudo ./deploy/install.sh --phase postgres`, `--phase app`, then
+`--phase freeradius --restart-freeradius` in a maintenance window. The old address
+`/switch-admins/` redirects to `/device-admins/`.
+
 ### 6.10 Device profiles (switches from other vendors)
 
 A **device profile** says which attributes this server sends to a RADIUS client (VLAN
@@ -1179,7 +1207,7 @@ migration (new switch-admin passwords, MAB devices) exists only in PostgreSQL.
 | Validate fails | output shows the radiusd error and line; most often custom policy syntax; fix and re-validate. "forbidden construct" = the policy uses `$INCLUDE`, `$ENV`, `$TEMPLATE`, `%{exec:}`, `Exec-Program`, backticks, an interpreter xlat or a numeric attribute alias (`Attr-<n>`); use attribute names instead |
 | Apply → rolled back | FreeRADIUS did not become active/listening in 15 s; `journalctl -u freeradius`; run `radiusd -XC` |
 | Apply fails "another apply … in progress" | wait; lock is released when the other request finishes |
-| Switch admin rejected | Auth log reason; source IP not in admin subnet; user not in `net-admins`; legacy hash → reset password in UI; account disabled (`Auth-Type := Reject`) |
+| Device admin rejected | Auth log reason; source IP not in admin subnet; user not in `net-admins`; directory account not in an allowed group (§6.9a); legacy hash → reset password in UI; account disabled (`Auth-Type := Reject`) |
 | MAB rejected | MAC registered + enabled? switch sends PAP (not EAP-MD5)? Calling-Station-Id matches User-Name? |
 | EAP-TLS rejected | cert SAN DNS present? chains to Example-IssuingCA/Example-RootCA (`reject_unknown_intermediate_ca`)? OCSP reachable from FreeRADIUS? AD computer object in a rule group? `radiusd -X` |
 | LDAP bind/TLS errors | libldap uses GnuTLS (preflight shows it); `cipher_list` is unset on purpose; check the DC's Schannel policy allows TLS 1.2 ECDHE-AES-GCM; `ldapsearch -H ldaps://dc01.example.net -x -D '<bind DN>' -W -b '' -s base` |

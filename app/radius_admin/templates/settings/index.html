@@ -4,16 +4,22 @@
 {% block content %}
 <header class="page-head"><h1>Settings</h1></header>
 <section class="panel narrow">
-<form method="post" class="stack" data-confirm="Save settings? Subnet and privilege changes affect the next switch login.">
+<form method="post" class="stack" data-confirm="Save settings? Subnet, privilege and directory changes affect the next device admin login.">
   {{ m.csrf() }}
   <input type="hidden" name="return_to" value="{{ url_for('settings.index') }}">
-  <h2>Switch management logins</h2>
-  <p class="small muted">FreeRADIUS reads these on every switch login; saving affects the next login.</p>
+  <h2 id="device-admins">Device admin logins</h2>
+  <p class="small muted">Logins to the management of switches, access points, firewalls and other RADIUS clients. FreeRADIUS reads these on every login; saving affects the next login.</p>
   <label for="admin_subnet">Management subnet</label>
   <input id="admin_subnet" name="admin_subnet" value="{{ s.admin_subnet }}" required class="mono"{{ m.described(errors, 'admin_subnet', True) }}>
-  <p id="admin_subnet-hint" class="small muted">Switch admin (PAP) logins are accepted only from switches in this network.</p>
+  <p id="admin_subnet-hint" class="small muted">Device admin (PAP) logins are accepted only from devices in this network.</p>
   {{ m.field_error(errors, 'admin_subnet') }}
   <label class="check"><input type="checkbox" name="admin_priv15" value="1" {{ 'checked' if s.admin_priv15 else '' }}> Grant full admin rights on login (the device profile's attribute, for example <span class="mono">shell:priv-lvl=15</span> on Cisco)</label>
+  <label class="check"><input type="checkbox" name="admin_directory" value="1" aria-describedby="admin_directory-hint" {{ 'checked' if s.admin_directory else '' }}> Also accept directory accounts (Active Directory user name or user@domain, and their directory password)</label>
+  <p id="admin_directory-hint" class="small muted">For a name that is not a local <a href="{{ url_for('switch_admins.index') }}">device admin</a>, FreeRADIUS logs in to the directory as that person over the LDAP connection it already uses for 802.1X, then requires membership of one of the groups below (nested groups count). A local device admin of the same name always wins. Disabled, locked or expired directory accounts are refused by the directory.</p>
+  <label for="admin_directory_groups">Directory groups allowed to log in</label>
+  <textarea id="admin_directory_groups" name="admin_directory_groups" rows="3" class="mono"{{ m.described(errors, 'admin_directory_groups', True) }}>{{ s.admin_directory_groups | join('\n') }}</textarea>
+  <p id="admin_directory_groups-hint" class="small muted">One group name (cn) per line, for example <span class="mono">Network-Admins</span>; compared without regard to case. Required while directory accounts are on.</p>
+  {{ m.field_error(errors, 'admin_directory_groups') }}
   <h2>Devices</h2>
   <label for="default_vendor_profile">Default device profile</label>
   <select id="default_vendor_profile" name="default_vendor_profile"{{ m.described(errors, 'default_vendor_profile', True) }}>

@@ -58,13 +58,17 @@ def test_sql_arguments_are_hex_or_constant_only():
     attributes (FreeRADIUS un-escapes %{sql:} arguments after SQL escaping)."""
     p = render()
     calls = _sql_calls(p)
-    assert len(calls) == 8
+    # device admin source check and priv15 appear for local and directory accounts (SPEC section 28)
+    assert len(calls) == 12
     allowed = {
         # %{hex:...} output is [0-9a-f] only; Tmp-String-5 is checked against hex below
         "SELECT radius_admin_mab_hex('%{control:Tmp-String-2}', '%{hex:NAS-IP-Address}', "
         "'%{control:Tmp-String-5}')",
         "SELECT radius_admin_admin_source_ok_hex('%{control:Tmp-String-4}')",
         "SELECT radius_admin_priv15()",
+        # device admins with directory accounts: the user name and the group list, hex only
+        "SELECT radius_admin_admin_directory_hex('%{hex:User-Name}')",
+        "SELECT radius_admin_admin_group_hex('%{control:Tmp-String-3}')",
         "SELECT radius_admin_vlan_rule_hex(%{control:Tmp-String-7}, '%{control:Tmp-String-8}', "
         "'%{control:Tmp-String-3}')",
         # EAP-TTLS: the inner User-Name and the logged user, hex only
@@ -89,8 +93,9 @@ def test_sql_arguments_are_hex_or_constant_only():
 
 def test_group_lists_skip_duplicate_names():
     p = render()
-    # EAP-TLS loop and both directory-user loops (EAP-TTLS, PEAP) use the de-duplicating append
-    assert p.count('if ("%{control:Tmp-String-3}," !~ /,%{control:Tmp-String-2},/) {') == 3
+    # EAP-TLS loop, both directory-user loops (EAP-TTLS, PEAP) and the directory device admin loop
+    # use the de-duplicating append
+    assert p.count('if ("%{control:Tmp-String-3}," !~ /,%{control:Tmp-String-2},/) {') == 4
     assert '&Tmp-String-3 := "%{control:Tmp-String-3},%{hex:' not in p
     for start in ("foreach &control:LDAP-Group {", "foreach &control:Tmp-String-7 {"):
         i = p.index(start)
@@ -122,7 +127,7 @@ def test_eap_branch_uses_live_vlan_function():
 
 def test_admin_branch_uses_live_settings():
     p = render()
-    adm = p[p.index("# Switch/device admin logins"):p.index("# 802.1X with a username and password")]
+    adm = p[p.index("# Device admin logins"):p.index("# 802.1X with a username and password")]
     assert "%{hex:control:Tmp-IP-Address-0}" in adm
     assert "&Tmp-String-8 := \"%{sql:SELECT radius_admin_admin_source_ok_hex('%{control:Tmp-String-4}')}\"" in adm
     assert '&Tmp-String-8 := "f"' in adm          # default: fail closed
@@ -131,12 +136,15 @@ def test_admin_branch_uses_live_settings():
     assert "outside the management subnet" in adm and "not in group net-admins" in adm
     assert "\"%{sql:SELECT radius_admin_priv15()}\" == \"t\"" in adm
     assert '&Cisco-AVPair += "shell:priv-lvl=15"' in adm
-    assert adm.count("\t\t\treject\n") == 2      # wrong source, not a switch admin
+    # wrong source, not a device admin, and (one tab deeper, also counted here) a directory
+    # account in no device admin group
+    assert adm.count("\t\t\treject\n") == 3
+    assert adm.count("\t\t\t\treject\n") == 1
 
 
 def test_authmethod_markers():
     p = render()
-    for m in ('"mab"', '"pap-admin"', '"eap-tls"', '"ttls-pap"'):
+    for m in ('"mab"', '"pap-admin"', '"admin-ldap"', '"eap-tls"', '"ttls-pap"'):
         assert "&Tmp-String-1 := %s" % m in p
 
 
