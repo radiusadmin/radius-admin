@@ -19,7 +19,7 @@ import signal
 import sys
 import time
 
-from . import alerts, audit, coa, db, helper_client
+from . import alerts, audit, coa, db, helper_client, vendors
 from .config import ConfigError, load_config
 from .crypto import DataKey, fips_status
 from .ports import same_ports
@@ -83,24 +83,39 @@ def _save_status(conn, client_id, st=None, error=""):
          json.dumps(st.get("ports", []))), conn=conn)
 
 
-def poll_one(session, client):
+def client_profile(client, default_id, cat=None):
+    """The client's vendor profile (SPEC section 26) from the catalog `cat`; the default one if
+    it names none or one this server does not have."""
+    try:
+        return vendors.resolve(client.get("vendor_profile"), default_id, cat)
+    except vendors.ProfileError:
+        try:
+            return vendors.resolve(None, default_id, cat)
+        except vendors.ProfileError:
+            return vendors.default()
+
+
+def poll_one(session, client, default_id=None, cat=None):
     host = single_host(client["ipaddr"])
     if host is None:
         return client, None, "not a single address (network entries are not polled)"
     try:
-        return client, poll_switch(session, host), ""
+        return client, poll_switch(session, host, client_profile(client, default_id, cat)), ""
     except SnmpError as e:
         return client, None, str(e)
 
 
 def run_cycle(conn, key, profile):
     """Poll every client once. Returns (polled, reachable, ports_updated)."""
-    clients = db.query("SELECT id, name, ipaddr, dot1x_ports FROM ui.radius_client WHERE is_switch ORDER BY id", conn=conn)
+    clients = db.query("SELECT id, name, ipaddr, dot1x_ports, vendor_profile FROM ui.radius_client WHERE is_switch"
+                       " ORDER BY id", conn=conn)
+    cat = vendors.catalog(conn)
+    default_id = vendors.load_default_id(conn, cat)
     session = make_session(profile, key)
     reachable = updated = 0
     with session:
         with concurrent.futures.ThreadPoolExecutor(max_workers=WORKERS) as pool:
-            results = list(pool.map(lambda c: poll_one(session, c), clients))
+            results = list(pool.map(lambda c: poll_one(session, c, default_id, cat), clients))
     for client, st, err in results:
         _save_status(conn, client["id"], st, err)
         if st is None:
@@ -120,7 +135,7 @@ def run_cycle(conn, key, profile):
 
 
 def run_tests(conn, key, profile):
-    pending = db.query("SELECT t.id, t.client_id, c.name, c.ipaddr, c.dot1x_ports FROM ui.snmp_test t"
+    pending = db.query("SELECT t.id, t.client_id, c.name, c.ipaddr, c.dot1x_ports, c.vendor_profile FROM ui.snmp_test t"
                        " JOIN ui.radius_client c ON c.id = t.client_id"
                        " WHERE t.done_at IS NULL ORDER BY t.id LIMIT 10", conn=conn)
     if not pending:
@@ -133,10 +148,12 @@ def run_tests(conn, key, profile):
                        (str(e)[:300], t["id"]), conn=conn)
         conn.commit()
         return len(pending)
+    cat = vendors.catalog(conn)
+    default_id = vendors.load_default_id(conn, cat)
     with session:
         for t in pending:
-            client = {"id": t["client_id"], "name": t["name"], "ipaddr": t["ipaddr"]}
-            _, st, err = poll_one(session, client)
+            client = {"id": t["client_id"], "name": t["name"], "ipaddr": t["ipaddr"], "vendor_profile": t["vendor_profile"]}
+            _, st, err = poll_one(session, client, default_id, cat)
             if st is not None:
                 _save_status(conn, t["client_id"], st)
                 msg = "%s answered: %s; 802.1X ports (auto): %s; %d RADIUS server(s)." % (
@@ -162,13 +179,15 @@ def coa_tool(cfg):
 
 
 def run_coa(conn, cfg, profile):
-    pending = db.query("SELECT r.*, host(r.nas_ip) AS nas, c.name, c.ipaddr, c.secret, c.enabled, c.key_status"
+    pending = db.query("SELECT r.*, host(r.nas_ip) AS nas, c.name, c.ipaddr, c.secret, c.enabled, c.key_status,"
+                       " c.vendor_profile, c.coa_port"
                        " FROM ui.coa_request r JOIN ui.radius_client c ON c.id = r.client_id"
                        " WHERE r.done_at IS NULL ORDER BY r.id LIMIT 10", conn=conn)
     if not pending:
         return 0
     rc, dd, why = coa_tool(cfg)
-    port = int((profile or {}).get("coa_port") or 1700)
+    cat = vendors.catalog(conn)
+    default_id = vendors.load_default_id(conn, cat)
     silent = set()      # switches that timed out in this pass: their other requests are not tried
     for r in pending:
         ok, msg = False, ""
@@ -180,10 +199,11 @@ def run_coa(conn, cfg, profile):
             msg = "%s is disabled or has no usable shared key in this console." % r["name"]
         else:
             host = single_host(r["ipaddr"]) or r["nas"]
+            vp = client_profile(r, default_id, cat)     # its attributes and port (SPEC section 26)
             try:
                 req = coa.build_request(r["action"], r["nas"], r["acct_session_id"], r["calling_station_id"],
-                                        r["nas_port_id"])
-                ok, msg = coa.send(r["action"], host, port, r["secret"], req, rc, dd)
+                                        r["nas_port_id"], profile=vp)
+                ok, msg = coa.send(r["action"], host, vendors.coa_port(r, vp), r["secret"], req, rc, dd, profile=vp)
                 if not ok and msg.startswith(coa.NO_REPLY):
                     silent.add(r["client_id"])
             except coa.CoaError as e:

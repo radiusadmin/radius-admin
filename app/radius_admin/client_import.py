@@ -17,6 +17,8 @@ import os
 import re
 import time
 
+from . import vendors
+
 from .crypto import constant_time_eq, random_token, sha256_hex
 
 MAX_BYTES = 1024 * 1024
@@ -24,7 +26,7 @@ MAX_ROWS = 5000
 MAX_DOT1X = 1000
 EXPIRY_SECONDS = 15 * 60
 REQUIRED_COLS = ("ip", "secret", "hostname", "secret_type")
-OPTIONAL_COLS = ("key_scope", "dot1x_ports", "is_switch")
+OPTIONAL_COLS = ("key_scope", "dot1x_ports", "is_switch", "vendor_profile")
 IGNORED_COLS = ()
 SECRET_TYPES = ("plaintext", "encrypted", "none")
 IMPORT_ID_RE = re.compile(r"^[A-Za-z0-9_-]{22}$")
@@ -92,8 +94,10 @@ def _netkey(addr):
     return str(ipaddress.ip_network(addr, strict=False))
 
 
-def parse_csv(text, u):
-    """Return list of row dicts (secret included) or raise ImportError_ with all errors."""
+def parse_csv(text, u, profile_ids=None):
+    """Return list of row dicts (secret included) or raise ImportError_ with all errors.
+    profile_ids: the vendor profiles a vendor_profile cell may name (default: the built-in ones)."""
+    profile_ids = sorted(profile_ids) if profile_ids is not None else vendors.builtin_ids()
     if len(text.encode("utf-8")) > MAX_BYTES:
         raise ImportError_(["The file is larger than 1 MiB. Split it into smaller files."])
     if text.startswith("﻿"):
@@ -194,6 +198,18 @@ def parse_csv(text, u):
                 rec["is_switch"] = None          # not given: new clients use the import option
             else:
                 rec["errors"].append("is_switch must be yes or no.")
+            # vendor profile (SPEC section 26): empty = not given (existing clients keep theirs,
+            # new ones use the default); "default" = the installation's default; else a profile id
+            vp = f.get("vendor_profile", "").strip().lower()
+            if vp == "":
+                rec["vendor_profile"] = None
+            elif vp == "default":
+                rec["vendor_profile"] = ""
+            elif vp in profile_ids:
+                rec["vendor_profile"] = vp
+            else:
+                rec["vendor_profile"] = None
+                rec["errors"].append("vendor_profile must be default or one of: %s." % ", ".join(profile_ids))
             if not rec["errors"]:
                 k = _netkey(rec["ip"])
                 if k in seen_ip:
@@ -245,6 +261,7 @@ def plan(rows, existing, update_existing, new_require_ma, new_is_switch=False):
         cur = a or b
         it = {"line": r["line"], "hostname": r["hostname"], "ip": r["ip"], "secret_type": r["secret_type"],
               "key_scope": r["key_scope"], "dot1x_ports": r["dot1x_ports"], "is_switch": r.get("is_switch"),
+              "vendor_profile": r.get("vendor_profile") or None,
               "warnings": [], "changes": [],
               "secret": None}
         if r["secret_ignored"]:
@@ -277,6 +294,11 @@ def plan(rows, existing, update_existing, new_require_ma, new_is_switch=False):
                     it["changes"].append("key scope %s → %s" % (cur["key_scope"] or "–", r["key_scope"] or "–"))
                 if (cur["dot1x_ports"] or "") != r["dot1x_ports"]:
                     it["changes"].append("802.1X ports")
+                if r.get("vendor_profile") is None:          # column empty or absent: keep
+                    it["vendor_profile"] = cur.get("vendor_profile")
+                elif it["vendor_profile"] != cur.get("vendor_profile"):
+                    it["changes"].append("device profile %s → %s" % (cur.get("vendor_profile") or "default",
+                                                                     it["vendor_profile"] or "default"))
                 if it["is_switch"] is None:
                     it["is_switch"] = cur.get("is_switch", False)
                 elif it["is_switch"] != cur.get("is_switch", False):
@@ -323,7 +345,7 @@ def plan(rows, existing, update_existing, new_require_ma, new_is_switch=False):
 def fingerprint(items, options):
     """Digest of what the preview showed (no secret values; only whether a secret changes)."""
     view = [{k: it.get(k) for k in ("line", "action", "id", "hostname", "ip", "key_status", "key_scope",
-                                     "dot1x_ports", "is_switch", "changes", "enabled")} | {"secret_change": it["secret"] is not None}
+                                     "dot1x_ports", "is_switch", "vendor_profile", "changes", "enabled")} | {"secret_change": it["secret"] is not None}
             for it in items]
     return sha256_hex(json.dumps({"items": view, "options": options}, sort_keys=True))
 

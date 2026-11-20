@@ -192,7 +192,7 @@ def test_auto_update_ports_audited(app, superconn, monkeypatch):
                  " ('sw2','192.0.2.2','Plaintext-Key-0002-abcdef','gi1/0/4,gi1/0/5,gi1/0/8')")
     q(superconn, "UPDATE ui.radius_client SET is_switch = true")
     st = _fixture_status("snmp_c1300_48p.txt")
-    monkeypatch.setattr(snmp_poller, "poll_switch", lambda session, host: dict(st))
+    monkeypatch.setattr(snmp_poller, "poll_switch", lambda session, host, profile=None: dict(st))
     conn = db.connect(APP_DSN)
     try:
         n, ok, upd = snmp_poller.run_cycle(conn, app.config["RA_DATA_KEY"], snmp_poller.load_profile(conn))

@@ -24,6 +24,12 @@
     <div><label for="vlan">VLAN</label>
     <input id="vlan" name="vlan" value="{{ r.vlan or '' }}" required inputmode="numeric" maxlength="4"{{ m.described(errors, 'vlan') }}>
     {{ m.field_error(errors, 'vlan') }}</div>
+    <div><label for="role">Role <span class="muted">(optional)</span></label>
+    <input id="role" name="role" value="{{ r.role or '' }}" maxlength="64" class="mono"{{ m.described(errors, 'role', True) }}>
+    {{ m.field_error(errors, 'role') }}</div>
+  </div>
+  <p id="role-hint" class="small muted">Sent as well as the VLAN to devices whose device profile uses roles, for example an Aruba user role, a firewall group or a filter name (the Generic profile sends it as Filter-Id). Other devices get the VLAN only. Letters, digits, '.', '_' and '-'.</p>
+  <div class="grid-2">
     <div><label for="priority">Order</label>
     <input id="priority" name="priority" value="{{ r.priority }}" required inputmode="numeric" maxlength="6"{{ m.described(errors, 'priority', True) }}>
     <p id="priority-hint" class="small muted">Lower runs first.</p>

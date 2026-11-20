@@ -26,6 +26,8 @@ BIND_PW = "Test-Bind-Pw-1234"
 SW_IN = ("192.0.2.10", "TestSwitchInSecret012345678")      # switch in admin subnet
 SW_OUT = ("198.51.100.10", "TestSwitchOutSecret01234567")      # switch outside admin subnet
 WIFI = ("203.0.113.201", "TestWifiApsSecret0123456789")     # wifi-aps (require_ma yes)
+GENERIC = ("127.0.0.2", "TestGenericSecret0123456789")       # sw-generic: vendor profile generic-rfc
+CUSTOM = ("127.0.0.3", "TestCustomSecret01234567890")        # sw-custom: custom profile test-vsa (Aruba VSAs)
 ADMIN_PW = "Correct-Horse-Battery-1"
 LEGACY_PW = "Legacy-Crypt-Pass-1"
 TEST_USERS = ("t-admin1", "t-admin2", "t-notgroup", "t-legacy")
@@ -294,6 +296,13 @@ def vlan_of(out):
                 raw = raw[1:]
             return raw.decode("ascii", "replace")
     return None
+
+
+def attr_length(out, number):
+    """Length of RADIUS attribute `number` in the last Access-Accept eapol_test printed, or None.
+    eapol_test prints no value for attributes it has no name for (Filter-Id among them)."""
+    m = re.findall(r"Attribute %d \([^)]*\) length=(\d+)" % number, out[out.rfind("Access-Accept"):])
+    return int(m[0]) if m else None
 
 
 def has_priv15(out):
@@ -782,6 +791,70 @@ def live_cases(eapol_test, bench, prefix, logname):
     set_priv15(False)
     code, out = radclient(prefix, SW_IN, admin)
     record("LIVE: priv15 off -> Accept without priv-lvl", code == "accept" and not has_priv15(out))
+
+    # Vendor profiles (SPEC section 26): the reply attributes follow the client's profile.
+    def reply(out):
+        return out.split("Received Access-", 1)[-1] if "Received Access-" in out else ""
+    gadmin = ['NAS-IP-Address = %s' % GENERIC[0]] + admin[1:]
+    psql("UPDATE ui.setting SET value = '127.0.0.2/32' WHERE key = 'admin_subnet'")
+    set_priv15(True)
+    code, out = radclient(prefix, GENERIC, gadmin)
+    record("PROFILE: generic-rfc client, priv15 on -> Accept with Service-Type = Administrative-User, no Cisco-AVPair",
+           code == "accept" and "Service-Type = Administrative-User" in reply(out) and not has_priv15(out), out[-600:])
+    set_priv15(False)
+    code, out = radclient(prefix, GENERIC, gadmin)
+    record("PROFILE: generic-rfc client, priv15 off -> Accept without the admin attribute",
+           code == "accept" and "Administrative-User" not in reply(out), out[-600:])
+    psql("UPDATE ui.setting SET value = '192.0.2.0/24' WHERE key = 'admin_subnet'")
+    set_priv15(True)
+    code, out = radclient(prefix, SW_IN, admin)
+    record("PROFILE: default-profile client in the same policy keeps Cisco-AVPair, no Service-Type",
+           code == "accept" and has_priv15(out) and "Administrative-User" not in reply(out), out[-600:])
+    set_priv15(False)
+    code, out = radclient(prefix, GENERIC, ['NAS-IP-Address = %s' % GENERIC[0], 'NAS-Port-Type = Ethernet',
+                                           'Service-Type = Call-Check', 'User-Name = "aabbcc000001"',
+                                           'User-Password = "aabbcc000001"', 'Calling-Station-Id = "AA-BB-CC-00-00-01"'])
+    record("PROFILE: MAB from the generic-rfc client gets the tunnel attributes",
+           code == "accept" and "Tunnel-Type:0 = VLAN" in out and "Tunnel-Private-Group-Id:0 = " in out, out[-600:])
+
+    # MAB from access points (NAS-Port-Type Wireless-802.11): only for profiles that accept it
+    wmab = ['NAS-Port-Type = Wireless-802.11', 'Service-Type = Call-Check',
+            'Called-Station-Id = "AA-BB-CC-00-10-01:Example_Main"', 'User-Name = "aabbcc000001"',
+            'User-Password = "aabbcc000001"', 'Calling-Station-Id = "AA-BB-CC-00-00-01"']
+    code, out = radclient(prefix, GENERIC, ['NAS-IP-Address = %s' % GENERIC[0]] + wmab)
+    record("PROFILE: wireless MAB from the generic-rfc client -> Accept with the device's VLAN",
+           code == "accept" and "Tunnel-Private-Group-Id:0 = " in out and "Tunnel-Type:0 = VLAN" in out, out[-600:])
+    code, out = radclient(prefix, SW_IN, ['NAS-IP-Address = %s' % SW_IN[0]] + wmab)
+    record("PROFILE: wireless MAB from a Catalyst client is not MAB -> Reject", code == "reject", out[-600:])
+
+    # A role per access rule, sent with the profile's role attributes (generic-rfc: Filter-Id)
+    wired = ["61:d:15"]
+    psql("UPDATE ui.access_rule SET role = 'office-staff' WHERE ad_group = 'Wired-Office'")
+    code, out = eapol(eapol_test, bench, GENERIC, "TLS", cert="pc1", extra=wired)
+    record("PROFILE: EAP-TLS from the generic-rfc client -> VLAN 500 and the rule's role as Filter-Id",
+           code == "accept" and vlan_of(out) == "500" and attr_length(out, 11) == 2 + len("office-staff"),
+           "\n".join(ln for ln in out[out.rfind("Access-Accept"):].splitlines() if "Attribute" in ln or "Value" in ln)[:1500])
+    code, out = eapol(eapol_test, bench, SW_IN, "TLS", cert="pc1", extra=wired)
+    record("PROFILE: the same rule from a Catalyst client -> VLAN 500, no Filter-Id",
+           code == "accept" and vlan_of(out) == "500" and attr_length(out, 11) is None, out[-900:])
+    # a custom profile with vendor-specific attributes (Aruba, vendor 14823 = 0x39e7)
+    code, out = eapol(eapol_test, bench, CUSTOM, "TLS", cert="pc1", extra=wired)
+    vsa = "".join(ln.split("Value:", 1)[1].strip() for ln in out[out.rfind("Access-Accept"):].splitlines()
+                  if "Value:" in ln)
+    record("PROFILE: custom profile -> VLAN 500 and the role as Aruba-User-Role (VSA 14823/1)",
+           code == "accept" and vlan_of(out) == "500" and ("000039e701%02x" % (2 + len("office-staff"))
+                                                           + "office-staff".encode().hex()) in vsa, out[-900:])
+    psql("UPDATE ui.access_rule SET role = NULL WHERE ad_group = 'Wired-Office'")
+    psql("UPDATE ui.setting SET value = '127.0.0.3/32' WHERE key = 'admin_subnet'")
+    set_priv15(True)
+    code, out = radclient(prefix, CUSTOM, ['NAS-IP-Address = %s' % CUSTOM[0]] + admin[1:])
+    record("PROFILE: custom profile admin login -> Aruba-Admin-Role = root, no Cisco-AVPair",
+           code == "accept" and 'Aruba-Admin-Role = "root"' in reply(out) and not has_priv15(out), out[-600:])
+    set_priv15(False)
+    psql("UPDATE ui.setting SET value = '192.0.2.0/24' WHERE key = 'admin_subnet'")
+    code, out = eapol(eapol_test, bench, GENERIC, "TLS", cert="pc1", extra=wired)
+    record("PROFILE: a rule without a role -> generic-rfc client gets VLAN 500, no Filter-Id",
+           code == "accept" and vlan_of(out) == "500" and attr_length(out, 11) is None, out[-900:])
     pid_after = sh(["pgrep", "-f", "sbin/radiusd -fxx"]).stdout.split()
     record("LIVE: radiusd was not restarted during live changes", pid_before and pid_before == pid_after,
            "%s %s" % (pid_before, pid_after))

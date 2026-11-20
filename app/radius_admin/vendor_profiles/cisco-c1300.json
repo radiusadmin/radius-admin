@@ -1,0 +1,38 @@
+{
+  "format": 1,
+  "id": "cisco-c1300",
+  "label": "Cisco Catalyst 1200/1300",
+  "description": "Catalyst 1200 and 1300 series, firmware 4.1.3.36 or later.",
+  "status": "supported",
+  "reply": {
+    "vlan": [
+      {"attr": "Tunnel-Type", "op": ":=", "value": "VLAN"},
+      {"attr": "Tunnel-Medium-Type", "op": ":=", "value": "IEEE-802"},
+      {"attr": "Tunnel-Private-Group-Id", "op": ":=", "value": "{vlan}"}
+    ],
+    "admin_full": [
+      {"attr": "Cisco-AVPair", "op": "+=", "value": "shell:priv-lvl=15"}
+    ],
+    "role": []
+  },
+  "mab": {
+    "port_types": ["Ethernet"]
+  },
+  "coa": {
+    "port": 1700,
+    "identify": "mac-then-session",
+    "send_nas_port_id": true,
+    "reauth": {"packet": "coa", "attrs": [{"attr": "Cisco-AVPair", "value": "subscriber:command=reauthenticate"}]},
+    "bounce": {"packet": "coa", "attrs": [{"attr": "Cisco-AVPair", "value": "subscriber:command=bounce-host-port"}]},
+    "disconnect": {"packet": "disconnect", "attrs": []}
+  },
+  "snmp": {
+    "port_names": [
+      {"match": "(gi|te|fa|tw|fo|hu)([0-9]+)", "ignore_case": true, "format": "{1:lower}1/0/{2}"}
+    ]
+  },
+  "setup": {
+    "accounting": "aaa accounting dot1x start-stop group radius",
+    "coa": "aaa server radius dynamic-author\n client <this RADIUS server's IP> server-key <the switch's shared secret in this console>\n exit"
+  }
+}

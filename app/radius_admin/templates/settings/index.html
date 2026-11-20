@@ -13,7 +13,15 @@
   <input id="admin_subnet" name="admin_subnet" value="{{ s.admin_subnet }}" required class="mono"{{ m.described(errors, 'admin_subnet', True) }}>
   <p id="admin_subnet-hint" class="small muted">Switch admin (PAP) logins are accepted only from switches in this network.</p>
   {{ m.field_error(errors, 'admin_subnet') }}
-  <label class="check"><input type="checkbox" name="admin_priv15" value="1" {{ 'checked' if s.admin_priv15 else '' }}> Grant privilege level 15 on login (<span class="mono">shell:priv-lvl=15</span>)</label>
+  <label class="check"><input type="checkbox" name="admin_priv15" value="1" {{ 'checked' if s.admin_priv15 else '' }}> Grant full admin rights on login (the device profile's attribute, for example <span class="mono">shell:priv-lvl=15</span> on Cisco)</label>
+  <h2>Devices</h2>
+  <label for="default_vendor_profile">Default device profile</label>
+  <select id="default_vendor_profile" name="default_vendor_profile"{{ m.described(errors, 'default_vendor_profile', True) }}>
+    {% for pid, label, pstatus in vendor_choices %}<option value="{{ pid }}" {{ 'selected' if s.default_vendor_profile == pid else '' }}>{{ label }}</option>{% endfor %}
+  </select>
+  <p id="default_vendor_profile-hint" class="small muted">Used by every RADIUS client that does not name its own profile (Clients → edit). A change takes effect when you next apply changes.</p>
+  {{ m.field_error(errors, 'default_vendor_profile') }}
+
   <h2>802.1X with a username and password</h2>
   <label class="check"><input type="checkbox" name="dot1x_ttls" value="1" aria-describedby="dot1x_ttls-hint" {{ 'checked' if s.dot1x_ttls else '' }}> Let <a href="{{ url_for('dot1x_users.index') }}">802.1X users</a> connect with a username and password (EAP-TTLS with PAP inside)</label>
   <label class="check"><input type="checkbox" name="dot1x_ttls_directory" value="1" aria-describedby="dot1x_ttls_directory-hint" {{ 'checked' if s.dot1x_ttls_directory else '' }}> Also accept directory accounts (Active Directory user name or user@domain, and their directory password)</label>

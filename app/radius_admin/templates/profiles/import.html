@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block title %}Import a device profile{% endblock %}
+{% block content %}
+<header class="page-head"><div><h1>Import a device profile</h1>
+<p class="lede">A profile exported from this or another server (Device profiles → Export JSON). It is checked like a profile entered here and saved as a custom profile.</p></div></header>
+{% if error %}<p class="flash flash-error" role="alert">{{ error }}</p>{% endif %}
+{% if errors %}<div class="flash flash-error" role="alert">{% for e in errors %}<p>{{ e }}</p>{% endfor %}</div>{% endif %}
+<section class="panel narrow">
+<form method="post" class="stack" enctype="multipart/form-data">
+  {{ m.csrf() }}
+  <label for="file">JSON file</label>
+  <input id="file" name="file" type="file" accept=".json,application/json">
+  <label for="json">or paste the JSON</label>
+  <textarea id="json" name="json" rows="14" class="mono code-edit" spellcheck="false" maxlength="65536">{{ text }}</textarea>
+  <label class="check"><input type="checkbox" name="replace" value="1" {{ 'checked' if replace }}> Replace a custom profile with the same id</label>
+  <p class="small muted">Up to 64 KiB. A file with the id of a built-in profile is refused: change its <span class="mono">"id"</span> first. Clients that use a replaced profile get its new attributes at the next Apply.</p>
+  {% if need_stepup %}
+  <fieldset class="stepup-inline"><legend>Confirm it's you</legend>
+    {% with pfx = 'stepup_' %}{% include "auth/_stepup_fields.html" %}{% endwith %}
+  </fieldset>
+  {% endif %}
+  <div class="actions"><button type="submit" class="btn btn-primary">Import profile</button>
+  <a class="btn btn-quiet" href="{{ url_for('profiles.index') }}">Cancel</a></div>
+</form>
+</section>
+{% endblock %}

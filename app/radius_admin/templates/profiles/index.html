@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block title %}Device profiles{% endblock %}
+{% block content %}
+<header class="page-head"><div><h1>Device profiles</h1>
+<p class="lede">What this server sends to each kind of device (VLAN, full admin rights, roles), the session actions it offers and how it names ports. A client uses the profile chosen on its edit page, else the default (Settings → Devices).</p></div>
+{% if has_role('admin') %}<div class="head-actions"><a class="btn btn-primary" href="{{ url_for('profiles.new') }}">New profile</a>
+<a class="btn btn-quiet" href="{{ url_for('profiles.import_profile') }}">Import JSON</a></div>{% endif %}
+</header>
+<section class="panel flush">
+<div class="table-wrap table-wrap-fits"><table>
+  <thead><tr><th scope="col">Profile</th><th scope="col">Type</th><th scope="col">Used by</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead>
+  <tbody>{% for r in rows %}
+  <tr>
+    <td class="name-cell"><a href="{{ url_for('profiles.view', pid=r.p.id) }}">{{ r.p.label }}</a><span class="cell-sub mono">{{ r.p.id }}</span></td>
+    <td>{% if r.builtin %}<span class="tag tag-ok">Built-in</span>{% else %}<span class="tag tag-muted">Custom</span>{% endif %}</td>
+    <td>{{ r.used }} client{{ '' if r.used == 1 else 's' }}{% if r.default %}<span class="cell-sub"><span class="tag tag-ok">Default</span></span>{% endif %}</td>
+    <td class="row-actions">
+      <a class="btn btn-quiet btn-small" href="{{ url_for('profiles.view', pid=r.p.id) }}">{{ 'Edit' if has_role('admin') and not r.builtin else 'View' }}</a>
+      <a class="btn btn-quiet btn-small" href="{{ url_for('profiles.export', pid=r.p.id) }}">Export JSON</a>
+      {% if has_role('admin') %}<a class="btn btn-quiet btn-small" href="{{ url_for('profiles.new', **{'from': r.p.id}) }}">Copy</a>
+      {% if not r.builtin %}{{ m.post_button(url_for('profiles.delete', pid=r.p.id), 'Delete', 'btn btn-danger-quiet btn-small', confirm='Delete profile ' ~ r.p.id ~ '? Clients cannot use it any more.') }}{% endif %}{% endif %}
+      {% if r.report_url %}<a class="btn btn-quiet btn-small" href="{{ r.report_url }}" target="_blank" rel="noopener noreferrer">Report a problem<span class="sr-only"> with {{ r.p.label }} (opens GitHub)</span></a>{% endif %}
+    </td>
+  </tr>{% endfor %}</tbody>
+</table></div>
+</section>
+<p class="small muted">Try a custom profile on one device first: a management login, an 802.1X or MAB login and a session action. Exported JSON can be imported on another server. A built-in profile that does not work with your device: <em>Report a problem</em> opens an issue form on GitHub with the profile and version filled in.</p>
+{% endblock %}

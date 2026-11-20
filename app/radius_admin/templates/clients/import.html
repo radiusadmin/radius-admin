@@ -21,6 +21,7 @@
   <select id="require_ma" name="require_ma">{% for t in tristate %}<option {{ 'selected' if opts.require_ma == t else '' }}>{{ t }}</option>{% endfor %}</select>
   <label class="check"><input type="checkbox" name="is_switch" value="1" {{ 'checked' if opts.is_switch else '' }}> Mark new clients as switches (include in SNMP monitoring)</label>
   <p class="small muted">An optional <span class="mono">is_switch</span> column (yes/no) in a file with a header row overrides this per row, and also updates existing clients.</p>
+  <p class="small muted">An optional <span class="mono">vendor_profile</span> column sets the device profile: <span class="mono">default</span> or one of {% for pid, label, pstatus in vendor_choices %}<span class="mono">{{ pid }}</span> ({{ label }}){{ ', ' if not loop.last else '' }}{% endfor %}. Left empty, existing clients keep theirs and new clients use the default. Put it before <span class="mono">dot1x_ports</span>, or quote the port list.</p>
   <div class="actions"><button type="submit" class="btn btn-primary">Check file</button>
   <a class="btn btn-quiet" href="{{ list_url('clients.index') }}">Cancel</a></div>
 </form>

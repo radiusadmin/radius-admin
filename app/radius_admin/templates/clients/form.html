@@ -20,6 +20,13 @@
   <label for="ipaddr">IP address or network</label>
   <input id="ipaddr" name="ipaddr" value="{{ c.ipaddr or '' }}" required maxlength="64" class="mono" placeholder="192.0.2.26"{{ m.described(errors, 'ipaddr') }}>
   {{ m.field_error(errors, 'ipaddr') }}
+  <label for="vendor_profile">Device profile</label>
+  <select id="vendor_profile" name="vendor_profile"{{ m.described(errors, 'vendor_profile', True) }}>
+    <option value="" {{ 'selected' if not c.vendor_profile else '' }}>Default: {{ default_profile.label }}</option>
+    {% for pid, label, pstatus in vendor_choices %}<option value="{{ pid }}" {{ 'selected' if c.vendor_profile == pid else '' }}>{{ label }}</option>{% endfor %}
+  </select>
+  <p id="vendor_profile-hint" class="small muted">The attributes this server sends to the device (VLAN, full admin rights), the session actions it offers and how it names ports. Takes effect after Apply.</p>
+  {{ m.field_error(errors, 'vendor_profile') }}
   {% set tr = c.transport or 'udp' %}
   <fieldset>
     <legend>Transport</legend>
@@ -72,7 +79,11 @@
       <option value="server" {{ 'selected' if c.key_scope == 'server' else '' }}>server (per-server key)</option>
       <option value="global" {{ 'selected' if c.key_scope == 'global' else '' }}>global (radius-server key)</option></select>
       {{ m.field_error(errors, 'key_scope') }}</div>
+    <div><label for="coa_port">Session-action port (UDP)</label>
+      <input id="coa_port" name="coa_port" type="number" min="1" max="65535" value="{{ c.coa_port or '' }}" placeholder="{{ (vendor_profile(c.vendor_profile) or default_profile).coa.port }}"{{ m.described(errors, 'coa_port', True) }}>
+      {{ m.field_error(errors, 'coa_port') }}</div>
   </div>
+  <p id="coa_port-hint" class="small muted">Where the device listens for disconnect / re-authenticate (RFC 5176 dynamic authorization). Leave empty for the device profile's port:{% for pid, label, pstatus in vendor_choices %} {{ label }} {{ vendor_profile(pid).coa.port }}{{ ';' if not loop.last else '.' }}{% endfor %}</p>
   </div>{# udp-box #}
   <label for="dot1x_ports">802.1X ports</label>
   <textarea id="dot1x_ports" name="dot1x_ports" rows="2" maxlength="1000" class="mono"{{ m.described(errors, 'dot1x_ports', True) }}>{{ c.dot1x_ports or '' }}</textarea>
@@ -101,7 +112,7 @@
     {% if status.uptime_seconds is not none %}{% set days = status.uptime_seconds // 86400 %}<dt>Uptime</dt><dd>{{ days }} day{{ "" if days == 1 else "s" }}</dd>{% endif %}
     <dt>802.1X ports</dt><dd>{% if status.dot1x_supported %}<span class="mono">{{ status.dot1x_ports or 'none' }}</span>
       {% if not same_ports(c.dot1x_ports or '', status.dot1x_ports) %} <span class="tag tag-warn">Differs from the recorded list</span>{% endif %}
-      {% else %}<span class="muted">not reported (IEEE 802.1X MIB not available)</span>{% endif %}</dd>
+      {% else %}<span class="muted">not reported: the device does not offer the IEEE 802.1X MIB over SNMP (common on access points, controllers and some switches). Its system and RADIUS server details are still polled.</span>{% endif %}</dd>
     <dt>Polled</dt><dd>{{ status.polled_at|dt }}</dd>
   </dl>
   {% if status.radius_servers %}
