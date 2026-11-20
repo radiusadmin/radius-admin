@@ -279,6 +279,7 @@ code.nb { white-space: nowrap; }
 .con th { font-size: .78rem; color: var(--ink-soft); font-weight: 600; }
 .con tr:last-child td { border-bottom: 0; }
 .con .num { text-align: right; font-variant-numeric: tabular-nums; }
+.con .cell-sub { display: block; margin-top: .15rem; font-family: var(--mono); font-size: .78rem; color: var(--ink-soft); }
 .con tr.is-off td { color: var(--ink-soft); }
 .callout-danger { border-left: 4px solid var(--red); }
 .con-reason { overflow-wrap: anywhere; }
@@ -306,7 +307,6 @@ pre.diff span { display: block; padding: 0 1rem; white-space: pre; min-width: ma
 .con-counts span { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-s); padding: .35rem .65rem; }
 .con-counts strong { font-variant-numeric: tabular-nums; margin-right: .15rem; }
 .con-counts .hot strong { color: var(--red); }
-.con figcaption { padding: .5rem 1rem; font-size: .78rem; color: var(--ink-soft); border-top: 1px solid var(--line); background: var(--surface); }
 @media (max-width: 420px) { .con-board { grid-template-columns: minmax(0, 1fr); } }
 
 /* ------------------------------------------------------------- features */
