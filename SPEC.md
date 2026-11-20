@@ -390,6 +390,8 @@ Actions:
   further behind, only the newest 64 KiB (`skipped` = bytes left out). An `offset` past the
   end starts again at 0. Invalid UTF-8 is replaced. No log yet, or the file gone: ok with
   empty `text` and a message (section 23).
+- `integration_status`, `integration_catalog`, `integration_preflight`, `integration_fetch`,
+  `integration_install`, `integration_log`: second-factor provider installs, section 29.1.
 Staging path is fixed in helper.conf, never taken from the request. Helper safety
 checks: files ≤ 1 MiB, UTF-8, no NUL; clients file must consist only of `client <name> {`
 blocks containing whitelisted keys (ipaddr, ipv4addr, ipv6addr, secret, shortname,
@@ -1515,3 +1517,72 @@ complete on the FreeRADIUS side and bench-tested with a stand-in.
   injection through the user name; the SQL audit checks the new hex-only call.
 - **Upgrade.** `--phase postgres` (tables, function), `app`, and `freeradius` with a restart (new
   virtual server, new policy branches). Nothing changes until a provider and a rule are configured.
+
+### 29.1 Provider installs: signed catalog and helper actions
+
+The plumbing for installing a provider on this server (the portal's install pages and the Duo
+installer itself follow in the next step).
+
+- **Catalog.** `integrations/catalog.json`: `{"format": 1, "serial": N, "entries": [...]}`; each
+  entry `provider` (known to the helper: `duo`), `version` (X.Y.Z), `file`
+  (`duoauthproxy-<version>-src.tgz`), `url` (exactly `https://dl.duosecurity.com/` + file),
+  `size`, `sha256`, `fips` (bool; `true` only with `fips_tested`, the platforms checked),
+  `withdrawn` (bool), optional `min_radius_admin`. Edited only with `tools/integrations/catalog.py`
+  (`add` needs the vendor's published SHA-256 and the vendor's file name and refuses when they
+  differ; `fips`, `withdraw`; each change bumps `serial`). `tools/release/make-release.sh` signs it
+  with the update key (ECDSA P-384, SHA-384; checked against the pinned public key) and
+  `make-bundle.sh --catalog-sig` puts `integrations/catalog.json.sig` into the bundle; an invalid
+  catalog stops the release. The `app` phase installs `integrations/` as
+  `/opt/radius-admin/integrations/` (root, 0644; `*.sh` 0755) and removes a stale signature when
+  installing from a checkout (no signature: no catalog).
+- **Helper.conf** (defaults): `integration_dir = /var/lib/radius-admin/integrations` (owned by
+  `integration_owner = radius-admin`, created by the installer, 0750), `integration_catalog =
+  /opt/radius-admin/integrations/catalog.json`, `integration_fetch_unit`,
+  `integration_install_unit`, `integration_max_mib = 128`, `integration_log_dir =
+  /var/log/radius-admin`, `duo_dir = /opt/duoauthproxy`. The helper knows per provider the file
+  pattern, the download prefix, its service (`duoauthproxy.service`), its address (127.0.0.1:18120),
+  its API host pattern (`api-*.duosecurity.com`) and its build packages; the request only names the id.
+- **Catalog checks** (every action that uses it). The shipped catalog and `.sig` must be
+  root-owned, writable only by root, ≤ 256 KiB, and verify with `update_pubkey`
+  (`openssl dgst -sha384 -verify` on a private copy); every entry must match the provider's rules or
+  the catalog is refused. The helper keeps the newest verified catalog in its work dir
+  (`integrations-catalog.json` + `.sig`): a shipped catalog replaces it only with a higher serial; a
+  lower serial, or the same serial with other content, is ignored with a message (a downgrade cannot
+  bring back a withdrawn build). Without a verified catalog: serial 0, no entries.
+- **Actions** (section 6 additions):
+  - `integration_status` → `{"fips_enabled", "integrations": {id: {label, installed (from
+    <duo_dir>/.radius-admin, root-owned: version, sha256, verified, installed, fips), service_active,
+    listening, state}}}`; an install whose unit no longer runs is marked failed.
+  - `integration_catalog` → `{serial, source: release|kept|none, fips_enabled, entries, message}`.
+  - `integration_preflight {"id", "api_host"?}` → `{ready, checks: [{check, ok, detail}]}`: free
+    space (≥ 1 GiB) for `duo_dir`'s parent and the work dir, OS (Ubuntu/Debian from
+    `/etc/os-release`, read not sourced), missing build packages (`dpkg-query`), and with a valid
+    `api_host` a TCP connection to port 443. Read-only.
+  - `integration_fetch {"id", "version"}` → starts `<integration_fetch_unit>@<id>-<version>.service`.
+    Refused for a withdrawn build, and in FIPS mode for any build the catalog does not list as FIPS.
+  - `integration_install {"id", "file", "sha256"?, "actor"?}`: `file` must match the provider's
+    pattern; it is opened in `integration_dir` (which must belong to `integration_owner` and not be
+    world-writable) with O_NOFOLLOW, must be a regular single-linked file of that user ≤
+    `integration_max_mib`, and is copied into `<work_dir>/integration/<id>/` (root 0700) while
+    hashing (SHA-256). A catalog entry with that hash → `verified: catalog` (size and version must
+    match; withdrawn, a non-FIPS entry in FIPS mode, or `min_radius_admin` above the installed build
+    → refused). Not in the catalog: refused in FIPS mode; otherwise refused with the file's SHA-256
+    in the message unless `sha256` equals it → `verified: pasted-hash`. Writes `request.json` (id,
+    version, file, sha256, size, verified, fips, catalog_serial), the state (`queued`, actor) and
+    starts `<integration_install_unit>@<id>.service`; refused while that unit runs.
+  - `integration_log {"id", "offset"?}`: as `update_log`, for the log the state names
+    (`integration-<id>-<YYYYmmddTHHMMSSZ>.log` in `integration_log_dir`).
+- **Download** (`radius_admin.integration_fetch`, unit `radius-admin-integration-fetch@.service`:
+  radius-admin, the update check's sandbox, writes only `integration_dir`, `HTTPS_PROXY` from
+  `update.env`). Instance `<provider>-<X.Y.Z>`; downloads `https://dl.duosecurity.com/duoauthproxy-
+  <version>-src.tgz` only (a redirect off that host is refused) into `integration_dir`, checks size
+  and SHA-256 when the shipped catalog lists the build, keeps one build per provider, and reports in
+  `integration_dir/fetch-<provider>.json` (state downloading|done|failed, version, file, size,
+  sha256, listed, message). App config: `integration_dir`, `integration_catalog`.
+- **Install** (`deploy/integration-install.sh` → `/usr/local/libexec/radius-admin/radius-admin-
+  integration-install`, unit `radius-admin-integration-install@.service`, root, 1 h timeout): checks
+  the copy against `request.json` again (SHA-256, size, id), runs the release's root-owned
+  `/opt/radius-admin/integrations/<id>/install.sh REQUEST BUILD` (refused when missing, a symlink or
+  writable by others), records `installing` / `done` / `failed` with the log path in
+  `integration-state.json`, and removes the copy.
+- **Units.** The helper unit may read `/var/lib/radius-admin/integrations`.

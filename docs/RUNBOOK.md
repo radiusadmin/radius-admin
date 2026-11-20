@@ -847,6 +847,21 @@ Upgrade to this release: `sudo ./deploy/install.sh --phase postgres`, `--phase a
 `--phase freeradius --restart-freeradius` in a maintenance window. Nothing changes until a provider
 and a rule are configured.
 
+**Provider builds and the catalog.** Builds of a provider installed on this server (Duo) are
+checked against `/opt/radius-admin/integrations/catalog.json`, which every release signs with the
+update key (`catalog.json.sig` next to it). The helper keeps the newest catalog it has seen
+(`/var/lib/radius-admin-helper/integrations-catalog.json`), so a downgrade does not bring back a
+withdrawn build. Downloads land in `/var/lib/radius-admin/integrations/` (status in
+`fetch-<provider>.json`, unit `radius-admin-integration-fetch@<provider>-<version>`), installs run
+as `radius-admin-integration-install@<provider>` with the log in
+`/var/log/radius-admin/integration-<provider>-<time>.log`. A checkout (not a release bundle) has no
+signed catalog: builds then need the SHA-256 entered, and nothing installs in FIPS mode.
+
+Maintainers add a build with `tools/integrations/catalog.py add duo X.Y.Z <downloaded file>
+--vendor-sha256 <value from the vendor's checksum page>` (refused unless both agree), mark it
+FIPS-capable only after the FIPS VM check (`catalog.py fips duo X.Y.Z <platform>`), and withdraw a
+bad one with `catalog.py withdraw duo X.Y.Z`; the next release signs the catalog.
+
 ### 6.10 Device profiles (switches from other vendors)
 
 A **device profile** says which attributes this server sends to a RADIUS client (VLAN

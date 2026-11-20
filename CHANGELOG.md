@@ -17,6 +17,10 @@ release, so previews sort after it.
   Authentication Proxy (on this server, password checked here before the push) is in place;
   installing Duo from the portal follows. Logins that need a second factor fail closed. Auth log
   methods `pap-admin+mfa` and `admin-ldap+mfa`.
+- **Signed integrations catalog.** Releases carry a catalog of provider builds this project has
+  checked, signed with the update key. The root helper can download a provider build, check it
+  against the catalog (or, outside FIPS mode, a SHA-256 the admin enters) and hand it to an install
+  unit; FIPS mode accepts only builds the catalog lists as FIPS-capable. The install pages follow.
 
 ### Changed
 - **Licence: from the GNU AGPL to the Business Source License 1.1 (source available).**

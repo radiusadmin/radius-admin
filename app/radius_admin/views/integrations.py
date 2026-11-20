@@ -75,6 +75,8 @@ def _remote_form(existing):
     except ValueError as e:
         msg = str(e)
         key = "port" if "port" in msg else "timeout" if "timeout" in msg else "address"
+        if key == "address" and "not a network" not in msg:
+            msg = "Enter one IPv4 or IPv6 address, for example 192.0.2.50."
         errors.setdefault(key, msg.split(": ", 1)[-1])
     return v, (secret or None), errors
 

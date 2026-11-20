@@ -50,7 +50,8 @@ R=$W/repo
 mkdir "$R"
 (cd "$ROOT" && git ls-files -z | xargs -0 -I{} cp --parents -a {} "$R/")
 for f in tools/release/build-version.sh tools/release/make-release.sh tools/release/release-notes.py \
-         VERSION CHANGELOG.md tools/package/make-bundle.sh tools/lib/fr-release.sh; do
+         VERSION CHANGELOG.md tools/package/make-bundle.sh tools/lib/fr-release.sh \
+         integrations/catalog.json tools/integrations/catalog.py; do
     install -D -m "$(stat -c %a "$ROOT/$f")" "$ROOT/$f" "$R/$f"
 done
 cp "$ROOT/.gitignore" "$R/"
@@ -82,6 +83,12 @@ b=$(tar -xzOf "$W/out1/radius-admin-$ver.tar.gz" radius-admin/BUILD.json 2>/dev/
 [[ $(python3 -c 'import json,sys; d=json.loads(sys.argv[1]); print(d["version"], d["channel"])' "$b") == "$BASE-dev.0 dev" ]] \
     && grep -qx "radius-admin/packages/$deb" <<<"$(tar -tzf "$W/out1/radius-admin-$ver.tar.gz")" \
     && pass "bundle carries BUILD.json and the FreeRADIUS package" || fail "bundle contents: $b"
+mkdir -p "$W/cat1"
+tar -xzf "$W/out1/radius-admin-$ver.tar.gz" -C "$W/cat1" radius-admin/integrations/catalog.json \
+    radius-admin/integrations/catalog.json.sig 2>/dev/null
+openssl dgst -sha384 -verify "$R/deploy/keys/update-signing.pem" -signature "$W/cat1/radius-admin/integrations/catalog.json.sig" \
+    "$W/cat1/radius-admin/integrations/catalog.json" >/dev/null 2>&1 \
+    && pass "bundle carries the integrations catalog, signed with the pinned key" || fail "catalog signature in the bundle"
 
 (cd "$R" && g tag "v$ver" && echo x >> README.md && g commit -qam "Docs only")
 ver2=$(cd "$R" && UPDATE_SIGNING_KEY=$(cat "$W/key.pem") "$MR" dev "$W/out2" "v$ver" 2>/dev/null)
@@ -99,8 +106,33 @@ out=$(cd "$R" && UPDATE_SIGNING_KEY=$(cat "$W/other.pem") "$MR" dev "$W/out4" 2>
     && pass "a key that is not the pinned one is refused before anything is written" || fail "wrong key: $out"
 out=$(cd "$R" && UPDATE_SIGNING_KEY=$(cat "$W/p256.pem") "$MR" dev "$W/out5" 2>&1)
 [[ $? -ne 0 ]] && grep -q 'not an ECDSA P-384' <<<"$out" && pass "a P-256 key is refused" || fail "p256: $out"
+(cd "$R" && echo '{"format": 1, "serial": 0, "entries": []}' > integrations/catalog.json && g commit -qam "bad catalog")
+out=$(cd "$R" && UPDATE_SIGNING_KEY=$(cat "$W/key.pem") "$MR" dev "$W/out7" 2>&1)
+[[ $? -ne 0 ]] && grep -q 'catalog' <<<"$out" && [[ ! -e $W/out7/manifest.json ]] \
+    && pass "an invalid integrations catalog stops the release" || fail "bad catalog: $out"
 out=$(cd "$R" && UPDATE_SIGNING_KEY="" "$MR" dev "$W/out6" 2>&1)
 [[ $? -ne 0 ]] && grep -q 'empty' <<<"$out" && pass "no key, no release" || fail "empty key: $out"
+
+# ------------------------------------------------------------------ tools/integrations/catalog.py
+C=$ROOT/tools/integrations/catalog.py
+printf '{"format": 1, "serial": 1, "entries": []}\n' > "$W/cat.json"
+mkdir -p "$W/dl"; printf 'duo build\n' > "$W/dl/duoauthproxy-6.7.0-src.tgz"
+h=$(sha256sum "$W/dl/duoauthproxy-6.7.0-src.tgz" | cut -d' ' -f1)
+out=$(python3 -I "$C" --catalog "$W/cat.json" add duo 6.7.0 "$W/dl/duoauthproxy-6.7.0-src.tgz" --vendor-sha256 "$(printf '0%.0s' {1..64})" 2>&1)
+[[ $? -ne 0 && $out == *"does not match the vendor"* ]] && pass "catalog add refuses a file whose SHA-256 differs from the vendor's" \
+    || fail "catalog add mismatch: $out"
+cp "$W/dl/duoauthproxy-6.7.0-src.tgz" "$W/dl/renamed.tgz"
+python3 -I "$C" --catalog "$W/cat.json" add duo 6.7.0 "$W/dl/renamed.tgz" --vendor-sha256 "$h" >/dev/null 2>&1 \
+    && fail "catalog add accepted a renamed file" || pass "catalog add wants the vendor's file name"
+python3 -I "$C" --catalog "$W/cat.json" add duo 6.7.0 "$W/dl/duoauthproxy-6.7.0-src.tgz" --vendor-sha256 "$h" >/dev/null \
+    && python3 -I "$C" --catalog "$W/cat.json" fips duo 6.7.0 ubuntu-24.04-pro-fips >/dev/null \
+    && python3 -I "$C" --catalog "$W/cat.json" withdraw duo 6.7.0 >/dev/null
+[[ $(m "$W/cat.json" 'd["serial"], d["entries"][0]["fips"], d["entries"][0]["withdrawn"], d["entries"][0]["sha256"] == "'"$h"'"') == "(4, True, True, True)" ]] \
+    && pass "catalog add, fips and withdraw each bump the serial" || fail "catalog edits: $(cat "$W/cat.json")"
+python3 -I "$C" --catalog "$W/cat.json" sign "$W/key.pem" >/dev/null \
+    && python3 -I "$C" --catalog "$W/cat.json" verify "$R/deploy/keys/update-signing.pem" >/dev/null \
+    && ! python3 -I "$C" --catalog "$W/cat.json" verify <(openssl pkey -in "$W/other.pem" -pubout 2>/dev/null) >/dev/null 2>&1 \
+    && pass "catalog sign and verify (another key does not verify)" || fail "catalog sign/verify"
 
 echo; (( fails == 0 )) && echo "all release checks passed" || echo "$fails check(s) FAILED"
 exit $(( fails > 0 ))

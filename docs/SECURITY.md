@@ -413,6 +413,16 @@ tokens and RADIUS secrets are never logged; the helper redacts `secret = …` an
   warns when there is none. Exemptions and rule changes are audited (`integration.*`).
 - **Live decision.** `radius_admin_mfa_hex` gets the user name and the client shortname as hex only
   (rule 2); the bench injection cases cover it.
+- **Provider builds** (section 29.1). A build is installed only when its SHA-256 matches an entry of
+  the integrations catalog signed with the update key (ECDSA P-384), or, in standard mode only, the
+  SHA-256 the admin entered after comparing it with the vendor's published value (recorded as
+  `pasted-hash`). In FIPS mode only catalog entries marked FIPS-capable are accepted, by the helper,
+  whatever the portal sends. The helper keeps the newest catalog (serial) it has verified, so an
+  older release cannot reinstate a withdrawn build. The download unit is unprivileged, reaches only
+  the vendor's fixed host, and its output is never trusted: the helper copies the file into its own
+  root-only directory (O_NOFOLLOW, single link, owner and size checked) and hashes that copy; the
+  install unit checks it again and runs only the release's root-owned installer. The provider id is
+  the only thing the request chooses; file names, URLs, services and ports are fixed in the helper.
 
 ## Universal edition additions (SPEC section 14)
 

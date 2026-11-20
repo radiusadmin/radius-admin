@@ -43,6 +43,10 @@ DEFAULTS = {
     "update_api": "https://api.github.com",
     "update_dir": "/var/lib/radius-admin/updates",
     "build_file": "/opt/radius-admin/BUILD.json",
+    # Second-factor providers (SPEC section 29): downloads and uploads of provider builds
+    # (read by the root helper), and the signed catalog this release ships
+    "integration_dir": "/var/lib/radius-admin/integrations",
+    "integration_catalog": "/opt/radius-admin/integrations/catalog.json",
 }
 
 _BOOL = {k for k, v in DEFAULTS.items() if isinstance(v, bool)}
