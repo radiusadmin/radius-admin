@@ -42,15 +42,29 @@ so there is time to arrange a licence.
 
 ## Exceptions
 
-Schools, universities, non-profits and similar cases can ask for a free or discounted licence.
-Exceptions are granted case by case, in writing.
+Organizations with special circumstances can ask for an exception. Exceptions are granted
+case by case, in writing.
+
+## Prices
+
+A commercial licence is an annual subscription per organization, priced by headcount (counted
+as described above). Every tier includes every feature, unlimited servers and devices, and all
+updates published during the subscription.
+
+| Headcount | Price per year |
+|---|---|
+| 0–49 | Free (no licence needed) |
+| 50–249 | USD 1,000 |
+| 250–999 | USD 4,000 |
+| 1,000–4,999 | USD 10,000 |
+| 5,000 or more | On request |
 
 ## How to get a commercial licence
 
-Commercial licences are being set up. Until a price list is published, open a private
+Commercial licences are being set up. Until a licensing address is published, open a private
 conversation through the repository (see "Contact" on the project page) and describe your
 organization and deployment.
-<!-- TODO before the first BSL release: licensing contact address and price list. -->
+<!-- TODO before the first BSL release: licensing contact address. -->
 
 ## Older versions and the future
 
