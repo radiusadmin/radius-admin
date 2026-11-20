@@ -115,7 +115,7 @@
         <ul>
           <li>Access rules: directory group to VLAN</li>
           <li>MAB devices and approvals from the unknown-device queue</li>
-          <li>Switch administrator accounts</li>
+          <li>Device administrator accounts and the directory groups allowed to log in</li>
           <li>Settings</li>
         </ul>
         <p class="fine">No restart. A rule tester shows which rule would match before a device ever tries.</p>
@@ -260,7 +260,7 @@
     <div class="tour tour-flip">
       <div class="tour-copy">
         <h3>A dashboard that says what is left to do</h3>
-        <p>After the install, a setup checklist tracks what is still to configure: RADIUS clients, access rules, the switch-admin subnet and a first apply. Single sign-on, RadSec, switch monitoring and alert e-mail are optional steps.</p>
+        <p>After the install, a setup checklist tracks what is still to configure: RADIUS clients, access rules, the device admin subnet and a first apply. Single sign-on, RadSec, switch monitoring and alert e-mail are optional steps.</p>
         <p>Day to day it shows whether FreeRADIUS is running, whether the configuration is in sync, and the most recent rejects.</p>
       </div>
       <figure class="con" aria-label="The dashboard">
@@ -293,7 +293,7 @@
           <li>Device profiles per RADIUS client: built-in Cisco Catalyst 1200/1300 and generic RFC 3580 profiles, custom profiles copied and edited in the console, JSON export and import, and a dictionary check of attribute names.</li>
           <li>Access rules for wired or per-SSID connections, with an optional role and a rule tester.</li>
           <li>MAB devices from wired ports and wireless access points, and the unknown-device approval queue.</li>
-          <li>Switch administrator accounts, PBKDF2-hashed.</li>
+          <li>Device administrator logins for switches, access points and firewalls: local accounts, PBKDF2-hashed, or members of chosen directory groups with their directory password over LDAPS.</li>
           <li>Custom unlang policy for administrators, checked before it is installed.</li>
         </ul>
       </div>
@@ -456,7 +456,7 @@ sudo ./deploy/install.sh --answers site.yaml</code></pre>
         </li>
         <li>
           <h3>Follow the setup checklist</h3>
-          <p>Add RADIUS clients, create access rules, set the switch-admin subnet and apply.</p>
+          <p>Add RADIUS clients, create access rules, set the device admin subnet and apply.</p>
         </li>
       </ol>
     </div>
