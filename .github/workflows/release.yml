@@ -5,7 +5,8 @@ name: Release
 # UPDATE_SIGNING_KEY secret and publish it as a GitHub release. main and testing publish after
 # CI passes on a push (main only when VERSION changes); dev publishes only when started by
 # hand (Actions -> Release -> Run workflow on dev), for a commit whose CI passed. testing and
-# dev keep their newest 3 builds.
+# dev keep their newest 3 builds. Only the build job runs in the `release` environment, and
+# only when the version check finds a new version, so a reviewer is asked only for a real build.
 on:
   workflow_run:
     workflows: [CI]
@@ -25,22 +26,27 @@ defaults:
     shell: bash
 
 jobs:
-  release:
-    name: Signed build
+  # Decides whether there is anything to publish, outside the release environment, so a push
+  # that publishes nothing (a main merge without a VERSION change) never waits for a reviewer.
+  check:
+    name: Version check
     if: >-
       (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success'
        && github.event.workflow_run.event == 'push')
       || (github.event_name == 'workflow_dispatch' && github.ref_name == 'dev')
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    environment: release
+    timeout-minutes: 10
     permissions:
-      contents: write
+      contents: read
       actions: read
     env:
       CHANNEL: ${{ github.event.workflow_run.head_branch || github.ref_name }}
       SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
       GH_TOKEN: ${{ github.token }}
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      prev: ${{ steps.v.outputs.prev }}
+      publish: ${{ steps.v.outputs.exists != 'true' }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -81,9 +87,28 @@ jobs:
           esac
           echo "prev=$prev" >> "$GITHUB_OUTPUT"
           echo "Building $ver for $CHANNEL (previous: ${prev:-none})"
+
+  release:
+    name: Signed build
+    needs: check
+    if: needs.check.outputs.publish == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: release
+    permissions:
+      contents: write
+      actions: read
+    env:
+      CHANNEL: ${{ github.event.workflow_run.head_branch || github.ref_name }}
+      SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.SHA }}
+          fetch-depth: 0
       - name: Signing key present
         id: key
-        if: steps.v.outputs.exists != 'true'
         env:
           KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
         run: |
@@ -105,11 +130,11 @@ jobs:
         if: steps.key.outputs.ok == 'true'
         env:
           UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
-        run: tools/release/make-release.sh "$CHANNEL" "$RUNNER_TEMP/release" "${{ steps.v.outputs.prev }}"
+        run: tools/release/make-release.sh "$CHANNEL" "$RUNNER_TEMP/release" "${{ needs.check.outputs.prev }}"
       - name: Publish
         if: steps.key.outputs.ok == 'true'
         run: |
-          v=${{ steps.v.outputs.version }}
+          v=${{ needs.check.outputs.version }}
           OUT=$RUNNER_TEMP/release
           flags=(--latest)
           if [ "$CHANNEL" != main ]; then flags=(--prerelease --latest=false); fi
