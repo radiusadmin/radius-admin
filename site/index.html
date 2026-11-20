@@ -1,0 +1,511 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; script-src 'self'; font-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'">
+<meta name="referrer" content="no-referrer">
+<title>radius-admin: a secure web console for FreeRADIUS</title>
+<meta name="description" content="radius-admin turns a FreeRADIUS 3.2 server into a network access control service you run from the browser: 802.1X, MAB, RadSec and switch logins, audited and MFA-protected. Free software under the AGPL.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="preload" href="fonts/IBMPlexSans-SemiBold-Latin1.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="site.css">
+<script src="site.js" defer></script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="top">
+  <div class="wrap top-in">
+    <a class="brand" href="#top" aria-label="radius-admin, top of page">
+      <svg class="mark" viewBox="0 0 22 22" width="22" height="22" aria-hidden="true" focusable="false">
+        <rect class="mark-bg" width="22" height="22" rx="3"/>
+        <rect class="mark-dot" x="5" y="5" width="4" height="4"/>
+        <rect class="mark-dot" x="13" y="5" width="4" height="4"/>
+        <rect class="mark-dot" x="5" y="13" width="4" height="4"/>
+        <rect class="mark-amber" x="13" y="13" width="4" height="4"/>
+      </svg>
+      <span>radius-admin</span>
+    </a>
+    <nav class="top-nav" aria-label="Sections">
+      <a href="#use-cases">Use cases</a>
+      <a href="#console">Console</a>
+      <a href="#how">How it works</a>
+      <a href="#security">Security</a>
+      <a href="#status">Status</a>
+    </nav>
+    <div class="top-cta">
+      <a class="btn btn-small" href="#install">Install</a>
+      <a class="btn btn-small btn-quiet" href="https://github.com/radiusadmin/radius-admin">GitHub</a>
+    </div>
+  </div>
+</header>
+
+<main id="main">
+
+<!-- ================================================================ hero -->
+<section class="hero" id="top">
+  <div class="wrap hero-grid">
+    <div class="hero-copy">
+      <p class="status-line"><span class="chip">Version <span class="ver">0.2.3</span></span> <span class="chip">Early development</span> <span class="chip">Free software, AGPL-3.0</span></p>
+      <h1>A secure web console for FreeRADIUS.</h1>
+      <p class="lede">radius-admin turns a FreeRADIUS 3.2 server into a network access control service you run from the browser. 802.1X, MAB, RadSec and switch logins live in one audited, role-based, MFA-protected portal, instead of hand-edited configuration files and SQL tables.</p>
+      <p class="lede">Every change is validated before FreeRADIUS sees it, and rolled back automatically if FreeRADIUS does not come back up.</p>
+      <p class="hero-actions">
+        <a class="btn btn-primary" href="#install">Install steps</a>
+        <a class="btn" href="https://github.com/radiusadmin/radius-admin">View the code on GitHub</a>
+      </p>
+      <p class="fine">Runs on Ubuntu 24.04 LTS with FreeRADIUS 3.2.10, PostgreSQL 16 and nginx. No pip, no npm.</p>
+    </div>
+
+    <figure class="apply" id="safe-apply" data-outcome="ok" aria-labelledby="apply-cap">
+      <figcaption id="apply-cap"><strong>Safe apply</strong> <span>What happens when you click Apply</span></figcaption>
+      <ol class="rail">
+        <li class="step step-staged">
+          <p class="step-t">Staged <span class="tag tag-warn">waiting for Apply</span></p>
+          <p class="step-d">You changed a RADIUS client in the console. FreeRADIUS has not seen it yet.</p>
+        </li>
+        <li class="step">
+          <p class="step-t">Validate</p>
+          <p class="step-d">The root helper runs <code class="nb">radiusd -XC</code> on a copy of the configuration with the new files in place. If that fails, nothing is touched.</p>
+        </li>
+        <li class="step">
+          <p class="step-t">Back up and install</p>
+          <p class="step-d">The current files go to a timestamped backup. The new ones are installed atomically.</p>
+        </li>
+        <li class="step">
+          <p class="step-t">Restart</p>
+          <p class="step-d">FreeRADIUS restarts with the new configuration.</p>
+        </li>
+        <li class="step step-check">
+          <p class="step-t">Check</p>
+          <p class="step-d">The helper waits up to 15 seconds for the service to be active and listening on UDP 1812.</p>
+        </li>
+        <li class="step step-end step-ok">
+          <p class="step-t"><span class="when">If it listens:</span> Live <span class="tag tag-ok">applied</span></p>
+          <p class="step-d">FreeRADIUS is answering with the new configuration. The backup stays available for a manual roll back.</p>
+        </li>
+        <li class="step step-end step-fail">
+          <p class="step-t"><span class="when">If it does not:</span> Rolled back <span class="tag tag-danger">apply failed</span></p>
+          <p class="step-d">The helper restores the backup and restarts FreeRADIUS with it. The network keeps authenticating on the last good configuration, and your change stays staged.</p>
+        </li>
+      </ol>
+      <div class="apply-ctl" hidden>
+        <span class="apply-ctl-l" id="apply-ctl-l">Play it:</span>
+        <div class="seg" role="group" aria-labelledby="apply-ctl-l">
+          <button type="button" data-play="ok" aria-pressed="true">FreeRADIUS comes back</button>
+          <button type="button" data-play="fail" aria-pressed="false">FreeRADIUS does not start</button>
+        </div>
+      </div>
+      <p class="sr-only" aria-live="polite" id="apply-live"></p>
+    </figure>
+  </div>
+</section>
+
+<!-- ====================================================== live vs staged -->
+<section class="band" id="live-staged" aria-labelledby="ls-h">
+  <div class="wrap">
+    <h2 id="ls-h">You always know whether a change is live</h2>
+    <p class="sec-lede">FreeRADIUS reads access decisions straight from PostgreSQL, so most edits need no restart. The few that do are held back until you apply them. The console uses one colour for each, and so does this page.</p>
+    <div class="ls-grid">
+      <div class="ls ls-live">
+        <p class="ls-k"><span class="swatch" aria-hidden="true"></span>Live</p>
+        <h3>Takes effect on the next authentication</h3>
+        <ul>
+          <li>Access rules: directory group to VLAN</li>
+          <li>MAB devices and approvals from the unknown-device queue</li>
+          <li>Switch administrator accounts</li>
+          <li>Settings</li>
+        </ul>
+        <p class="fine">No restart. A rule tester shows which rule would match before a device ever tries.</p>
+      </div>
+      <div class="ls ls-staged">
+        <p class="ls-k"><span class="swatch" aria-hidden="true"></span>Staged</p>
+        <h3>Waits until you click Apply</h3>
+        <ul>
+          <li>RADIUS clients (switches, access points, controllers)</li>
+          <li>RadSec listener and per-client transport</li>
+          <li>Custom unlang policy</li>
+        </ul>
+        <p class="fine">You review the difference, validate, then apply. Applying restarts FreeRADIUS through the safe-apply sequence above.</p>
+      </div>
+    </div>
+    <p class="colour-note"><span class="swatch swatch-red" aria-hidden="true"></span>Red is reserved for rejects, failures and destructive actions.</p>
+  </div>
+</section>
+
+<!-- =========================================================== use cases -->
+<section class="sec" id="use-cases" aria-labelledby="uc-h">
+  <div class="wrap">
+    <h2 id="uc-h">What you can run with it</h2>
+    <p class="sec-lede">One server, several kinds of client. Each row is a setup the project covers today.</p>
+    <dl class="uc">
+      <div><dt>Computers with certificates</dt>
+        <dd>Wired and wireless 802.1X with EAP-TLS. The computer's Active Directory group decides the VLAN, per wired port or per SSID. Nested groups work.</dd></div>
+      <div><dt>People and devices with a password</dt>
+        <dd>EAP-TTLS with PAP inside, for local accounts with groups and expiry or for Active Directory accounts, using the same access rules. PEAP-MSCHAPv2 where devices need it.</dd></div>
+      <div><dt>Printers, cameras and IoT</dt>
+        <dd>MAC Authentication Bypass with a VLAN per device, optional expiry and vendor names. Unknown devices that try to connect show up in a queue for one-click approval.</dd></div>
+      <div><dt>Switch and device administrators</dt>
+        <dd>Logins over RADIUS (PAP), limited to the management subnet, with optional privilege level 15.</dd></div>
+      <div><dt>Access points across untrusted networks</dt>
+        <dd>RadSec (RADIUS over TLS) per client. Move an access point to RadSec while your switches stay on plain RADIUS.</dd></div>
+      <div><dt>Regulated environments</dt>
+        <dd>Optional FIPS mode, a hash-chained audit log of every administrative action, and printable audit reports.</dd></div>
+      <div><dt>Teams with an identity provider</dt>
+        <dd>Admins sign in to the console with SAML single sign-on (Microsoft Entra ID tested). Their role comes from group membership.</dd></div>
+    </dl>
+  </div>
+</section>
+
+<!-- ============================================================= console -->
+<section class="sec sec-tint" id="console" aria-labelledby="con-h">
+  <div class="wrap">
+    <h2 id="con-h">The console</h2>
+    <p class="sec-lede">These are redrawn from the console's own templates and stylesheet, with example data. They are illustrations, not screenshots.</p>
+
+    <div class="tour">
+      <div class="tour-copy">
+        <h3>Access rules you can test before anyone connects</h3>
+        <p>The first rule whose group matches assigns the VLAN. No match means reject. FreeRADIUS reads the rules on every authentication, so a saved change applies to the next one.</p>
+        <p>The tester asks the same database function FreeRADIUS uses, and changes nothing.</p>
+      </div>
+      <figure class="con" aria-label="Illustration of the Access rules page">
+        <div class="con-top" aria-hidden="true"><span class="con-mark"></span><span class="con-name">radius-admin</span><span class="con-host">radius.example.net</span></div>
+        <div class="con-body">
+          <p class="con-h1">Access rules</p>
+          <div class="con-panel">
+            <p class="con-h2">Test a match</p>
+            <p class="con-verdict ok">Accept, VLAN <span class="vlan">20</span></p>
+            <p class="con-small">Matched rule: order 1, wired, group <span class="mono">Wired-Staff</span>.</p>
+          </div>
+          <div class="con-panel flush">
+            <p class="con-h2 con-ph">Wired <span class="con-muted">3 rules, evaluated top to bottom</span></p>
+            <div class="con-scroll" tabindex="0" role="group" aria-label="Wired rules table"><table>
+              <thead><tr><th class="num">Order</th><th>AD group</th><th class="num">VLAN</th><th>Description</th><th>Status</th></tr></thead>
+              <tbody>
+                <tr><td class="num">1</td><td class="mono">Wired-Staff</td><td class="num"><span class="vlan">20</span></td><td>Staff computers</td><td><span class="tag tag-ok">Enabled</span></td></tr>
+                <tr><td class="num">2</td><td class="mono">Wired-Lab</td><td class="num"><span class="vlan">30</span></td><td>Lab benches</td><td><span class="tag tag-ok">Enabled</span></td></tr>
+                <tr class="is-off"><td class="num">3</td><td class="mono">Wired-Kiosks</td><td class="num"><span class="vlan">40</span></td><td>Front desk kiosks</td><td><span class="tag tag-muted">Disabled</span></td></tr>
+              </tbody>
+            </table></div>
+          </div>
+        </div>
+        <figcaption>Illustration with example data</figcaption>
+      </figure>
+    </div>
+
+    <div class="tour tour-flip">
+      <div class="tour-copy">
+        <h3>A reason for every reject</h3>
+        <p>The authentication log records every accept and reject. Open one and you get the reject reason, the client certificate, the directory groups and the access rule that matched, or the fact that none did.</p>
+        <p>Passwords are never stored.</p>
+      </div>
+      <figure class="con" aria-label="Illustration of a rejected authentication in the log">
+        <div class="con-top" aria-hidden="true"><span class="con-mark"></span><span class="con-name">radius-admin</span><span class="con-host">radius.example.net</span></div>
+        <div class="con-body">
+          <p class="con-h1">Rejected: <span class="mono">host/pc-0142.example.net</span></p>
+          <div class="con-panel callout-danger">
+            <p class="con-h2">Why it was rejected</p>
+            <p class="mono con-reason">no enabled access rule matches the computer's AD groups for this connection</p>
+          </div>
+          <div class="con-two">
+            <div class="con-panel">
+              <p class="con-h2">Request</p>
+              <dl class="kv">
+                <dt>Result</dt><dd><span class="tag tag-danger">Access-Reject</span></dd>
+                <dt>Method</dt><dd>802.1X certificate (EAP-TLS)</dd>
+                <dt>Switch</dt><dd>sw-floor2 <span class="mono con-muted">192.0.2.21</span></dd>
+                <dt>Port</dt><dd class="mono">gi14</dd>
+                <dt>Station</dt><dd class="mono">AA-BB-CC-00-01-42</dd>
+              </dl>
+            </div>
+            <div class="con-panel">
+              <p class="con-h2">Client certificate</p>
+              <dl class="kv">
+                <dt>DNS name</dt><dd class="mono">pc-0142.example.net</dd>
+                <dt>Issuer</dt><dd class="mono">CN=Example Issuing CA</dd>
+                <dt>Groups</dt><dd class="mono">Domain Computers, Wired-Kiosks</dd>
+              </dl>
+            </div>
+          </div>
+        </div>
+        <figcaption>Illustration with example data</figcaption>
+      </figure>
+    </div>
+
+    <div class="tour">
+      <div class="tour-copy">
+        <h3>Review the difference, then apply</h3>
+        <p>Changes to RADIUS clients and the custom policy are rendered into two FreeRADIUS files. The Apply page shows exactly what would change, with shared secrets masked.</p>
+        <p>Validate runs the check without installing anything. Admins can roll back to an earlier backup from the same page.</p>
+      </div>
+      <figure class="con" aria-label="Illustration of the Apply changes page">
+        <div class="con-top" aria-hidden="true"><span class="con-mark"></span><span class="con-name">radius-admin</span><span class="con-host">radius.example.net</span></div>
+        <div class="con-body">
+          <p class="con-h1">Apply changes</p>
+          <div class="con-applybar">
+            <div><p class="con-state">Changes pending</p><p class="mono con-muted con-small">policy 5d1c0a9be27f · clients a83f6e0b14cd</p></div>
+            <div class="con-btns" aria-hidden="true"><span class="con-btn">Validate</span><span class="con-btn con-btn-primary">Apply and restart</span></div>
+          </div>
+          <div class="con-panel flush">
+            <p class="con-h2 con-ph">RADIUS clients <span class="mono con-muted">/etc/freeradius/radius-admin-clients.conf</span> <span class="con-muted con-right">8 added, 0 removed</span></p>
+            <pre class="diff" tabindex="0" role="group" aria-label="Difference to be applied"><span class="d-add">+client ap-lobby {</span><span class="d-add">+	ipaddr = 198.51.100.24</span><span class="d-add">+	secret = "********"</span><span class="d-add">+	shortname = ap-lobby</span><span class="d-add">+	nas_type = other</span><span class="d-add">+	require_message_authenticator = yes</span><span class="d-add">+	limit_proxy_state = yes</span><span class="d-add">+}</span></pre>
+          </div>
+        </div>
+        <figcaption>Illustration with example data</figcaption>
+      </figure>
+    </div>
+
+    <div class="tour tour-flip">
+      <div class="tour-copy">
+        <h3>A dashboard that says what is left to do</h3>
+        <p>After the install, a setup checklist tracks what is still to configure: RADIUS clients, access rules, the switch-admin subnet and a first apply. Single sign-on, RadSec, switch monitoring and alert e-mail are optional steps.</p>
+        <p>Day to day it shows whether FreeRADIUS is running, whether the configuration is in sync, and the most recent rejects.</p>
+      </div>
+      <figure class="con" aria-label="Illustration of the dashboard">
+        <div class="con-top" aria-hidden="true"><span class="con-mark"></span><span class="con-name">radius-admin</span><span class="con-host">radius.example.net</span></div>
+        <div class="con-body">
+          <p class="con-h1">Dashboard</p>
+          <div class="con-board">
+            <div class="con-cell is-ok"><p class="l">FreeRADIUS</p><p class="v">Running</p><p class="n">FreeRADIUS Version 3.2.10</p></div>
+            <div class="con-cell is-warn"><p class="l">Configuration</p><p class="v">Changes pending</p><p class="n">Last applied 2026-11-04 09:12 by netadmin</p></div>
+          </div>
+          <div class="con-counts">
+            <span><strong>42</strong> RADIUS clients</span><span><strong>9</strong> access rules</span><span><strong>118</strong> MAB devices</span><span><strong>307</strong> live sessions</span><span class="hot"><strong>2</strong> unknown devices</span><span><strong>1,204</strong> accepts, 24 h</span><span class="hot"><strong>7</strong> rejects, 24 h</span>
+          </div>
+        </div>
+        <figcaption>Illustration with example data</figcaption>
+      </figure>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ features -->
+<section class="sec" id="features" aria-labelledby="feat-h">
+  <div class="wrap">
+    <h2 id="feat-h">Everything it does today</h2>
+    <div class="feat">
+      <div>
+        <h3>Network access</h3>
+        <ul>
+          <li>RADIUS clients with per-client Message-Authenticator and Proxy-State settings (BlastRADIUS mitigations), generated shared secrets and CSV import.</li>
+          <li>RadSec per client: TLS 1.2/1.3, certificates from your CA, an optional expected certificate name, and OCSP revocation checks.</li>
+          <li>Access rules for wired or per-SSID connections, with a rule tester.</li>
+          <li>MAB devices and the unknown-device approval queue.</li>
+          <li>Switch administrator accounts, PBKDF2-hashed.</li>
+          <li>Custom unlang policy for administrators, checked before it is installed.</li>
+        </ul>
+      </div>
+      <div>
+        <h3>Operations</h3>
+        <ul>
+          <li>Dashboard, live sessions and change of authorization: disconnect, re-authenticate, bounce port.</li>
+          <li>Authentication log with the reason for every reject, the certificate, groups and matched rule.</li>
+          <li>SNMPv3 switch monitoring with per-port 802.1X state.</li>
+          <li>Alerts by syslog and e-mail: reject spikes, switches down, RADIUS down, portal down.</li>
+          <li>Audit reports as CSV or for print and PDF.</li>
+          <li>Safe apply with automatic roll back.</li>
+        </ul>
+      </div>
+      <div>
+        <h3>Console security</h3>
+        <ul>
+          <li>Local accounts with mandatory MFA (TOTP or client certificate) and three roles: viewer, operator, admin.</li>
+          <li>Step-up re-authentication for sensitive actions, and account lockout.</li>
+          <li>SAML single sign-on with group-to-role mapping, plus local break-glass administrators.</li>
+          <li>Hash-chained, append-only audit log.</li>
+          <li>Strict Content Security Policy. Light, dark or system colour theme.</li>
+        </ul>
+      </div>
+      <div>
+        <h3>Updates</h3>
+        <ul>
+          <li>An Updates page shows the installed and latest version and the changelog in between, and installs with a click.</li>
+          <li>Database backup first, health checks after, automatic roll back.</li>
+          <li>Choose a channel (<code>main</code> for stable releases, <code>testing</code>, <code>dev</code>), notify-only or automatic updates, and a maintenance window for updates that restart FreeRADIUS.</li>
+          <li>Builds are signed in CI with ECDSA P-384. The server verifies the signature before installing.</li>
+        </ul>
+      </div>
+    </div>
+    <p class="more"><a href="https://github.com/radiusadmin/radius-admin/blob/main/CHANGELOG.md">Read the changelog</a></p>
+  </div>
+</section>
+
+<!-- ======================================================== how it works -->
+<section class="sec sec-alt" id="how" aria-labelledby="how-h">
+  <div class="wrap">
+    <h2 id="how-h">How it works</h2>
+    <p class="sec-lede">The web portal has no privileges. It writes to PostgreSQL and stages files. A small root helper is the only component that can touch FreeRADIUS, and it accepts a fixed set of requests over a local socket.</p>
+
+    <div class="arch" role="group" aria-label="Architecture diagram">
+      <div class="node n-browser"><p class="node-t">Admin browser</p><p class="node-d">On the management subnet</p></div>
+      <div class="node n-idp node-opt"><p class="node-t">Identity provider</p><p class="node-d">Optional SAML single sign-on</p></div>
+
+      <p class="link v l-https"><span>HTTPS 443, TLS 1.2/1.3</span></p>
+      <p class="link v l-saml"><span>SAML redirect and POST</span></p>
+
+      <div class="node n-edge"><p class="node-t">nftables and nginx</p><p class="node-d">Port 443 only from the management subnet. nginx terminates TLS and checks client certificates.</p></div>
+
+      <p class="link v l-sock"><span>unix socket</span></p>
+
+      <div class="node n-portal"><p class="node-t">Web portal <span class="tag tag-muted">unprivileged</span></p><p class="node-d">Flask and gunicorn, sandboxed. Stages generated files.</p></div>
+      <p class="link h l-peer"><span>peer auth, no passwords</span></p>
+      <div class="node n-pg"><p class="node-t">PostgreSQL 16</p><p class="node-d">Rules, MAB, users, logs, audit log</p><p class="via" aria-hidden="true">Portal connects with peer auth, no passwords</p></div>
+
+      <p class="link v l-json staged"><span>JSON over a local socket</span></p>
+      <p class="link v up l-sql live"><span>SQL on every authentication, request data hex-encoded</span></p>
+
+      <div class="node n-helper"><p class="node-t">Root helper <span class="tag tag-root">root</span></p><p class="node-d">Allow-list, <code class="nb">radiusd -XC</code>, backups</p></div>
+      <p class="link h l-apply staged"><span>validate, install, restart, roll back</span></p>
+      <div class="node n-fr"><p class="node-t">FreeRADIUS 3.2.10</p><p class="node-d">EAP-TLS, EAP-TTLS, PEAP, MAB, PAP. LDAPS to your directory.</p><p class="via via-staged" aria-hidden="true">Helper: validate, install, restart, roll back</p></div>
+
+      <ul class="edge-in">
+        <li><strong>Switches</strong> RADIUS, UDP 1812/1813</li>
+        <li><strong>Access points</strong> RadSec, TCP 2083</li>
+      </ul>
+    </div>
+    <p class="legend"><span><span class="swatch swatch-teal" aria-hidden="true"></span>Live path: read on every authentication</span> <span><span class="swatch swatch-amber" aria-hidden="true"></span>Staged path: only when you apply</span></p>
+    <p class="more">More detail in <a href="https://github.com/radiusadmin/radius-admin/blob/main/SPEC.md">SPEC.md</a>, the contract between the components.</p>
+  </div>
+</section>
+
+<!-- ============================================================ security -->
+<section class="sec" id="security" aria-labelledby="secu-h">
+  <div class="wrap">
+    <h2 id="secu-h">Why you can put it in front of network access</h2>
+    <p class="sec-lede">A console that controls who gets on the network is a target. These are the design rules the code is held to.</p>
+    <ol class="rules">
+      <li><h3>Only the root helper is privileged</h3>
+        <p>The web application never runs as root, never writes FreeRADIUS files and never restarts a service. It stages files and asks the helper, which checks them against an allow-list before <code class="nb">radiusd -XC</code> ever runs.</p></li>
+      <li><h3>Request data reaches SQL only as hex</h3>
+        <p>Values from a RADIUS request, such as a user name or MAC address, are hex-encoded by FreeRADIUS and decoded inside database functions. They are never interpolated into SQL text.</p></li>
+      <li><h3>MFA is mandatory</h3>
+        <p>Local accounts need TOTP or a client certificate. Sensitive actions ask for re-authentication, and repeated failures lock the account.</p></li>
+      <li><h3>Every admin action is audited</h3>
+        <p>The audit log is append-only and hash-chained with SHA-256, so a removed or altered entry breaks the chain.</p></li>
+      <li><h3>Updates are signed</h3>
+        <p>Builds are signed in CI with ECDSA P-384. The root helper verifies the signature before anything is installed, and a failed health check rolls the update back.</p></li>
+      <li><h3>A small, closed surface</h3>
+        <p>The firewall admits port 443 only from the management subnet. PostgreSQL uses peer authentication with no passwords. Dependencies are distribution packages only, and the Content Security Policy allows no inline scripts or styles.</p></li>
+    </ol>
+
+    <div class="split">
+      <div class="note">
+        <h3>FIPS mode is optional</h3>
+        <p>The cryptography is the same in both modes: SHA-2, AES, PBKDF2-HMAC-SHA256, ECDSA and TLS 1.2 or later. One FreeRADIUS build works in standard and FIPS mode. With Ubuntu Pro FIPS and FIPS mode on, the portal refuses to start unless the kernel and OpenSSL are in FIPS mode.</p>
+      </div>
+      <div class="note">
+        <h3>What it does not fix</h3>
+        <ul>
+          <li>The RADIUS protocol itself uses MD5. Per-client Message-Authenticator and RadSec reduce the exposure; plain RADIUS should stay on networks you control.</li>
+          <li>MAB is identification, not authentication. A MAC address can be copied, so give MAB devices only the access they need.</li>
+          <li>PEAP-MSCHAPv2 needs an NT hash of the password, so it is weaker. Local users have to opt in, and it is never available in FIPS mode.</li>
+        </ul>
+      </div>
+    </div>
+    <p class="more">The full account, including the cryptographic boundary and documented exceptions, is in <a href="https://github.com/radiusadmin/radius-admin/blob/main/docs/SECURITY.md">docs/SECURITY.md</a>.</p>
+  </div>
+</section>
+
+<!-- ============================================================= install -->
+<section class="sec sec-alt" id="install" aria-labelledby="inst-h">
+  <div class="wrap">
+    <h2 id="inst-h">Get started</h2>
+    <div class="inst-grid">
+      <aside class="req" aria-labelledby="req-h">
+        <h3 id="req-h">What you need</h3>
+        <ul>
+          <li><strong>Ubuntu 24.04 LTS.</strong> 2 vCPU, 4 GB RAM and 20 GB disk for a few hundred switches. Debian 12 is planned.</li>
+          <li><strong>FreeRADIUS 3.2.10 is included.</strong> The release bundle carries a package built from the signed upstream release. The installer never overwrites an existing FreeRADIUS or <code>/etc/freeradius</code>.</li>
+          <li><strong>Distribution packages only:</strong> PostgreSQL 16, nginx and Python 3.12 with its <code>python3-*</code> packages.</li>
+          <li><strong>For EAP-TLS:</strong> a CA that issues client certificates, and a RADIUS server certificate.</li>
+          <li><strong>Optional:</strong> Ubuntu Pro FIPS for FIPS mode.</li>
+        </ul>
+        <p class="fine"><a href="https://github.com/radiusadmin/radius-admin/blob/main/docs/RUNBOOK.md#12-the-bundled-freeradius-package">About the bundled FreeRADIUS package</a></p>
+      </aside>
+
+      <ol class="steps">
+        <li>
+          <h3>Check the server</h3>
+          <p>A read-only check. It changes nothing.</p>
+          <pre class="cmd" tabindex="0"><code>sudo ./deploy/preflight.sh</code></pre>
+        </li>
+        <li>
+          <h3>Install</h3>
+          <p>Run the installer with no options and answer the questions: server name, management subnet, portal address, DNS resolvers, portal certificate and the first administrator.</p>
+          <pre class="cmd" tabindex="0"><code>sudo ./deploy/install.sh</code></pre>
+          <details>
+            <summary>Unattended install with an answers file</summary>
+            <p>Put the same answers in a file. The format is described in <a href="https://github.com/radiusadmin/radius-admin/blob/main/deploy/answers.sh">deploy/answers.sh</a>.</p>
+            <pre class="cmd" tabindex="0"><code>server_name: radius.example.net
+admin_net: 192.0.2.0/24
+switch_nets: "192.0.2.0/24 198.51.100.0/24"
+listen_ip: 192.0.2.10
+resolver: "192.0.2.53"
+tls: self-signed
+admin_username: netadmin</code></pre>
+            <pre class="cmd" tabindex="0"><code>sudo ./deploy/install.sh --answers site.yaml --print-answers   # check only
+sudo ./deploy/install.sh --answers site.yaml</code></pre>
+            <p>The installer keeps your answers in <code>/etc/radius-admin/site.yaml</code> for later runs.</p>
+          </details>
+        </li>
+        <li>
+          <h3>Sign in</h3>
+          <p>Browse from the management subnet to <code>https://&lt;server name&gt;/</code>. Sign in with the one-time password the installer printed, choose your own password and set up two-factor authentication.</p>
+        </li>
+        <li>
+          <h3>Follow the setup checklist</h3>
+          <p>Add RADIUS clients, create access rules, set the switch-admin subnet and apply.</p>
+        </li>
+      </ol>
+    </div>
+    <p class="more">The full procedure, including migration from an existing FreeRADIUS server, is in the <a href="https://github.com/radiusadmin/radius-admin/blob/main/docs/RUNBOOK.md">runbook</a>. The <a href="https://github.com/radiusadmin/radius-admin#getting-started">README</a> has the same steps next to the code.</p>
+  </div>
+</section>
+
+<!-- ============================================================== status -->
+<section class="sec" id="status" aria-labelledby="st-h">
+  <div class="wrap narrow">
+    <h2 id="st-h">Where it stands</h2>
+    <p class="sec-lede">radius-admin is a young project under active development. It grew out of a console that has run a production network, and is now being turned into something anyone can install. Expect rough edges and frequent improvements.</p>
+    <h3>Current limitations</h3>
+    <ul class="limits">
+      <li><strong>One distribution.</strong> The bundled FreeRADIUS package is built for Ubuntu 24.04 on amd64. Debian 12 follows.</li>
+      <li><strong>One tested switch family.</strong> Cisco Catalyst 1200/1300 is what the project is tested against today. Vendor profiles are planned.</li>
+      <li><strong>Certificates are yours to place.</strong> The installer expects the FreeRADIUS certificates under <code>/etc/freeradius/certs/site/</code>. Generating the whole FreeRADIUS configuration is the next phase.</li>
+      <li><strong>Client-certificate MFA needs your PKI.</strong> The nginx phase expects the site CA bundle and an OCSP responder.</li>
+    </ul>
+    <p>Found something? <a href="https://github.com/radiusadmin/radius-admin/issues">Report it on GitHub</a>.</p>
+  </div>
+</section>
+
+<!-- ============================================== licence + contributing -->
+<section class="sec sec-tint" id="licence" aria-labelledby="lic-h">
+  <div class="wrap split">
+    <div>
+      <h2 id="lic-h">Licence</h2>
+      <p>Copyright © 2026 Collin Linde. radius-admin is free software under the <a href="https://github.com/radiusadmin/radius-admin/blob/main/LICENSE">GNU Affero General Public License</a>, version 3 or any later version. It is free to use, at home and in organizations.</p>
+      <p>If you run a modified version for others over a network, the AGPL asks you to offer them its source code (section 13). It comes without any warranty. Other licensing terms may be available from the copyright holder.</p>
+      <p class="fine">The release bundle also contains FreeRADIUS, a separate program under its own licence: GNU GPL version 2 or later, with parts under the LGPL. Its upstream source tarball and signature ship in the bundle, and its licence and copyright notices are installed with it. radius-admin runs and configures FreeRADIUS; it does not link to it.</p>
+    </div>
+    <div>
+      <h2>Contributing</h2>
+      <p>Contributions are welcome. Start with <a href="https://github.com/radiusadmin/radius-admin/blob/main/CONTRIBUTING.md">CONTRIBUTING.md</a>.</p>
+      <p>Pull requests can be merged once their author has accepted the <a href="https://github.com/radiusadmin/radius-admin/blob/main/CLA.md">Contributor License Agreement</a>.</p>
+      <p><a class="btn" href="https://github.com/radiusadmin/radius-admin">radiusadmin/radius-admin on GitHub</a></p>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer class="foot">
+  <div class="wrap foot-in">
+    <p>radius-admin <span class="ver">0.2.3</span> · Copyright © 2026 Collin Linde · AGPL-3.0-or-later</p>
+    <p>Made for the people who keep networks running. Set in IBM Plex, used under the <a href="fonts/OFL.txt">SIL Open Font License</a>. This page loads nothing from other sites.</p>
+  </div>
+</footer>
+</body>
+</html>

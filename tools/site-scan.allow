@@ -16,3 +16,5 @@ CLA\.md:[0-9]+:.*Collin Linde(,| transfers)
 README\.md:[0-9]+:Copyright © 2026 Collin Linde\.$
 CONTRIBUTING\.md:[0-9]+:.*Copyright is held by Collin Linde\.$
 CHANGELOG\.md:[0-9]+:- Licence: GNU AGPL version 3 or later \(copyright Collin Linde\)
+# the same copyright notice on the project site (licence section and footer)
+site/index\.html:[0-9]+:.*Copyright © 2026 Collin Linde( ·|\. radius-admin is free software)
