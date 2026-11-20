@@ -152,11 +152,10 @@ def _nav_groups(browser):
 def test_navigation_groups(browser, logged_in):
     logged_in("admin")
     g = _nav_groups(browser)
-    assert list(g) == ["Network access", "Monitoring", "Records", "Administration"]
+    assert list(g) == ["Network access", "Monitoring", "Records"]     # settings: one button at the bottom
     for item in ("RADIUS clients", "Access rules", "MAB devices", "Switch admins", "Custom policy", "Apply changes"):
         assert item in g["Network access"], item
-    for item in ("Settings", "Single sign-on", "UI admins", "Setup checklist"):
-        assert item in g["Administration"], item
+    assert all("UI admins" not in items and "Single sign-on" not in items for items in g.values())
 
 
 def test_navigation_without_administration_for_operators(browser, logged_in):

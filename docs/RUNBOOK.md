@@ -1038,7 +1038,7 @@ nothing; the Release run then shows the warning "No release published". Rename
 `## Unreleased` before the merge to `main`, or the run warns "Empty release notes" and the
 release is published without notes.
 
-**On a server.** Administration → **Updates** shows the installed and the latest build on the
+**On a server.** Settings → **Updates** shows the installed and the latest build on the
 channel, what changed in between, and whether the update restarts FreeRADIUS.
 - **Channel:** main (stable releases) for production; testing and dev for test servers.
   Switching to a channel whose newest build is older offers it as a downgrade, which needs an
