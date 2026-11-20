@@ -1079,7 +1079,8 @@ repository secret `UPDATE_SIGNING_KEY` (Settings → Secrets and variables → A
 an offline copy of `update-signing.key` somewhere safe, then delete it from the machine. Until
 both exist, CI publishes no builds and the Updates page says updates are not set up.
 Optionally require a reviewer for the `release` environment (Settings → Environments), so a
-person approves every published build.
+person approves every published build. Only the build job uses that environment, and it runs
+only for a new version, so a merge that publishes nothing never waits for a reviewer.
 
 **Releasing.** Bump `VERSION` on `dev` right after a release (for example `0.2.0`), describe
 changes under `## Unreleased` in `CHANGELOG.md`, and when releasing rename that section to
@@ -1088,7 +1089,8 @@ merge to `main` publishes `0.2.0`. To publish a `dev` build (for a test server o
 channel), open Actions → **Release** → **Run workflow**, choose the branch `dev` and run it; it
 builds the newest commit on `dev` once CI has passed for it. testing and dev keep their
 newest 3 builds. A push to `main` without a `VERSION` change publishes
-nothing; the Release run then shows the warning "No release published". Rename
+nothing: the Release run's version check shows the warning "No release published" and the
+signed build job is skipped, so there is nothing to approve. Rename
 `## Unreleased` before the merge to `main`, or the run warns "Empty release notes" and the
 release is published without notes.
 

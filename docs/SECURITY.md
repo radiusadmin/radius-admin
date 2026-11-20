@@ -277,7 +277,8 @@ material, and never by the component that talks to the network.
 - **Who can publish.** Builds are signed in the `release` job with an ECDSA P-384 key held
   only as the `UPDATE_SIGNING_KEY` secret (offline copy with the maintainer). The job refuses a
   key that does not match the public key committed in `deploy/keys/update-signing.pem`.
-  Requiring a reviewer on the `release` environment adds a second person to every release.
+  Requiring a reviewer on the `release` environment adds a second person to every release;
+  only the signing build job runs in that environment, and only for a new version.
 - **What a server trusts.** Only the public key installed with the release it runs
   (`/usr/local/share/radius-admin/update-signing.pem`, root 0644). Nothing downloaded can
   change it; a new key arrives only inside a release signed with the current one, and takes

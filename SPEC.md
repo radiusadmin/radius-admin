@@ -781,7 +781,8 @@ CSV columns (header row required, exact names, any order tolerated by name):
   has an `## Unreleased` section and one `## X.Y.Z — date` section per release. On main the
   release job warns when `vX.Y.Z` already exists (nothing is published) and when
   `CHANGELOG.md` has no `## X.Y.Z` section (the release would have no notes).
-- **Releases** (`.github/workflows/release.yml`, job in the `release` environment): main and
+- **Releases** (`.github/workflows/release.yml`; a version check job, then the build job in the
+  `release` environment, which runs only when the check finds a version not yet tagged): main and
   testing after CI passes on a push; dev only when started by hand (`workflow_dispatch` on
   `dev`; the job refuses a commit without a successful CI push run): builds the FreeRADIUS package and the bundle
   (`make-bundle.sh --channel`, which writes `BUILD.json`), then `tools/release/make-release.sh`
@@ -792,7 +793,8 @@ CSV columns (header row required, exact names, any order tolerated by name):
   assets. The key is the `UPDATE_SIGNING_KEY` secret; the script refuses a key that is not
   P-384 or does not match `deploy/keys/update-signing.pem`, the public key servers pin.
   Without the secret or the pinned key the job warns and publishes nothing. main publishes
-  only when `VERSION` changes; testing and dev keep their newest 3 releases.
+  only when `VERSION` changes (otherwise the build job is skipped and no reviewer is asked);
+  testing and dev keep their newest 3 releases.
   `restarts_freeradius` is true when `freeradius/`, `tools/package/` or
   `tools/lib/fr-release.sh` changed since the previous release on the channel (or there is
   none). Notes: the release's CHANGELOG section; previews get `Unreleased` plus the
