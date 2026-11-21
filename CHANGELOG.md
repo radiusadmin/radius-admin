@@ -89,6 +89,11 @@ release, so previews sort after it.
   (`tools/release/prev-tag.sh`). `make-release.sh` refuses such a previous tag too.
 
 ### Fixed
+- **The bundled FreeRADIUS package did not install on a stock Ubuntu 24.04 server** (0.2.4 and
+  0.2.5 too): built on a CI runner that carries apt.postgresql.org, it required
+  `libpq5 (>= 18.7-1.pgdg24.04+2)`, and every other library at the runner's exact version. The
+  package now takes minimum versions from `dpkg-shlibdeps`, the build refuses a dependency the
+  distribution archive cannot meet, and CI builds against the distribution's libpq.
 - **An interactive install stopped at "Install with these settings?"** with
   `confirm: command not found` and "aborted": every `install.sh` run without `-y` or an answers
   file failed there (since the first release). It now asks and goes ahead on `y`.

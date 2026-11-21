@@ -777,7 +777,10 @@ CSV columns (header row required, exact names, any order tolerated by name):
   mysql, sqlite, redis, rest, …) are configured out, so the package does not depend on the build
   host; the build fails unless `rlm_sql_postgresql`, `rlm_ldap`, `rlm_eap_tls`, `rlm_sql`, `rlm_files`
   and `rlm_pap` were built. Depends are the distribution packages owning the directly linked
-  libraries (≥ the build host's version); the package is built per distribution release and its
+  libraries, with the minimum versions `dpkg-shlibdeps` takes from their symbols files (never the
+  build host's version); the build fails unless every versioned dependency is in the
+  distribution's own archive (`tools/package/check-depends.sh`; CI pins libpq to the distribution
+  build, `tools/ci/distro-libpq.sh`). The package is built per distribution release and its
   version says which (`3.2.10-1~ubuntu24.04`). `Conflicts: freeradius`.
 - **The package owns no file in `/etc`.** The stock raddb ships as
   `/opt/radius-admin-freeradius/share/raddb-dist` (no test certificates: built with `PACKAGE=…`;
