@@ -73,6 +73,14 @@ OPT_OCSP_URL=${RA_OCSP_URL:-}   # set in the environment: wins over the installe
 # shellcheck source=answers.sh
 . "$HERE/answers.sh"
 
+# yes/no question (-y answers yes). Defined before the answers block below, which asks it.
+confirm() {
+    (( ASSUME_YES )) && return 0
+    local a
+    read -r -p "$1 [y/N] " a || true
+    [[ $a == y || $a == Y || $a == yes ]]
+}
+
 ALL_PHASES=(preflight packages nginx-update fr-package users postgres migrate freeradius app site nginx firewall bootstrap)
 PHASES=()
 FROM=""
@@ -250,13 +258,6 @@ fi
 if [[ ${#PHASES[@]} -eq 0 ]]; then PHASES=("${ALL_PHASES[@]}"); fi
 for p in "${PHASES[@]}"; do valid_phase "$p" || die "unknown phase '$p' (valid: ${ALL_PHASES[*]})"; done
 want() { local p; for p in "${PHASES[@]}"; do [[ $p == "$1" ]] && return 0; done; return 1; }
-
-confirm() {
-    (( ASSUME_YES )) && return 0
-    local a
-    read -r -p "$1 [y/N] " a || true
-    [[ $a == y || $a == Y || $a == yes ]]
-}
 
 # install FILE with owner/mode only if content differs (prints what changed)
 put() { # put SRC DST OWNER:GROUP MODE
