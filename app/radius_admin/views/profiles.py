@@ -18,7 +18,7 @@ bp = Blueprint("profiles", __name__, url_prefix="/profiles")
 
 MAX_IMPORT = 64 * 1024
 TEXT_FIELDS = ("id", "label", "description", "reply_vlan", "reply_admin", "reply_role", "coa_port", "coa_identify",
-               "port_rules", "setup_accounting", "setup_coa") + tuple(
+               "port_rules", "setup_accounting", "setup_coa", "setup_mfa_timeout") + tuple(
     "coa_%s_%s" % (a, k) for a in vendors.COA_ACTIONS for k in ("packet", "attrs"))
 BOOL_FIELDS = ("mab_ethernet", "mab_wireless", "coa_send_port")
 

@@ -19,6 +19,15 @@ RA_PYTHON=${RA_PYTHON:-/usr/bin/python3}
 # 1.24.0-2ubuntu7.20 (USN-9159-1). Raise this when a later nginx advisory affects the site:
 # preflight then warns and the installer's nginx-update phase (and update.sh) upgrades nginx.
 RA_NGINX_MIN_VERSION=${RA_NGINX_MIN_VERSION:-1.24.0-2ubuntu7.20}
+# FreeRADIUS cuts every home server's response_window down to max_request_time (radiusd.conf,
+# stock 30 s). The second-factor providers wait up to 60 s for the person (SPEC section 29), so
+# the freeradius phase raises max_request_time to at least this; a higher live value is kept.
+RA_FR_MAX_REQUEST_TIME=${RA_FR_MAX_REQUEST_TIME:-90}
+# A full install from a git checkout downloads the signed release of its VERSION from here
+# (<url>/v<version>/manifest.json, manifest.json.sig, radius-admin-<version>.tar.gz)
+# and unpacks it under RA_RELEASE_DIR
+RA_RELEASE_URL=${RA_RELEASE_URL:-https://github.com/radiusadmin/radius-admin/releases/download}
+RA_RELEASE_DIR=${RA_RELEASE_DIR:-/usr/local/src}
 
 if [[ -t 1 ]]; then
     C_RED=$'\e[31m'; C_GRN=$'\e[32m'; C_YEL=$'\e[33m'; C_BLD=$'\e[1m'; C_OFF=$'\e[0m'
@@ -29,6 +38,10 @@ WARNINGS=0
 FAILURES=0
 
 say()   { printf '%s\n' "$*"; }
+fr_max_request_time() { # fr_max_request_time RADIUSD_CONF: its top-level max_request_time (empty if unset)
+    sed -nE 's/^max_request_time[[:space:]]*=[[:space:]]*([0-9]+)[[:space:]]*(#.*)?$/\1/p' "$1" 2>/dev/null \
+        | tail -n1 || true
+}
 hdr()   { printf '\n%s== %s ==%s\n' "$C_BLD" "$*" "$C_OFF"; }
 ok()    { printf '  %s[ OK ]%s %s\n' "$C_GRN" "$C_OFF" "$*"; }
 info()  { printf '  [INFO] %s\n' "$*"; }
@@ -81,6 +94,57 @@ detect_bundled_fr() {
     compgen -G "$dir/radius-admin-freeradius_*~${dist}_$arch.deb" | sort -V | tail -n1 | grep .
 }
 
+# fetch_release SRC: download the release bundle of SRC/VERSION from RA_RELEASE_URL, verify
+# it (manifest signed with SRC/deploy/keys/update-signing.pem, ECDSA P-384 / SHA-384; bundle
+# SHA-384 from the manifest; no paths outside radius-admin/) and unpack it to
+# RA_RELEASE_DIR/radius-admin-<version>. Prints that directory; messages go to stderr.
+fetch_release() (   # a subshell: die and the EXIT trap stay inside
+    local src=$1 ver key base url proto w name sum listing dir stage
+    ver=$(tr -d '[:space:]' < "$src/VERSION" 2>/dev/null) || true
+    [[ $ver =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "$src/VERSION does not hold a release version (x.y.z): '$ver'"
+    key=$src/deploy/keys/update-signing.pem
+    [[ -s $key ]] || die "$key is missing: cannot verify a downloaded release"
+    command -v curl >/dev/null || die "curl is needed to download the release (apt-get install curl)"
+    base=${RA_RELEASE_URL%/}; url=$base/v$ver
+    proto='=https'; [[ $base == file://* ]] && proto='=file'
+    w=$(mktemp -d)
+    trap 'rm -rf "$w"' EXIT
+    info "downloading release v$ver from $url" >&2
+    _fetch() { curl -fsSL --proto "$proto" --tlsv1.2 --retry 3 -o "$w/$1" "$url/$1"; }
+    _fetch manifest.json && _fetch manifest.json.sig \
+        || die "release v$ver not found at $url (a development checkout? Install a release, or use --from-checkout to install this checkout as it is)"
+    openssl dgst -sha384 -verify "$key" -signature "$w/manifest.json.sig" "$w/manifest.json" >/dev/null 2>&1 \
+        || die "the manifest of release v$ver is not signed by $key"
+    read -r name sum < <("$RA_PYTHON" -I -c '
+import json, re, sys
+m = json.load(open(sys.argv[1], encoding="utf-8"))
+b = m.get("bundle") if isinstance(m, dict) else None
+v = sys.argv[2]
+if (isinstance(b, dict) and m.get("product") == "radius-admin" and m.get("version") == v
+        and b.get("name") == "radius-admin-%s.tar.gz" % v
+        and isinstance(b.get("sha384"), str) and re.fullmatch(r"[0-9a-f]{96}", b["sha384"])):
+    print(b["name"], b["sha384"])
+' "$w/manifest.json" "$ver" 2>/dev/null) || true
+    [[ -n ${sum:-} ]] || die "the manifest of release v$ver is not for radius-admin $ver"
+    _fetch "$name" || die "cannot download $url/$name"
+    [[ $(sha384sum "$w/$name" | cut -d' ' -f1) == "$sum" ]] || die "$name does not match its signed manifest (SHA-384)"
+    listing=$(tar -tzf "$w/$name") || die "$name is not a readable .tar.gz"
+    if grep -qvE '^radius-admin(/|$)' <<<"$listing"; then die "$name contains files outside radius-admin/"; fi
+    if grep -qE '(^|/)\.\.(/|$)' <<<"$listing"; then die "$name contains '..' paths"; fi
+    grep -qx 'radius-admin/deploy/install.sh' <<<"$listing" || die "$name has no deploy/install.sh"
+    grep -qx 'radius-admin/BUILD.json' <<<"$listing" || die "$name has no BUILD.json"
+    install -d -m 0755 "$RA_RELEASE_DIR"
+    dir=$RA_RELEASE_DIR/radius-admin-$ver
+    stage=$(mktemp -d "$RA_RELEASE_DIR/.radius-admin-$ver.XXXXXX")
+    tar -C "$stage" --no-same-owner -xzf "$w/$name" || { rm -rf "$stage"; die "cannot unpack $name"; }
+    chmod -R go-w "$stage/radius-admin"
+    rm -rf "$dir"
+    mv "$stage/radius-admin" "$dir"
+    rm -rf "$stage"
+    info "release v$ver verified (signed manifest, SHA-384) and unpacked to $dir" >&2
+    printf '%s\n' "$dir"
+)
+
 # Directory holding rlm_*.so of the build that $1 (radiusd) belongs to.
 detect_fr_libdir() {
     local radiusd=$1 d rp prefix
@@ -94,10 +158,21 @@ detect_fr_libdir() {
     return 1
 }
 
+# primary_ipv4_cidr: this host's main IPv4 address with its prefix (192.0.2.10/24), for the
+# installer's default management subnet. The interface of the default route first, then any other;
+# never lo (WSL puts a /32 DNS stub address on lo, which ip lists first). Empty if there is none.
+primary_ipv4_cidr() {
+    local dev
+    dev=$(ip -4 route show default 2>/dev/null | awk '{for (i = 1; i < NF; i++) if ($i == "dev") {print $(i + 1); exit}}')
+    { if [[ -n $dev ]]; then ip -o -4 addr show dev "$dev" scope global; fi
+      ip -o -4 addr show scope global; } 2>/dev/null | awk '$2 != "lo" && !f {print $4; f = 1}' || true
+    # (awk reads to the end: an early exit would kill the writer with SIGPIPE under pipefail)
+}
+
 # This host's IPv4 address inside the admin network (first match).
 detect_vlan_ip() {
     local net=${1:-$RA_ADMIN_NET}
-    ip -o -4 addr show scope global 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | while read -r a; do
+    ip -o -4 addr show scope global 2>/dev/null | awk '$2 != "lo" {print $4}' | cut -d/ -f1 | while read -r a; do
         if python3 -c 'import ipaddress,sys; sys.exit(0 if ipaddress.ip_address(sys.argv[1]) in ipaddress.ip_network(sys.argv[2]) else 1)' "$a" "$net"; then
             printf '%s\n' "$a"
         fi
@@ -156,6 +231,46 @@ live_nft() {
     [[ -n $v ]] && printf '%s\n' "$v"
 }
 
+# FIPS mode (require_fips in radius-admin.conf). Standard mode is the default; FIPS mode is an
+# explicit choice at the first install (answers "fips: on", --fips) and needs a host whose kernel
+# runs in FIPS mode. An update never changes the live setting.
+RA_APP_CONF=${RA_APP_CONF:-/etc/radius-admin/radius-admin.conf}
+RA_FIPS_ENABLED_FILE=${RA_FIPS_ENABLED_FILE:-/proc/sys/crypto/fips_enabled}
+kernel_fips() { [[ $(cat "$RA_FIPS_ENABLED_FILE" 2>/dev/null) == 1 ]]; }
+live_fips() { # live_fips -> prints on|off from the installed radius-admin.conf, or fails
+    [[ -r $RA_APP_CONF ]] || return 1
+    local v
+    v=$(awk -F= '/^[[:space:]]*\[/ { s = $0; gsub(/[][[:space:]]/, "", s) }
+        s == "app" && $1 ~ /^[[:space:]]*require_fips[[:space:]]*$/ { v = $2; gsub(/[[:space:]]/, "", v); print tolower(v); exit }' \
+        "$RA_APP_CONF")
+    case $v in
+        true|yes|1|on) echo on ;;
+        false|no|0|off) echo off ;;
+        "") echo on ;;   # key absent: the app's built-in default (config.py) is require_fips = true
+        *) return 1 ;;
+    esac
+}
+# render_app_conf EXAMPLE DST SERVER_NAME on|off: radius-admin.conf for a first install
+render_app_conf() {
+    local v=false
+    [[ $4 == on ]] && v=true
+    sed -e "s|^# server_name = .*|server_name = $3|" -e "s|^require_fips = .*|require_fips = $v|" "$1" > "$2"
+    grep -qx "require_fips = $v" "$2"
+}
+
+# render_nginx_site TEMPLATE DST LISTEN_IP SERVER_NAME ADMIN_NET RESOLVER OCSP_URL|"": the portal
+# site; without an OCSP responder the ssl_ocsp lines are left out (no revocation check)
+render_nginx_site() {
+    local tmpl=$1 dst=$2 ip=$3 name=$4 net=$5 res=$6 ocsp=$7
+    if [[ -n $ocsp ]]; then
+        sed -e "s#@OCSP_URL@#$ocsp#g" "$tmpl"
+    else
+        sed -e 's|^\([[:space:]]*\)ssl_ocsp leaf;.*|\1# no OCSP responder configured: client certificates are not checked for revocation|' \
+            -e '/^[[:space:]]*ssl_ocsp/d' "$tmpl"
+    fi | sed -e "s#@LISTEN_IP@#$ip#g" -e "s#@SERVER_NAME@#$name#g" -e "s#@ADMIN_NET@#$net#g" \
+        -e "s#@RESOLVER@#$res#g" > "$dst"
+}
+
 # DNS servers usable by nginx `resolver` (IPv4, real upstreams preferred over the stub).
 detect_resolvers() {
     local r=""
@@ -207,5 +322,14 @@ detect_firewall() {
 }
 
 pg_conf_dir() { printf '/etc/postgresql/%s/%s\n' "$RA_PG_VERSION" "$RA_PG_CLUSTER"; }
+
+# pg_cluster_port CONFDIR : the port a cluster is configured for: the last "port =" in
+# postgresql.conf and then conf.d/*.conf (read in that order, like PostgreSQL); 5432 if unset.
+pg_cluster_port() {
+    local d=$1 p
+    p=$(cat "$d/postgresql.conf" "$d"/conf.d/*.conf 2>/dev/null \
+        | sed -nE 's/^[[:space:]]*port[[:space:]]*=[[:space:]]*([0-9]+).*/\1/p' | tail -n1 || true)
+    printf '%s\n' "${p:-5432}"
+}
 
 psql_su() { runuser -u postgres -- psql -X -q -v ON_ERROR_STOP=1 "$@"; }

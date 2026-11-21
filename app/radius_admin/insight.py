@@ -62,6 +62,31 @@ REASON_HINTS = (
                                 "group membership."),
     (r"no DNS name", "The client certificate has no DNS subject alternative name, which is how the computer is "
                      "looked up in AD. Re-issue the certificate from the computer template."),
+    # second factor for device admin logins (SPEC section 29)
+    (r"refused in the second-factor chain",
+     "The Duo proxy refused the login: the password was wrong, the account is not a device admin, or the second "
+     "factor was denied or not answered. The Duo proxy's log shows which."),
+    (r"the second-factor server refused",
+     "The remote MFA server refused the login: a wrong password at that server, or the second factor was denied. "
+     "That server's log shows which."),
+    (r"second-factor provider did not answer",
+     "The second-factor provider did not answer in time. Check that it is running and reachable, that the person "
+     "answered the prompt, and the wait time under Integrations; the device's RADIUS timeout must be longer."),
+    (r"its provider is turned off",
+     "A second-factor rule names a provider that is turned off. Turn it on, choose another provider, or exempt "
+     "the account (Integrations)."),
+    (r"did not reach its provider",
+     "The provider named by the second-factor rule is not in the applied FreeRADIUS configuration yet. Apply "
+     "changes."),
+    (r"did not carry the password check",
+     "The Duo proxy accepted the login without the result of the local password check. Check that its "
+     "radius_client section passes the Class attribute through."),
+    (r"checks directory accounts only",
+     "The rule for local accounts names a remote MFA server, which cannot check a local password. Change the rule "
+     "(Integrations)."),
+    (r"could not determine whether this login needs a second factor",
+     "The database could not be asked whether this login needs a second factor (PostgreSQL unreachable?); the "
+     "login was rejected to be safe."),
     (r"outside the management subnet", "Device admin logins are accepted only from devices in the management "
                                        "subnet (Settings)."),
     (r"not in a device admin group",

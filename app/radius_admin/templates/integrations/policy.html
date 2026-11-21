@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block title %}Second-factor rules{% endblock %}
+{% block content %}
+<header class="page-head"><div><h1>Second-factor rules</h1>
+<p class="lede">Which device admin logins must be approved with a second factor. Read on every login: saving applies to the next login.</p></div></header>
+{% if unapplied %}<p class="flash flash-info">There are changes that are not applied yet. A rule that names a provider FreeRADIUS does not know yet rejects the login: <a href="{{ url_for('apply.index') }}">apply changes</a> first.</p>{% endif %}
+<form method="post" class="stack">
+  {{ m.csrf() }}
+  {% for kind in ('local', 'directory') %}{% set r = policy[kind] %}
+  <section class="panel" aria-labelledby="{{ kind }}-h">
+    <h2 id="{{ kind }}-h">{{ kind_labels[kind] }}</h2>
+    {{ m.field_error(errors, kind) }}
+    <label class="check"><input type="checkbox" name="{{ kind }}_enabled" value="1" {{ 'checked' if r.enabled else '' }}> Require a second factor</label>
+    <label for="{{ kind }}_provider">Provider</label>
+    <select id="{{ kind }}_provider" name="{{ kind }}_provider"{{ m.described(errors, kind) }}>
+      <option value="">—</option>
+      {% for p in providers.values() %}
+      <option value="{{ p.id }}" {{ 'selected' if p.id == r.provider_id else '' }}>{{ p.id }} ({{ type_labels.get(p.type, p.type) }}{{ ', off' if not p.enabled else '' }})</option>
+      {% endfor %}
+    </select>
+    {% if kind == 'local' %}<p class="small muted">Local accounts need a provider on this server (Duo Authentication Proxy): a remote server cannot check their password.</p>{% endif %}
+    <fieldset>
+      <legend>On which clients</legend>
+      <label class="check"><input type="radio" name="{{ kind }}_scope" value="all" {{ 'checked' if r.client_scope != 'selected' else '' }}> All clients</label>
+      <label class="check"><input type="radio" name="{{ kind }}_scope" value="selected" {{ 'checked' if r.client_scope == 'selected' else '' }}> Only the selected clients</label>
+      {% if clients %}
+      <div class="check-grid">
+      {% for c in clients %}
+        <label class="check"><input type="checkbox" name="{{ kind }}_clients" value="{{ c.id }}" {{ 'checked' if c.id in r.client_ids else '' }}> <span class="mono">{{ c.name }}</span></label>
+      {% endfor %}
+      </div>
+      {% endif %}
+    </fieldset>
+  </section>
+  {% endfor %}
+  <section class="panel" aria-labelledby="exempt-h">
+    <h2 id="exempt-h">Exempt local accounts</h2>
+    <label for="exempt">Local device admins that never need a second factor, one per line (at most {{ exempt_max }})</label>
+    <textarea id="exempt" name="exempt" rows="4" class="mono" aria-describedby="exempt-hint{{ ' exempt-error' if errors.exempt else '' }}"{{ ' aria-invalid=true' if errors.exempt else '' }}>{{ exempt | join('\n') }}</textarea>
+    <p id="exempt-hint" class="small muted">Keep one break-glass account here: if the provider cannot be reached, logins that need a second factor are rejected.</p>
+    {{ m.field_error(errors, 'exempt') }}
+    {% if policy['local'].enabled and not exempt %}<p class="warn-text">No local account is exempt. If the provider is unreachable, no device admin can log in.</p>{% endif %}
+  </section>
+  <div class="actions"><button type="submit" class="btn btn-primary">Save rules</button>
+  <a class="btn btn-quiet" href="{{ url_for('integrations.index') }}">Cancel</a></div>
+</form>
+{% endblock %}

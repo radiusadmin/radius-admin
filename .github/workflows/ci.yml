@@ -33,7 +33,7 @@ jobs:
           sudo apt-get install -y -q shellcheck >/dev/null
           shellcheck -S warning deploy/*.sh tests/freeradius/*.sh tests/migration/*.sh \
               tests/installer/*.sh tests/package/*.sh tests/release/*.sh tools/*.sh tools/ci/*.sh \
-              tools/lib/*.sh tools/package/*.sh tools/release/*.sh
+              tools/lib/*.sh tools/package/*.sh tools/release/*.sh integrations/*/*.sh
       - name: Site-data scan
         env:
           SITE_TERMS_CONTENT: ${{ secrets.SITE_TERMS }}
@@ -70,6 +70,8 @@ jobs:
         run: |
           mkdir -p "$LOGS"
           cd "$REPO" && sudo -E python3 -m pytest -q -p no:cacheprovider tests/helper | tee "$LOGS/helper.log"
+      - name: Licence tool tests
+        run: cd "$REPO" && sudo -E python3 -m pytest -q -p no:cacheprovider tests/licence | tee "$LOGS/licence-tool.log"
       - name: Installer answers tests
         run: cd "$REPO" && sudo bash tests/installer/test_answers.sh | tee "$LOGS/installer.log"
       - name: Installer live settings
@@ -82,18 +84,28 @@ jobs:
         run: cd "$REPO" && bash tests/installer/test_ad_join.sh | tee "$LOGS/ad-join.log"
       - name: Update install checks
         run: cd "$REPO" && sudo bash tests/installer/test_update_install.sh | tee "$LOGS/update-install.log"
+      - name: Integration install checks
+        run: cd "$REPO" && sudo bash tests/installer/test_integration_install.sh | tee "$LOGS/integration-install.log"
+      - name: Duo install checks
+        run: cd "$REPO" && sudo bash tests/installer/test_duo_install.sh | tee "$LOGS/duo-install.log"
       - name: nginx.service drop-in
         run: cd "$REPO" && bash tests/installer/test_nginx_dropin.sh | tee "$LOGS/nginx-dropin.log"
       - name: nginx security floor
         run: cd "$REPO" && bash tests/installer/test_nginx_update.sh | tee "$LOGS/nginx-update.log"
+      - name: FreeRADIUS max_request_time
+        run: cd "$REPO" && bash tests/installer/test_max_request_time.sh | tee "$LOGS/max-request-time.log"
+      - name: Installer re-runs
+        run: cd "$REPO" && sudo bash tests/installer/test_install_reruns.sh | tee "$LOGS/install-reruns.log"
       - name: Release tooling tests
         run: cd "$REPO" && sudo bash tests/release/test_release.sh | tee "$LOGS/release.log"
+      - name: Install from a checkout (signed release download)
+        run: cd "$REPO" && sudo bash tests/installer/test_fetch_release.sh | tee "$LOGS/fetch-release.log"
       - name: Count tests
         id: counts
         if: always()
         run: |
-          tools/ci/test-counts.py "$LOGS/helper.log" "$LOGS/installer.log" "$LOGS/live-settings.log" "$LOGS/ad-join.log" \
-              "$LOGS/ldap-carry-over.log" "$LOGS/eap-carry-over.log" "$LOGS/update-install.log" "$LOGS/nginx-dropin.log" "$LOGS/nginx-update.log" "$LOGS/release.log" | tee -a "$GITHUB_OUTPUT"
+          tools/ci/test-counts.py "$LOGS/helper.log" "$LOGS/licence-tool.log" "$LOGS/installer.log" "$LOGS/live-settings.log" "$LOGS/ad-join.log" \
+              "$LOGS/ldap-carry-over.log" "$LOGS/eap-carry-over.log" "$LOGS/update-install.log" "$LOGS/integration-install.log" "$LOGS/duo-install.log" "$LOGS/nginx-dropin.log" "$LOGS/nginx-update.log" "$LOGS/max-request-time.log" "$LOGS/install-reruns.log" "$LOGS/release.log" "$LOGS/fetch-release.log" | tee -a "$GITHUB_OUTPUT"
 
   package:
     name: FreeRADIUS package
@@ -112,7 +124,8 @@ jobs:
         run: |
           sudo apt-get update -q
           sudo apt-get install -y -q --no-install-recommends build-essential pkg-config dpkg-dev \
-              binutils libtalloc-dev libssl-dev libpq-dev libldap-dev curl gnupg ca-certificates file
+              binutils libtalloc-dev libssl-dev libpq-dev libldap-dev curl gnupg ca-certificates file python3-apt
+          sudo tools/ci/distro-libpq.sh
           sudo tools/package/build-freeradius-deb.sh "$GITHUB_WORKSPACE/packages" /var/tmp/ra-frpkg
       - name: Package tests (install, start, upgrade, purge)
         run: |
@@ -160,6 +173,10 @@ jobs:
           cd "$REPO"
           sudo -E python3 tests/freeradius/run-tests.py --prefix /opt/fr-3.2.10 --bench /var/tmp/ra-bench \
               --eapol-test /opt/ci-src/eapol_test | tee "$LOGS/bench.log"
+      - name: New-server install (FreeRADIUS from scratch)
+        run: |
+          cd "$REPO"
+          sudo bash tests/installer/test_blank_server.sh /opt/fr-3.2.10 /opt/ci-src/eapol_test | tee "$LOGS/blank-server.log"
       - name: Migration test
         run: |
           cd "$REPO"
@@ -170,7 +187,7 @@ jobs:
         id: counts
         if: always()
         run: |
-          tools/ci/test-counts.py "$LOGS/app.log" "$LOGS/bench.log" "$LOGS/migration.log" | tee -a "$GITHUB_OUTPUT"
+          tools/ci/test-counts.py "$LOGS/app.log" "$LOGS/bench.log" "$LOGS/blank-server.log" "$LOGS/migration.log" | tee -a "$GITHUB_OUTPUT"
           tools/ci/test-counts.py "$LOGS/bench.log" | sed 's/^/bench_/' | tee -a "$GITHUB_OUTPUT"
       - name: Collect logs
         if: failure()

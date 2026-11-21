@@ -182,6 +182,12 @@ class FakeHelper:
         self.update_state = {}          # what update_status reports as "state"
         self.key_present = True
         self.update_log = ""             # what update_log reads from (the install log)
+        # second-factor providers (SPEC section 29)
+        self.duo = {"label": "Duo Authentication Proxy", "installed": {}, "service_active": False,
+                    "listening": False, "state": {}}
+        self.catalog = {"serial": 0, "entries": [], "source": "none", "message": ""}
+        self.integration_log = ""
+        self.cert_status = {}           # what cert_status adds to its answer (SPEC section 30)
         self._sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self._sock.bind(path)
         self._sock.listen(8)
@@ -260,6 +266,38 @@ class FakeHelper:
             return {"ok": True, "action": a, "message": "ok", "state": self.update_state,
                     "log": "update-0.2.0-20261104T120000Z.log" if data else "", "offset": len(data),
                     "size": len(data), "skipped": 0, "text": data[off:].decode()}
+        if a == "integration_status":
+            return {"ok": True, "action": a, "message": "ok", "fips_enabled": False, "integrations": {"duo": self.duo}}
+        if a == "integration_catalog":
+            return dict(self.catalog, ok=True, action=a, fips_enabled=False)
+        if a == "integration_preflight":
+            checks = [{"check": "disk", "ok": True, "detail": "9000 MiB free for /opt (needs 1024 MiB)"},
+                      {"check": "os", "ok": True, "detail": "Ubuntu 24.04 LTS"}]
+            if req.get("api_host"):
+                checks.append({"check": "api", "ok": False, "detail": "cannot reach %s:443" % req["api_host"]})
+            return {"ok": True, "action": a, "message": "ok", "ready": all(c["ok"] for c in checks), "checks": checks}
+        if a == "integration_fetch":
+            return {"ok": True, "action": a, "message": "download started", "listed": False}
+        if a == "integration_install":
+            verified = "pasted-hash" if req.get("sha256") else "catalog"
+            self.duo["state"] = {"state": "queued", "action": "install", "message": "queued", "verified": verified}
+            return {"ok": True, "action": a, "message": "install started", "verified": verified,
+                    "version": "6.8.1", "sha256": req.get("sha256") or "a" * 64}
+        if a == "integration_log":
+            data = self.integration_log.encode()
+            return {"ok": True, "action": a, "message": "ok", "state": self.duo["state"],
+                    "log": "integration-duo-20261120T120000Z.log" if data else "", "offset": len(data),
+                    "size": len(data), "skipped": 0, "text": data[req.get("offset", 0):].decode()}
+        if a == "integration_remove":
+            self.duo["state"] = {"state": "queued", "action": "remove", "message": "removal queued"}
+            return {"ok": True, "action": a, "message": "removal started"}
+        if a == "integration_test":
+            return {"ok": True, "action": a, "message": "the connectivity check passed", "passed": True,
+                    "output": "The Auth Proxy was able to reach Duo\nskey [redacted]"}
+        if a == "cert_status":
+            return dict({"eap_server": None, "client_ca": None, "eap_ocsp": None, "portal_server": None,
+                         "portal_configured": False, "portal_server_name": None}, ok=True, action=a, message="ok",
+                        **self.cert_status)
         return {"ok": False, "action": a or "", "message": "unknown action"}
 
     def close(self):
@@ -297,9 +335,18 @@ def clean_db(superconn):
                     " radius_message='', radclient=''")
         cur.execute("DELETE FROM ui.setting")
         cur.execute("DELETE FROM ui.update_check")
+        # second-factor providers and rules (SPEC section 29); the two policy rows stay
+        cur.execute("UPDATE ui.mfa_policy SET enabled=false, provider_id=NULL, client_scope='all'")
+        cur.execute("DELETE FROM ui.mfa_policy_client")
+        cur.execute("DELETE FROM ui.mfa_exempt")
+        cur.execute("DELETE FROM ui.mfa_provider")
+        cur.execute("DELETE FROM ui.tls_cert")
         cur.execute("INSERT INTO ui.setting (key, value) VALUES ('admin_subnet','192.0.2.0/24'),"
                     " ('admin_priv15','false'), ('custom_policy',''),"
-                    " ('banner_text','This system is for authorized use only. Testing banner text.')")
+                    " ('banner_text','This system is for authorized use only. Testing banner text.'),"
+                    # the licence question is answered, so admins are not sent to the prompt
+                    # (SPEC section 31; tests/test_licence.py clears it)
+                    " ('licence_case','free')")
     yield superconn
 
 

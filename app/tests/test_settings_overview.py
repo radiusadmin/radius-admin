@@ -47,7 +47,8 @@ def test_settings_pages_highlight_the_button_and_link_back(browser, logged_in):
     for path in ("/settings", "/setup/", "/alerts/settings"):
         t = browser.text(browser.get(path))
         assert current(t) == ["Settings"], path
-        assert '<p class="crumb"><a href="/settings/overview">All settings</a></p>' in t, path
+        assert ('<p class="crumb"><a class="btn btn-quiet btn-small btn-back" href="/settings/overview">'
+                'All settings</a></p>') in t, path
     t = browser.text(browser.get("/alerts/"))            # the alert list stays under Monitoring
     assert current(t) == ["Alerts"] and "All settings" not in t
     t = browser.text(browser.get("/custom-policy"))      # custom policy stays under Network access

@@ -1,0 +1,14 @@
+# Removes a second-factor provider radius-admin installed (SPEC section 29.2). Started only by
+# the root helper, after it checked that FreeRADIUS no longer uses the provider.
+[Unit]
+Description=radius-admin integration remove: %i
+Documentation=file:/opt/radius-admin/docs/RUNBOOK.md
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/radius-admin/radius-admin-integration-install --remove %i
+TimeoutStartSec=600
+UMask=0077
+NoNewPrivileges=yes
+ProtectHome=yes
+PrivateTmp=yes

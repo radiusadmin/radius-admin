@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block title %}Integrations{% endblock %}
+{% block content %}
+<header class="page-head">
+  <div><h1>Integrations</h1>
+  <p class="lede">A second factor for device admin logins: FreeRADIUS sends the login to a multi-factor provider, which asks the person to approve it before the switch, access point or firewall lets them in.</p></div>
+</header>
+{{ m.apply_note() }}
+
+<section class="panel" aria-labelledby="mfa-policy-h">
+  <h2 id="mfa-policy-h">Second-factor rules</h2>
+  <p class="small muted">Read on every login: changes here apply to the next device admin login, without applying changes.</p>
+  <div class="table-wrap"><table>
+    <thead><tr><th scope="col">Accounts</th><th scope="col">Second factor</th><th scope="col">Provider</th><th scope="col">Clients</th></tr></thead>
+    <tbody>
+    {% for kind in ('local', 'directory') %}{% set r = policy[kind] %}
+    <tr>
+      <td>{{ kind_labels[kind] }}{% if kind == 'directory' and not (s.admin_directory and s.admin_directory_groups) %}<span class="cell-sub">Directory accounts are not accepted for device admin logins (Settings).</span>{% endif %}</td>
+      <td>{{ m.onoff(r.enabled, 'Required', 'Not required') }}</td>
+      <td>{% if r.provider_id %}<span class="mono">{{ r.provider_id }}</span>{% else %}—{% endif %}</td>
+      <td>{% if r.client_scope == 'selected' %}{% for cid in r.client_ids %}<span class="mono">{{ clients.get(cid, cid) }}</span>{{ ', ' if not loop.last else '' }}{% else %}none{% endfor %}{% else %}All clients{% endif %}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  <p>Exempt local accounts (break-glass, never asked for a second factor):
+    {% for u in exempt %}<span class="mono">{{ u }}</span>{{ ', ' if not loop.last else '' }}{% else %}none{% endfor %}</p>
+  {% if has_role('admin') %}<p><a class="btn" href="{{ url_for('integrations.policy') }}">Change the rules</a></p>{% endif %}
+</section>
+
+<section class="panel flush" aria-labelledby="providers-h">
+  <div class="panel-head">
+    <h2 id="providers-h">Providers</h2>
+    {% if has_role('admin') %}<div class="panel-head-actions">
+      {% if not providers|selectattr('type', 'equalto', 'duo')|list %}<a class="btn btn-primary" href="{{ url_for('integrations.duo') }}">Set up Duo</a>{% endif %}
+      {% if remote_allowed %}<a class="btn" href="{{ url_for('integrations.remote_new') }}">Add remote MFA server</a>{% endif %}
+    </div>{% endif %}
+  </div>
+{% if providers %}
+<div class="table-wrap"><table>
+  <thead><tr><th scope="col">Provider</th><th scope="col">Type</th><th scope="col">Server</th><th scope="col">Status</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead>
+  <tbody>
+  {% for p in providers %}
+  <tr class="{{ '' if p.enabled else 'is-off' }}">
+    <td><span class="mono">{{ p.id }}</span>{% if p.label %}<span class="cell-sub">{{ p.label }}</span>{% endif %}</td>
+    <td>{{ type_labels.get(p.type, p.type) }}</td>
+    <td class="mono">{% if p.type == 'duo' %}127.0.0.1 (this server){% else %}{{ p.settings.address }}:{{ p.settings.port }}{% endif %}</td>
+    <td>{{ m.onoff(p.enabled, 'On', 'Off') }}{% if p.id in in_use %}<span class="cell-sub">used by the rules</span>{% endif %}</td>
+    <td class="row-actions">{% if has_role('admin') %}
+      {% if p.type == 'radius-mfa' and remote_allowed %}<a class="btn btn-quiet btn-small" href="{{ url_for('integrations.remote_edit', pid=p.id) }}">Edit</a>{% endif %}
+      {% if p.type == 'duo' %}<a class="btn btn-quiet btn-small" href="{{ url_for('integrations.duo') }}">Open</a>{% endif %}
+      {% if p.id not in in_use and p.type != 'duo' %}{{ m.post_button(url_for('integrations.delete', pid=p.id), 'Remove', 'btn btn-danger-quiet btn-small', confirm='Remove provider ' ~ p.id ~ '?') }}{% endif %}
+    {% endif %}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table></div>
+{% else %}<p class="empty">No providers yet.</p>{% endif %}
+</section>
+
+<section class="panel" aria-labelledby="catalog-h">
+  <h2 id="catalog-h">Available integrations</h2>
+  <dl class="kv">
+    <dt>Remote RADIUS MFA server</dt>
+    <dd>Any RADIUS server that checks the password and asks for the second factor itself, for example a Network Policy Server with the Microsoft Entra multifactor extension, privacyIDEA or an Okta RADIUS agent. Serves directory accounts; FreeRADIUS still checks the device admin group.{% if not remote_allowed %} Not available in FIPS mode.{% endif %}</dd>
+    <dt>Duo Authentication Proxy</dt>
+    <dd>Installed on this server from the portal; checks local and directory accounts here, then sends a Duo push, phone call or passcode prompt.
+      <p class="catalog-action"><a class="btn {{ 'btn-primary' if has_role('admin') else '' }} btn-small" href="{{ url_for('integrations.duo') }}">{{ 'Set up Duo' if has_role('admin') else 'Duo status' }}</a></p></dd>
+    <dt>Planned</dt>
+    <dd>Okta RADIUS agent on this server, built-in authenticator codes (TOTP), privacyIDEA on this server.</dd>
+  </dl>
+  <p class="small muted">802.1X network access never uses a second factor.</p>
+</section>
+
+<section class="panel" aria-labelledby="timeout-h">
+  <h2 id="timeout-h">RADIUS timeout on the devices</h2>
+  <p>A device admin login with a second factor waits for the person to answer the push or call; Duo allows up to 60 seconds. Devices that give up sooner reject the login before it is approved. Set the timeout on each device{% if policy['local'].enabled or policy['directory'].enabled %} the rules cover{% endif %}:</p>
+  {% if timeout_hints %}
+  <dl class="kv">
+  {% for h in timeout_hints %}
+    <dt>{{ h.label }} <span class="small muted">{{ h.clients }} client{{ '' if h.clients == 1 else 's' }}</span></dt>
+    <dd>{% if h.commands %}<pre class="code">{{ h.text }}</pre>{% else %}{{ h.text }}{% endif %}</dd>
+  {% endfor %}
+  </dl>
+  {% else %}<p class="empty">No enabled RADIUS clients{% if policy['local'].enabled or policy['directory'].enabled %} covered by the rules{% endif %}.</p>{% endif %}
+  <p class="small muted">From the clients' device profiles (Network access → Device profiles). A retransmitted request is answered once; it never sends a second push.</p>
+</section>
+{% endblock %}

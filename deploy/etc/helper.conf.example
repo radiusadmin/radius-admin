@@ -27,6 +27,12 @@ radius_port = 1812
 # portal_service = nginx.service
 # portal_site = /etc/nginx/sites-enabled/radius-admin
 # portal_port = 443
+# certificates managed in the portal (SPEC section 30): the portal's TLS files, nginx for nginx -t,
+# and whether the reloaded portal must be seen serving the new certificate
+# portal_tls_dir = /etc/radius-admin/tls
+# nginx = /usr/sbin/nginx
+# systemd_run = /usr/bin/systemd-run   ; runs nginx -t as a transient unit (outside the helper's sandbox)
+# portal_verify_tls = true
 
 # updates (SPEC section 16): downloads by the update check service (owned by update_owner),
 # the pinned public key their signed manifests must verify with, and the installed build
@@ -41,8 +47,23 @@ radius_port = 1812
 # directory of the install logs (update-<version>-<time>.log) that update_log may read
 # update_log_dir = /var/log/radius-admin
 
+# second-factor providers (SPEC section 29): builds downloaded by the fetch unit or uploaded in
+# the portal (owned by integration_owner), the catalog this release ships (root-owned, with
+# catalog.json.sig signed by update_pubkey), the units, the size limit, the install logs
+# integration_dir = /var/lib/radius-admin/integrations
+# integration_owner = radius-admin
+# integration_catalog = /opt/radius-admin/integrations/catalog.json
+# integration_fetch_unit = radius-admin-integration-fetch
+# integration_install_unit = radius-admin-integration-install
+# integration_remove_unit = radius-admin-integration-remove
+# integration_max_mib = 128
+# integration_log_dir = /var/log/radius-admin
+# duo_dir = /opt/duoauthproxy
+
 # timeouts (seconds). Worst-case apply = lock + validate + 2 x (restart + wait)
 # = 10 + 30 + 2 x (20 + 15) = 110 s; must stay below the app's helper_timeout (120).
+# With a changed Duo configuration: lock + validate + 4 x (restart + wait) = 180 s; must stay
+# below the app's helper_duo_timeout (210).
 lock_timeout = 10
 validate_timeout = 30
 restart_timeout = 20

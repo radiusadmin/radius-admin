@@ -25,7 +25,7 @@ die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 [[ ${EUID:-$(id -u)} -eq 0 ]] || die "run as root (the package tree must be owned by root)"
 
 BUILD_DEPS=(build-essential pkg-config dpkg-dev binutils libtalloc-dev libssl-dev libpq-dev
-            libldap-dev curl gnupg ca-certificates file)
+            libldap-dev curl gnupg ca-certificates file python3-apt)
 missing=()
 for p in "${BUILD_DEPS[@]}"; do
     dpkg-query -W -f '${Status}' "$p" 2>/dev/null | grep -q 'install ok installed' || missing+=("$p")
@@ -93,11 +93,16 @@ FreeRADIUS $FR_VERSION, unmodified upstream release:
 configure ${cfg[*]}
 EOF
 
-# Runtime dependencies: the distribution packages that own the shared libraries the
-# binaries link directly (NEEDED), at least the version on the build host.
+# Runtime dependencies. First a check that every shared library the binaries link directly
+# (NEEDED) belongs to a distribution package; then dpkg-shlibdeps takes the minimum versions from
+# those libraries' symbols/shlibs files. Never "at least the version on the build host": a build
+# host with newer libraries (GitHub's runner has libpq5 18 from apt.postgresql.org) made a package
+# that stock Ubuntu could not install.
 declare -A deps=()
+elfs=()
 while IFS= read -r -d '' f; do
     file -b "$f" | grep -q '^ELF' || continue
+    elfs+=("$f")
     needed=$(objdump -p "$f" | awk '$1 == "NEEDED" {print $2}')
     while read -r so lib; do
         [[ $lib == "$ROOT"* ]] && continue
@@ -108,10 +113,18 @@ while IFS= read -r -d '' f; do
         deps[$own]=1
     done < <(LD_LIBRARY_PATH=$LIBDIR ldd "$f" 2>/dev/null | awk '$2 == "=>" && $3 ~ /^\// {print $1, $3}')
 done < <(find "$ROOT$PREFIX" -type f -print0)
-depends=""
-for p in $(printf '%s\n' "${!deps[@]}" | sort); do
-    depends+="${depends:+, }$p (>= $(dpkg-query -W -f '${Version}' "$p"))"
+(( ${#deps[@]} > 0 )) || die "no shared library dependencies found"
+shl=$WORK/shlibdeps
+rm -rf "$shl"; mkdir -p "$shl/debian"
+printf 'Source: %s\n\nPackage: %s\nArchitecture: any\n' "$PKG" "$PKG" > "$shl/debian/control"
+depends=$(cd "$shl" && LD_LIBRARY_PATH=$LIBDIR dpkg-shlibdeps -O --ignore-missing-info -l"$LIBDIR" "${elfs[@]}" 2>"$WORK/shlibdeps.log" \
+          | sed -n 's/^shlibs:Depends=//p') || true
+[[ -n $depends ]] || { cat "$WORK/shlibdeps.log" >&2; die "dpkg-shlibdeps found no dependencies"; }
+for p in "${!deps[@]}"; do
+    grep -qE "(^|, |\| )$p( |,|$)" <<<"$depends" || die "dpkg-shlibdeps left out $p: $depends"
 done
+# every versioned dependency must be installable from the distribution's own archive
+"$HERE/check-depends.sh" "$depends" || die "Depends needs versions the distribution archive does not have: $depends"
 depends+=", passwd, systemd"
 
 install -d -m 0755 "$ROOT/DEBIAN"

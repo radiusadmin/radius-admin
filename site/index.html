@@ -6,7 +6,7 @@
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; script-src 'self'; font-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'">
 <meta name="referrer" content="no-referrer">
 <title>radius-admin: a secure web console for FreeRADIUS</title>
-<meta name="description" content="radius-admin turns a FreeRADIUS 3.2 server into a network access control service you run from the browser: 802.1X, MAB, RadSec and switch logins, audited and MFA-protected. Free software under the AGPL.">
+<meta name="description" content="radius-admin turns a FreeRADIUS 3.2 server into a network access control service you run from the browser: 802.1X, MAB, RadSec and switch logins, audited and MFA-protected. Source available: free for home labs and organizations under 50 people.">
 <meta name="color-scheme" content="light dark">
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="preload" href="fonts/IBMPlexSans-SemiBold-Latin1.woff2" as="font" type="font/woff2" crossorigin>
@@ -48,7 +48,7 @@
 <section class="hero" id="top">
   <div class="wrap hero-grid">
     <div class="hero-copy">
-      <p class="status-line"><span class="chip">Version <span class="ver">0.2.3</span></span> <span class="chip">Early development</span> <span class="chip">Free software, AGPL-3.0</span></p>
+      <p class="status-line"><span class="chip">Version <span class="ver">0.2.3</span></span> <span class="chip">Early development</span> <span class="chip">Source available, free under 50 people</span></p>
       <h1>A secure web console for FreeRADIUS.</h1>
       <p class="lede">radius-admin turns a FreeRADIUS 3.2 server into a network access control service you run from the browser. 802.1X, MAB, RadSec and switch logins live in one audited, role-based, MFA-protected portal, instead of hand-edited configuration files and SQL tables.</p>
       <p class="lede">Every change is validated before FreeRADIUS sees it, and rolled back automatically if FreeRADIUS does not come back up.</p>
@@ -128,6 +128,7 @@
           <li>RadSec listener and per-client transport</li>
           <li>Custom unlang policy</li>
           <li>Device profiles and the default profile</li>
+          <li>Certificates: 802.1X server, client CA, OCSP and the portal's own</li>
         </ul>
         <p class="fine">You review the difference, validate, then apply. Applying restarts FreeRADIUS through the safe-apply sequence above.</p>
       </div>
@@ -149,7 +150,7 @@
       <div><dt>Printers, cameras and IoT</dt>
         <dd>MAC Authentication Bypass with a VLAN per device, optional expiry and vendor names, on wired ports and, where the device profile allows it, through wireless access points. Unknown devices that try to connect show up in a queue for one-click approval.</dd></div>
       <div><dt>Switch and device administrators</dt>
-        <dd>Logins over RADIUS (PAP), limited to the management subnet, with optional full admin rights in the form the device expects.</dd></div>
+        <dd>Logins over RADIUS (PAP), limited to the management subnet, with optional full admin rights in the form the device expects. A second factor can be required for these logins, through the Duo Authentication Proxy on the server or your own RADIUS MFA server.</dd></div>
       <div><dt>Switches and access points from different vendors</dt>
         <dd>Each RADIUS client has a device profile that decides the reply attributes, MAB port types, change of authorization and SNMP port names. Copy a built-in profile to describe a device of your own; no code changes needed.</dd></div>
       <div><dt>Access points across untrusted networks</dt>
@@ -277,6 +278,44 @@
         </div>
       </figure>
     </div>
+
+    <div class="tour">
+      <div class="tour-copy">
+        <h3>A second factor for device admin logins</h3>
+        <p>The Integrations page decides which switch, access point and firewall logins must be approved with a second factor: local or directory accounts, on all clients or selected ones, with break-glass accounts that are never asked. FreeRADIUS reads the rules on every login.</p>
+        <p>Install the Duo Authentication Proxy on the server from the console, or send directory accounts to a RADIUS MFA server you already run. A login that needs a second factor and cannot get one is refused.</p>
+      </div>
+      <figure class="con" aria-label="The Integrations page">
+        <div class="con-top" aria-hidden="true"><span class="con-mark"></span><span class="con-name">radius-admin</span><span class="con-host">radius.example.net</span></div>
+        <div class="con-body">
+          <p class="con-h1">Integrations</p>
+          <div class="con-panel flush">
+            <p class="con-h2 con-ph">Second-factor rules <span class="con-muted">read on every login</span></p>
+            <div class="con-scroll" tabindex="0" role="group" aria-label="Second-factor rules table"><table>
+              <thead><tr><th>Accounts</th><th>Second factor</th><th>Provider</th><th>Clients</th></tr></thead>
+              <tbody>
+                <tr><td>Local device admin accounts</td><td><span class="tag tag-ok">Required</span></td><td class="mono">duo</td><td>All clients</td></tr>
+                <tr><td>Directory accounts</td><td><span class="tag tag-ok">Required</span></td><td class="mono">nps-mfa</td><td>All clients</td></tr>
+              </tbody>
+            </table></div>
+          </div>
+          <div class="con-panel">
+            <p class="con-small">Exempt local accounts (break-glass, never asked for a second factor): <span class="mono">netadmin-b</span></p>
+          </div>
+          <div class="con-panel flush">
+            <p class="con-h2 con-ph">Providers</p>
+            <div class="con-scroll" tabindex="0" role="group" aria-label="Providers table"><table>
+              <thead><tr><th>Provider</th><th>Type</th><th>Server</th><th>Status</th></tr></thead>
+              <tbody>
+                <tr><td><span class="mono">duo</span><span class="cell-sub">Duo Authentication Proxy on this server</span></td><td>Duo Authentication Proxy</td><td class="mono">127.0.0.1 (this server)</td><td><span class="tag tag-ok">On</span></td></tr>
+                <tr><td><span class="mono">nps-mfa</span><span class="cell-sub">Network Policy Server with the Entra MFA extension</span></td><td>Remote RADIUS MFA server</td><td class="mono">192.0.2.50:1812</td><td><span class="tag tag-ok">On</span></td></tr>
+                <tr class="is-off"><td><span class="mono">privacyidea</span><span class="cell-sub">privacyIDEA test server</span></td><td>Remote RADIUS MFA server</td><td class="mono">198.51.100.25:1812</td><td><span class="tag tag-muted">Off</span></td></tr>
+              </tbody>
+            </table></div>
+          </div>
+        </div>
+      </figure>
+    </div>
   </div>
 </section>
 
@@ -294,7 +333,9 @@
           <li>Access rules for wired or per-SSID connections, with an optional role and a rule tester.</li>
           <li>MAB devices from wired ports and wireless access points, and the unknown-device approval queue.</li>
           <li>Device administrator logins for switches, access points and firewalls: local accounts, PBKDF2-hashed, or members of chosen directory groups with their directory password over LDAPS.</li>
+          <li>A second factor for device administrator logins: the Duo Authentication Proxy, installed and configured on the server from the console, or a remote RADIUS MFA server for directory accounts (for example a Network Policy Server with the Entra multifactor extension, privacyIDEA or an Okta RADIUS agent). Rules per account kind for all or selected clients, break-glass exemptions, and logins that fail closed. 802.1X never asks for a second factor.</li>
           <li>Custom unlang policy for administrators, checked before it is installed.</li>
+          <li>Certificates in the console: the 802.1X server certificate, the CA that issues client certificates, OCSP for EAP-TLS and the portal's HTTPS certificate. Upload them (PEM or PKCS#12), or make the key and request on the server and upload what your CA issues. They are installed with Apply and put back if FreeRADIUS or the portal does not come up with them.</li>
         </ul>
       </div>
       <div>
@@ -393,7 +434,7 @@
     <div class="split">
       <div class="note">
         <h3>FIPS mode is optional</h3>
-        <p>The cryptography is the same in both modes: SHA-2, AES, PBKDF2-HMAC-SHA256, ECDSA and TLS 1.2 or later. One FreeRADIUS build works in standard and FIPS mode. With Ubuntu Pro FIPS and FIPS mode on, the portal refuses to start unless the kernel and OpenSSL are in FIPS mode.</p>
+        <p>The cryptography is the same in both modes: SHA-2, AES, PBKDF2-HMAC-SHA256, ECDSA and TLS 1.2 or later. One FreeRADIUS build works in standard and FIPS mode. Standard mode is the default; FIPS mode is chosen at install time and refused on a host whose kernel is not in FIPS mode. With Ubuntu Pro FIPS and FIPS mode on, the portal refuses to start unless the kernel and OpenSSL are in FIPS mode.</p>
       </div>
       <div class="note">
         <h3>What it does not fix</h3>
@@ -419,7 +460,7 @@
           <li><strong>Ubuntu 24.04 LTS.</strong> 2 vCPU, 4 GB RAM and 20 GB disk for a few hundred switches. Debian 12 is planned.</li>
           <li><strong>FreeRADIUS 3.2.10 is included.</strong> The release bundle carries a package built from the signed upstream release. The installer never overwrites an existing FreeRADIUS or <code>/etc/freeradius</code>.</li>
           <li><strong>Distribution packages only:</strong> PostgreSQL 16, nginx and Python 3.12 with its <code>python3-*</code> packages.</li>
-          <li><strong>For EAP-TLS:</strong> a CA that issues client certificates, and a RADIUS server certificate.</li>
+          <li><strong>For EAP-TLS:</strong> a CA that issues client certificates. The RADIUS server certificate can be uploaded or requested from the server; a new server starts with a self-signed one for you to replace.</li>
           <li><strong>Optional:</strong> Ubuntu Pro FIPS for FIPS mode.</li>
         </ul>
         <p class="fine"><a href="https://github.com/radiusadmin/radius-admin/blob/main/docs/RUNBOOK.md#12-the-bundled-freeradius-package">About the bundled FreeRADIUS package</a></p>
@@ -427,27 +468,55 @@
 
       <ol class="steps">
         <li>
-          <h3>Check the server</h3>
-          <p>A read-only check. It changes nothing.</p>
-          <pre class="cmd" tabindex="0"><code>sudo ./deploy/preflight.sh</code></pre>
-        </li>
-        <li>
           <h3>Install</h3>
-          <p>Run the installer with no options and answer the questions: server name, management subnet, portal address, DNS resolvers, portal certificate and the first administrator.</p>
-          <pre class="cmd" tabindex="0"><code>sudo ./deploy/install.sh</code></pre>
-          <details>
-            <summary>Unattended install with an answers file</summary>
-            <p>Put the same answers in a file. The format is described in <a href="https://github.com/radiusadmin/radius-admin/blob/main/deploy/answers.sh">deploy/answers.sh</a>.</p>
-            <pre class="cmd" tabindex="0"><code>server_name: radius.example.net
+          <p>Pick the case that matches your server. The installer downloads the signed release of the version you cloned, verifies it and installs from it. It starts with a read-only check of the server and stops before changing anything if the check fails. Without a settings file it asks its questions as it goes.</p>
+
+          <details class="inst-opt" open>
+            <summary><span class="inst-opt-t">New server, FreeRADIUS included <span class="tag tag-ok">Recommended</span></span><span class="inst-opt-d">Installs everything, including the bundled FreeRADIUS 3.2.10.</span></summary>
+            <div class="inst-opt-body">
+              <pre class="cmd" tabindex="0"><code>git clone --depth 1 https://github.com/radiusadmin/radius-admin.git
+sudo radius-admin/deploy/install.sh</code></pre>
+              <details class="inst-sub">
+                <summary>Optional: install unattended with a settings file</summary>
+                <p>Save your answers as <code>site.yaml</code> (the format is described in <a href="https://github.com/radiusadmin/radius-admin/blob/main/deploy/answers.sh">deploy/answers.sh</a>), then add <code>--answers site.yaml</code> to the install command.</p>
+                <pre class="cmd" tabindex="0"><code>cat &gt; site.yaml &lt;&lt;'EOF'
+server_name: radius.example.net
 admin_net: 192.0.2.0/24
 switch_nets: "192.0.2.0/24 198.51.100.0/24"
 listen_ip: 192.0.2.10
 resolver: "192.0.2.53"
 tls: self-signed
-admin_username: netadmin</code></pre>
-            <pre class="cmd" tabindex="0"><code>sudo ./deploy/install.sh --answers site.yaml --print-answers   # check only
-sudo ./deploy/install.sh --answers site.yaml</code></pre>
-            <p>The installer keeps your answers in <code>/etc/radius-admin/site.yaml</code> for later runs.</p>
+admin_username: netadmin
+eap_tls: self-signed
+EOF</code></pre>
+                <pre class="cmd" tabindex="0"><code>sudo radius-admin/deploy/install.sh --answers site.yaml</code></pre>
+              </details>
+              <p class="fine">The installer keeps your answers in <code>/etc/radius-admin/site.yaml</code> for later runs. FreeRADIUS starts without a directory and rejects every 802.1X user until you add access rules and set up the directory in the portal.</p>
+            </div>
+          </details>
+
+          <details class="inst-opt">
+            <summary><span class="inst-opt-t">Existing FreeRADIUS server</span><span class="inst-opt-d">Keeps your FreeRADIUS and moves its SQLite data to PostgreSQL.</span></summary>
+            <div class="inst-opt-body">
+              <pre class="cmd" tabindex="0"><code>git clone --depth 1 https://github.com/radiusadmin/radius-admin.git
+sudo radius-admin/deploy/install.sh --confirm-migrate</code></pre>
+              <p>For a server that already runs FreeRADIUS 3.2 with a SQLite database. Your FreeRADIUS is kept and <code>/etc/freeradius</code> is backed up first. Users, groups, RADIUS clients and accounting history are imported into PostgreSQL (with a dry run first), and the server check confirms that your build has the PostgreSQL driver. Plan a maintenance window and read the <a href="https://github.com/radiusadmin/radius-admin/blob/main/docs/RUNBOOK.md#2-plan-the-maintenance-window">runbook</a> first: switch administrators get new passwords.</p>
+              <details class="inst-sub">
+                <summary>Optional: install unattended with a settings file</summary>
+                <p>The same <code>site.yaml</code> as for a new server, without <code>eap_tls</code>: your FreeRADIUS keeps its certificates. Add <code>--sqlite</code> only if your database is not at <code>/var/lib/freeradius/sqlite/freeradius.db</code>.</p>
+                <pre class="cmd" tabindex="0"><code>cat &gt; site.yaml &lt;&lt;'EOF'
+server_name: radius.example.net
+admin_net: 192.0.2.0/24
+switch_nets: "192.0.2.0/24 198.51.100.0/24"
+listen_ip: 192.0.2.10
+resolver: "192.0.2.53"
+tls: self-signed
+admin_username: netadmin
+EOF</code></pre>
+                <pre class="cmd" tabindex="0"><code>sudo radius-admin/deploy/install.sh --confirm-migrate --answers site.yaml --sqlite /path/to/freeradius.db</code></pre>
+              </details>
+              <p class="fine">FreeRADIUS keeps running its current configuration until you restart it: <code>sudo systemctl restart freeradius</code>. The SQLite snapshot in <code>/var/backups/radius-admin/</code> contains cleartext passwords; shred it once you have checked the result.</p>
+            </div>
           </details>
         </li>
         <li>
@@ -456,7 +525,7 @@ sudo ./deploy/install.sh --answers site.yaml</code></pre>
         </li>
         <li>
           <h3>Follow the setup checklist</h3>
-          <p>Add RADIUS clients, create access rules, set the device admin subnet and apply.</p>
+          <p>Add RADIUS clients, create access rules, set the device admin subnet, replace the self-signed certificates on the Certificates page and apply.</p>
         </li>
       </ol>
     </div>
@@ -473,8 +542,7 @@ sudo ./deploy/install.sh --answers site.yaml</code></pre>
     <ul class="limits">
       <li><strong>One distribution.</strong> The bundled FreeRADIUS package is built for Ubuntu 24.04 on amd64. Debian 12 follows.</li>
       <li><strong>One tested switch family.</strong> Cisco Catalyst 1200/1300 is what the project is tested against today. The generic RFC 3580 profile is marked unverified until it has run against real hardware; other devices need a custom profile.</li>
-      <li><strong>Certificates are yours to place.</strong> The installer expects the FreeRADIUS certificates under <code>/etc/freeradius/certs/site/</code>. Generating the whole FreeRADIUS configuration is the next phase.</li>
-      <li><strong>Client-certificate MFA needs your PKI.</strong> The nginx phase expects the site CA bundle and an OCSP responder.</li>
+      <li><strong>The directory is set up by hand.</strong> A new server starts without a directory (EAP-TLS and directory accounts are rejected until it is configured in <code>mods-available/ldap</code>). A console step for the directory comes with the generated FreeRADIUS configuration, the next phase.</li>
     </ul>
     <p>Found something? <a href="https://github.com/radiusadmin/radius-admin/issues">Report it on GitHub</a>.</p>
   </div>
@@ -485,8 +553,22 @@ sudo ./deploy/install.sh --answers site.yaml</code></pre>
   <div class="wrap split">
     <div>
       <h2 id="lic-h">Licence</h2>
-      <p>Copyright © 2026 Collin Linde. radius-admin is free software under the <a href="https://github.com/radiusadmin/radius-admin/blob/main/LICENSE">GNU Affero General Public License</a>, version 3 or any later version. It is free to use, at home and in organizations.</p>
-      <p>If you run a modified version for others over a network, the AGPL asks you to offer them its source code (section 13). It comes without any warranty. Other licensing terms may be available from the copyright holder.</p>
+      <p>Copyright © 2026 Collin Linde. radius-admin is source available under the <a href="https://github.com/radiusadmin/radius-admin/blob/main/LICENSE">Business Source License 1.1</a>. Every feature is in the same public code, with nothing locked behind a licence key.</p>
+      <p>It is free for personal use and home labs, for organizations with fewer than 50 people (employees and contractors, affiliates included), and for any organization during its first 60 days of production use. Organizations with 50 or more people need a commercial licence for production use after that. <a href="https://github.com/radiusadmin/radius-admin/blob/main/LICENSING.md">LICENSING.md</a> explains the details and exceptions.</p>
+      <p>During setup, the portal asks whether you use it for free or commercially, and records the answer for your own compliance records. A commercial licence arrives as a signed file that your server checks offline: it never contacts a licence server, and nothing is ever locked or switched off, even when a trial or licence ends.</p>
+      <table class="prices">
+        <caption>Commercial licence, per organization, per year</caption>
+        <thead><tr><th scope="col">Headcount</th><th scope="col">Price</th></tr></thead>
+        <tbody>
+          <tr><td>0–49</td><td>Free</td></tr>
+          <tr><td>50–249</td><td>USD 1,000</td></tr>
+          <tr><td>250–999</td><td>USD 4,000</td></tr>
+          <tr><td>1,000–4,999</td><td>USD 10,000</td></tr>
+          <tr><td>5,000 or more</td><td>On request</td></tr>
+        </tbody>
+      </table>
+      <p class="fine">Every tier includes every feature, unlimited servers and devices, and all updates published during the subscription. Prices are list prices for a standard licence. Deployments with special requirements, such as custom terms, several separate deployments or service providers, are quoted individually, and the final price is the one in the signed agreement.</p>
+      <p>Each version becomes available under the GNU Affero General Public License, version 3 or later, four years after it is published; versions up to 0.2.5 are under the AGPL already. It comes without any warranty.</p>
       <p class="fine">The release bundle also contains FreeRADIUS, a separate program under its own licence: GNU GPL version 2 or later, with parts under the LGPL. Its upstream source tarball and signature ship in the bundle, and its licence and copyright notices are installed with it. radius-admin runs and configures FreeRADIUS; it does not link to it.</p>
     </div>
     <div>
@@ -498,11 +580,22 @@ sudo ./deploy/install.sh --answers site.yaml</code></pre>
   </div>
 </section>
 
+<!-- ============================================== prices are negotiable -->
+<section class="sec" id="pricing-talk" aria-labelledby="talk-h">
+  <div class="wrap">
+    <div class="talk">
+      <h2 id="talk-h">Prices are open to discussion</h2>
+      <p>radius-admin is made by one person, not a sales department. If the list price does not fit your organization, or your situation is unusual, please get in touch. I am flexible, and for some organizations free use may be possible. Just ask.</p>
+      <p><a class="btn btn-primary" href="mailto:licensing@radiusadmin.net?subject=radius-admin%20licence">Email licensing@radiusadmin.net</a></p>
+    </div>
+  </div>
+</section>
+
 </main>
 
 <footer class="foot">
   <div class="wrap foot-in">
-    <p>radius-admin <span class="ver">0.2.3</span> · Copyright © 2026 Collin Linde · AGPL-3.0-or-later</p>
+    <p>radius-admin <span class="ver">0.2.3</span> · Copyright © 2026 Collin Linde · Business Source License 1.1</p>
     <p>Made for the people who keep networks running. Set in IBM Plex, used under the <a href="fonts/OFL.txt">SIL Open Font License</a>. This page loads nothing from other sites.</p>
   </div>
 </footer>

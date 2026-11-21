@@ -26,9 +26,10 @@ TimeoutStartSec=150
 # systemctl talks to PID 1 over /run/systemd/private (AF_UNIX).
 NoNewPrivileges=yes
 ProtectSystem=strict
-# Writes: the two generated files (atomic rename needs the directories) + its work dir.
-ReadWritePaths=/etc/freeradius /var/lib/radius-admin-helper
-ReadOnlyPaths=/var/lib/radius-admin/staging -/var/lib/radius-admin/updates
+# Writes: the two generated files (atomic rename needs the directories) + its work dir, and the
+# portal's TLS files when certificates are managed in the portal (SPEC section 30).
+ReadWritePaths=/etc/freeradius /var/lib/radius-admin-helper -/etc/radius-admin/tls
+ReadOnlyPaths=/var/lib/radius-admin/staging -/var/lib/radius-admin/updates -/var/lib/radius-admin/integrations
 ProtectHome=yes
 # radiusd -XC as freerad must be able to read the validation copy in
 # /var/lib/radius-admin-helper/validate; it does not use /tmp.

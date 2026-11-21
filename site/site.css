@@ -400,6 +400,13 @@ pre.diff span { display: block; padding: 0 1rem; white-space: pre; min-width: ma
 .wrap.split h2 { margin-bottom: 1rem; font-size: 1.6rem; }
 .wrap.split p { max-width: 34rem; }
 @media (max-width: 720px) { .split { grid-template-columns: minmax(0, 1fr); } }
+.talk { max-width: 46rem; border: 1px solid var(--line); border-top: 4px solid var(--teal); border-radius: var(--radius-m); padding: 1.5rem 1.6rem .75rem; background: var(--paper); }
+.talk h2 { margin-bottom: .75rem; font-size: 1.6rem; }
+.prices { width: 100%; max-width: 34rem; border-collapse: collapse; margin: 0 0 .75rem; font-size: .95rem; }
+.prices caption { text-align: left; font-weight: 600; padding-bottom: .5rem; }
+.prices th, .prices td { text-align: left; padding: .45rem .75rem .45rem 0; border-bottom: 1px solid var(--line); }
+.prices thead th { color: var(--ink-soft); font-size: .85rem; border-bottom-color: var(--line-strong); }
+.prices th:last-child, .prices td:last-child { text-align: right; padding-right: 0; font-variant-numeric: tabular-nums; }
 .note { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-m); padding: 1.25rem 1.4rem; }
 .note h3 { margin-bottom: .6rem; }
 .note p, .note li { color: var(--ink-soft); font-size: 1rem; }
@@ -429,6 +436,36 @@ pre.cmd code { font-size: 1em; font-weight: 500; white-space: pre; overflow-wrap
 details { border-top: 1px solid var(--line); padding-top: .6rem; }
 summary { cursor: pointer; font-weight: 600; padding: .35rem 0; }
 details[open] summary { margin-bottom: .6rem; }
+
+/* install choices: two expandable cards, the first open by default */
+details.inst-opt { border: 1px solid var(--line-strong); border-radius: var(--radius-m); background: var(--surface); padding: 0; margin: 1rem 0 0; }
+details.inst-opt[open] { border-color: var(--ctl-line); }
+details.inst-opt > summary { list-style: none; display: grid; grid-template-columns: 1.25rem minmax(0, 1fr); column-gap: .6rem; row-gap: .15rem; padding: .9rem 1.1rem; margin: 0; border-radius: var(--radius-m); }
+details.inst-opt > summary::-webkit-details-marker { display: none; }
+details.inst-opt > summary::before { content: ""; grid-row: 1 / span 2; align-self: start; margin-top: .45rem; width: .5rem; height: .5rem; border-right: 2px solid var(--ink); border-bottom: 2px solid var(--ink); transform: rotate(-45deg); transition: transform .15s ease; }
+details.inst-opt[open] > summary::before { transform: rotate(45deg); margin-top: .3rem; }
+details.inst-opt > summary:hover { background: var(--paper); }
+details.inst-opt > summary:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }
+details.inst-opt[open] > summary { border-bottom: 1px solid var(--line); border-radius: var(--radius-m) var(--radius-m) 0 0; }
+.inst-opt-t { font-size: 1.05rem; font-weight: 600; color: var(--ink); }
+.inst-opt-t .tag { margin-left: .35rem; }
+.inst-opt-d { grid-column: 2; font-weight: 400; font-size: .95rem; color: var(--ink-soft); }
+.inst-opt-body { padding: 1rem 1.1rem .4rem; }
+.inst-opt-body .fine { margin-bottom: .9rem; }
+details.inst-sub { border: 1px solid var(--line); border-radius: var(--radius-s); padding: 0 .9rem; margin: 0 0 .9rem; background: var(--paper); }
+details.inst-sub > summary { font-size: .95rem; padding: .55rem 0; list-style: none; display: flex; align-items: center; gap: .55rem; }
+details.inst-sub > summary::-webkit-details-marker { display: none; }
+details.inst-sub > summary::before { content: ""; flex: none; width: .4rem; height: .4rem; border-right: 2px solid var(--ink); border-bottom: 2px solid var(--ink); transform: rotate(-45deg); transition: transform .15s ease; }
+details.inst-sub[open] > summary::before { transform: rotate(45deg); }
+details.inst-sub[open] > summary { margin-bottom: .2rem; }
+details.inst-sub > summary:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }
+details.inst-sub pre.cmd { background: var(--surface); }
+.cmd-box { position: relative; }
+.cmd-box pre.cmd { padding-right: 5rem; }
+.cmd-copy { position: absolute; top: .45rem; right: .45rem; font: inherit; font-size: .8rem; font-weight: 600; line-height: 1; padding: .4rem .65rem; color: var(--ink); background: var(--surface); border: 1px solid var(--ctl-line); border-radius: var(--radius-s); cursor: pointer; }
+.cmd-copy:hover { background: var(--tint); }
+.cmd-copy:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }
+.cmd-copy.is-copied { color: var(--teal); border-color: var(--teal); }
 
 /* --------------------------------------------------------------- status */
 #status h3 { margin: 2rem 0 .75rem; }

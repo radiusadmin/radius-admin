@@ -9,6 +9,8 @@
     <ul class="settings-links">
       <li><a href="{{ url_for('settings.index') }}">General settings</a>
         <p class="small muted">Device admin logins (management subnet, privilege, directory accounts), 802.1X with a username and password.</p></li>
+      <li><a href="{{ url_for('certificates.index') }}">Certificates</a>
+        <p class="small muted">The 802.1X server certificate, the CA for client certificates, OCSP for EAP-TLS and the portal's HTTPS certificate.</p></li>
     </ul>
   </section>
   <section class="panel" aria-labelledby="sg-console">
@@ -36,6 +38,8 @@
         <p class="small muted">Check for, verify and install signed releases.</p></li>
       <li><a href="{{ url_for('setup.index') }}">Setup checklist</a>
         <p class="small muted">The steps that get a new server ready, with their status.</p></li>
+      <li><a href="{{ url_for('licence.index') }}">Licence</a>
+        <p class="small muted">How this server is licensed: free use, trial or a commercial licence file. Never locks anything.</p></li>
     </ul>
   </section>
 </div>

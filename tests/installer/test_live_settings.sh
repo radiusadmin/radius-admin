@@ -14,7 +14,9 @@ fails=0
 pass() { echo "PASS: $1"; }
 fail() { echo "FAIL: $1"; fails=$((fails + 1)); }
 export RA_SITE_YAML=$W/site.yaml RA_NGINX_SITE=$W/nginx.conf RA_FIREWALL_NFT=$W/firewall.nft
-reset() { rm -f "$RA_SITE_YAML" "$RA_NGINX_SITE" "$RA_FIREWALL_NFT"; }
+export RA_APP_CONF=$W/radius-admin.conf RA_FIPS_ENABLED_FILE=$W/fips_enabled
+echo 0 > "$RA_FIPS_ENABLED_FILE"
+reset() { rm -f "$RA_SITE_YAML" "$RA_NGINX_SITE" "$RA_FIREWALL_NFT" "$RA_APP_CONF"; }
 settings() { "$INSTALL" --print-settings "$@" 2>&1; }
 has() { grep -qxF -- "$1" <<<"$2"; }
 
@@ -42,6 +44,8 @@ reset
 out=$(settings)
 has 'admin_net: 192.0.2.0/24 (default)' "$out" \
     && pass "nothing installed: the example default, marked as such" || fail "no live settings: $out"
+has 'ocsp_url: none (default)' "$out" \
+    && pass "nothing installed: no OCSP responder (not the example one)" || fail "ocsp default: $out"
 
 nginx_site 198.51.100.7 portal.example.net 198.51.100.0/24 "198.51.100.53 198.51.100.54" http://ocsp.example.net/ocsp
 out=$(settings)
@@ -85,6 +89,23 @@ has 'ocsp_url: http://ocsp.example.com/ocsp (option)' "$out" \
 out=$("$INSTALL" --answers "$RA_SITE_YAML" --admin-net 198.51.100.0/24 --listen-ip 198.51.100.7 --print-answers 2>&1)
 has 'admin_net: 198.51.100.0/24' "$out" && has 'listen_ip: 198.51.100.7' "$out" \
     && pass "options win over an answers file" || fail "options vs answers: $out"
+
+# crypto mode: an update (no answers) keeps the installed require_fips whatever the options say
+reset
+has 'fips: off (default)' "$(settings)" && pass "nothing installed: standard mode, marked as default" \
+    || fail "fips default: $(settings)"
+printf '[app]\nrequire_fips = true\ndb_dsn = dbname=radius\n' > "$RA_APP_CONF"
+out=$(settings --standard-mode)
+has "fips: on ($RA_APP_CONF)" "$out" && [[ $out == *"ignored: this server is installed with fips: on"* ]] \
+    && pass "an update keeps a live require_fips = true (--standard-mode ignored, with a warning)" || fail "live FIPS mode: $out"
+printf '[app]\nrequire_fips = false\n' > "$RA_APP_CONF"
+echo 1 > "$RA_FIPS_ENABLED_FILE"
+has "fips: off ($RA_APP_CONF)" "$(settings --fips)" \
+    && pass "an update keeps a live require_fips = false (--fips ignored)" || fail "live standard mode: $(settings --fips)"
+echo 0 > "$RA_FIPS_ENABLED_FILE"
+printf '[app]\nrequire_fips = maybe\n' > "$RA_APP_CONF"
+settings >/dev/null && fail "unreadable require_fips accepted" || pass "an unreadable live require_fips stops the run"
+reset
 
 # a damaged live value is refused, not used (nor replaced by the example)
 site_yaml; sed -i 's#^admin_net: .*#admin_net: 203.0.113.7/24#' "$RA_SITE_YAML"

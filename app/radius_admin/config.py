@@ -15,6 +15,9 @@ DEFAULTS = {
     "key_file": "/etc/radius-admin/keys/data.key",
     "helper_socket": "/run/radius-admin-helper.sock",
     "helper_timeout": 120,
+    # apply / rollback that also restart the Duo Authentication Proxy (SPEC section 29.4): the
+    # helper's worst case is lock + validate + 4 x (restart + wait) = 180 s with its defaults
+    "helper_duo_timeout": 210,
     "staging_dir": "/var/lib/radius-admin/staging",
     "session_idle_minutes": 15,
     "session_absolute_hours": 8,
@@ -43,6 +46,10 @@ DEFAULTS = {
     "update_api": "https://api.github.com",
     "update_dir": "/var/lib/radius-admin/updates",
     "build_file": "/opt/radius-admin/BUILD.json",
+    # Second-factor providers (SPEC section 29): downloads and uploads of provider builds
+    # (read by the root helper), and the signed catalog this release ships
+    "integration_dir": "/var/lib/radius-admin/integrations",
+    "integration_catalog": "/opt/radius-admin/integrations/catalog.json",
 }
 
 _BOOL = {k for k, v in DEFAULTS.items() if isinstance(v, bool)}

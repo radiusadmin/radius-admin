@@ -7,7 +7,9 @@ component allowed to send network traffic (UDP to the management subnet). It:
     copies the detected 802.1X ports into ui.radius_client.dot1x_ports (audited);
   * executes "test this switch" requests (ui.snmp_test) and CoA / Disconnect
     requests (ui.coa_request) queued by the web UI;
-  * evaluates the alerts once a minute (alerts.py) and writes a heartbeat;
+  * evaluates the alerts once a minute (alerts.py), including the second-factor provider's
+    state from the helper (integration_status; the signed catalog once an hour), and writes a
+    heartbeat;
   * every 5 minutes closes accounting records that never got an Accounting-Stop
     (replaced by a newer session of the same device, or no interim update for a day);
   * removes old queue rows once an hour.
@@ -240,7 +242,32 @@ def helper_status(cfg):
         return {"ok": False, "message": str(e)}
 
 
-def run_alerts(conn, cfg, key, profile, radius_state, portal_state=None):
+CATALOG_EVERY = 3600    # seconds between catalog reads (it changes only with a release)
+
+
+def helper_integrations(cfg):
+    """integration_status, or {'ok': False} (an older helper answers 'unknown action')."""
+    try:
+        return helper_client.call(cfg["helper_socket"], "integration_status", timeout=30)
+    except (helper_client.HelperError, KeyError) as e:
+        return {"ok": False, "message": str(e)}
+
+
+def helper_catalog(cfg, mfa_state):
+    """integration_catalog, read at most once per CATALOG_EVERY and kept in mfa_state."""
+    now = time.monotonic()
+    cached = mfa_state.get("catalog")
+    if cached is not None and cached.get("ok") and now - mfa_state.get("catalog_at", -1e9) < CATALOG_EVERY:
+        return cached
+    try:
+        cat = helper_client.call(cfg["helper_socket"], "integration_catalog", timeout=30)
+    except (helper_client.HelperError, KeyError) as e:
+        cat = {"ok": False, "message": str(e)}
+    mfa_state["catalog"], mfa_state["catalog_at"] = cat, now
+    return cat
+
+
+def run_alerts(conn, cfg, key, profile, radius_state, portal_state=None, mfa_state=None):
     settings = alerts.load_settings(conn)
     if settings is None:
         return
@@ -253,6 +280,16 @@ def run_alerts(conn, cfg, key, profile, radius_state, portal_state=None):
     alerts.check_rejects(conn, settings, pw)
     conn.commit()
     alerts.check_switches(conn, settings, bool(profile and profile["enabled"]), pw)
+    conn.commit()
+    mfa_state = mfa_state if mfa_state is not None else {}
+    alerts.check_mfa_timeouts(conn, settings, pw)
+    conn.commit()
+    integ = helper_integrations(cfg)
+    alerts.check_mfa_provider(conn, settings, integ, mfa_state.setdefault("provider", {}), pw)
+    conn.commit()
+    installed = ((integ.get("integrations") or {}).get("duo") or {}).get("installed") if integ.get("ok") else None
+    catalog = helper_catalog(cfg, mfa_state) if installed else {"ok": True, "entries": []}
+    alerts.check_mfa_builds(conn, settings, integ, catalog, pw)
     conn.commit()
 
 
@@ -304,6 +341,7 @@ def loop(cfg, once=False):
     last_test_seen = None
     radius_state = {}
     portal_state = {}
+    mfa_state = {}
     rc, _, why = coa_tool(cfg)
     radclient_note = rc or ("unavailable: " + why)
     while not _stop:
@@ -330,7 +368,7 @@ def loop(cfg, once=False):
                     last_alerts = -1e9      # evaluate switch alerts right after a poll
             last_test_seen = run_alert_test(conn, key, last_test_seen)
             if now - last_alerts >= ALERT_EVERY or once:
-                run_alerts(conn, cfg, key, profile, radius_state, portal_state)
+                run_alerts(conn, cfg, key, profile, radius_state, portal_state, mfa_state)
                 last_alerts = now
             if now - last_close >= CLOSE_SESSIONS_EVERY or once:
                 close_stale_sessions(conn)
