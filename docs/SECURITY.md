@@ -356,6 +356,12 @@ material, and never by the component that talks to the network.
   key that does not match the public key committed in `deploy/keys/update-signing.pem`.
   Requiring a reviewer on the `release` environment adds a second person to every release;
   only the signing build job runs in that environment, and only for a new version.
+- **Workflow inputs are data.** Tag and branch names are chosen by whoever can push them, so the
+  release workflow never expands `${{ }}` expressions inside a `run:` script (a crafted tag name
+  would run as shell next to the signing key). The version and the previous tag pass between
+  jobs as outputs checked against exact patterns (`vX.Y.Z`, `-rc.N`, `-dev.N`), are re-checked in
+  the signing job and read there only from environment variables; tags that do not match are
+  ignored when the previous release is chosen. CI and Pages follow the same rule.
 - **What a server trusts.** Only the public key installed with the release it runs
   (`/usr/local/share/radius-admin/update-signing.pem`, root 0644). Nothing downloaded can
   change it; a new key arrives only inside a release signed with the current one, and takes

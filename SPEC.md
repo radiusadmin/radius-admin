@@ -838,6 +838,12 @@ CSV columns (header row required, exact names, any order tolerated by name):
   `tools/lib/fr-release.sh` changed since the previous release on the channel (or there is
   none). Notes: the release's CHANGELOG section; previews get `Unreleased` plus the
   commit subjects since the previous preview.
+  The previous release is the newest tag that is exactly `vX.Y.Z` (main), `vX.Y.Z-rc.N` (testing)
+  or `vX.Y.Z-dev.N` (dev), other than this version (`tools/release/prev-tag.sh CHANNEL VERSION`;
+  any other tag name is ignored). The check job validates channel, version and previous tag
+  against these patterns before writing them as job outputs; the build job checks them again and
+  uses them only through `env` (`$VERSION`, `$PREV`). No workflow interpolates `${{ }}` inside
+  a `run:` script; `make-release.sh` refuses a `PREV_TAG` that is not an exact release tag.
 - **Settings** (`sql/90-updates.sql`, ui.setting): `update_channel` main|testing|dev
   (default main), `update_mode` off|notify|auto (default notify), `update_window_day`
   mon…sun|daily (default sun), `update_window_hour` 0–23 (default 3, server local time),
