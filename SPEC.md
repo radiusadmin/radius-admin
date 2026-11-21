@@ -390,11 +390,13 @@ Actions:
   further behind, only the newest 64 KiB (`skipped` = bytes left out). An `offset` past the
   end starts again at 0. Invalid UTF-8 is replaced. No log yet, or the file gone: ok with
   empty `text` and a message (section 23).
+- `integration_status`, `integration_catalog`, `integration_preflight`, `integration_fetch`,
+  `integration_install`, `integration_log`: second-factor provider installs, section 29.1.
 Staging path is fixed in helper.conf, never taken from the request. Helper safety
 checks: files ≤ 1 MiB, UTF-8, no NUL; clients file must consist only of `client <name> {`
 blocks containing whitelisted keys (ipaddr, ipv4addr, ipv6addr, secret, shortname,
 nas_type, require_message_authenticator, limit_proxy_state, radius_admin_profile (§26)) and
-comments; policy file
+comments, plus the RadSec (§14) and second-factor (§29) sections; policy file
 must not contain `$INCLUDE`, `$-INCLUDE`, `$ENV`, `$TEMPLATE`, `%{exec:`, `Exec-Program`,
 backticks. Helper logs every action to syslog (ident `radius-admin-helper`).
 
@@ -699,8 +701,8 @@ CSV columns (header row required, exact names, any order tolerated by name):
   `sso.settings`, `sso.group_add`, `sso.group_delete`.
 - **Setup checklist** (`views/setup.py`, admin): required steps (FreeRADIUS running via helper
   `status`, ≥1 enabled client, ≥1 enabled rule, admin subnet not the 192.0.2.0/24 example, applied
-  and not pending) and optional ones (second admin, switch admins, SSO, RadSec, monitoring, alert
-  e-mail; skippable). Dashboard strip until finished. Audited `setup.skip|restore|finish|reopen`.
+  and not pending) and optional ones (second admin, switch admins, second factor for device admins
+  (section 29.4), SSO, RadSec, monitoring, alert e-mail; skippable). Dashboard strip until finished. Audited `setup.skip|restore|finish|reopen`.
 - **Installer answers** (`deploy/answers.sh`): `install.sh` with no options on a terminal, or
   `--interactive`, asks server name, management subnet, listen address, switch networks, resolvers, portal
   certificate (self-signed ECDSA P-384 / CSR / existing) and the first admin; `--answers FILE`
@@ -1203,6 +1205,7 @@ meta refresh stays only inside `<noscript>`, so every page still works without J
   | `coa.send_nas_port_id` | Add NAS-Port-Id from the accounting record |
   | `coa.reauth`, `coa.bounce`, `coa.disconnect` | `null` (the device cannot) or `{"packet": "coa"\|"disconnect", "attrs": [...]}` |
   | `setup.accounting`, `setup.coa` | Optional. Device commands the portal shows (as escaped text, never configuration) for turning on accounting / dynamic authorization; `null` or absent: a generic sentence instead |
+  | `setup.mfa_timeout` | Optional (section 29.4). Device commands for a RADIUS timeout long enough for a second factor; `null` or absent: `vendors.GENERIC_MFA_TIMEOUT` |
   | `snmp.port_names` | Up to 8 rules `{"match": <regex, full match>, "ignore_case": bool, "format": ...}`; the first match renames an ifName; `format` is `[A-Za-z0-9/._:-]` plus `{n}`, `{n:lower}`, `{n:upper}` |
 
   Reply entries are `{"attr", "op": ":=" | "+=", "value"}`, CoA entries `{"attr", "value"}`, at
@@ -1423,3 +1426,327 @@ meta refresh stays only inside `<noscript>`, so every page still works without J
 - **Upgrade.** `--phase postgres` (settings, functions), `app`, and `freeradius` with a restart
   (default server: the new policy call and `Auth-Type ldap_user`). Directory accounts stay off
   until turned on; local device admins behave as before.
+
+## 29. Change (2026-11-20): second-factor providers for device admin logins
+
+First step of the MFA integrations: the FreeRADIUS chain, a remote RADIUS MFA server configured in
+the portal, and the live rules. Installing the Duo Authentication Proxy from the portal, its
+configuration file and the signed integrations catalog follow in later steps; the Duo chain is
+complete on the FreeRADIUS side and bench-tested with a stand-in.
+
+- **Scope.** Device admin logins (section 28: PAP, no EAP-Message, no NAS-Port-Type Ethernet, no
+  Called-Station-Id) only; never 802.1X. Provider types: `duo` (the Duo Authentication Proxy on this
+  server, 127.0.0.1) and `radius-mfa` (a remote RADIUS server that checks the password and the second
+  factor itself; directory accounts only).
+- **SQL** (`sql/101-mfa.sql`, additive): `ui.mfa_provider` (id `^[a-z][a-z0-9-]{0,31}$`, type, label,
+  enabled, `settings` jsonb with the non-secret values, `secrets_enc` = AES-256-GCM of a JSON object
+  with the shared secrets, additional data `radius-admin:mfa_provider:<id>`, plus install columns for
+  later steps); `ui.mfa_policy` (one row per account kind `local` / `directory`: enabled,
+  provider_id, client_scope `all`/`selected`; enabled needs a provider); `ui.mfa_policy_client`
+  (selected clients, cascades with the client); `ui.mfa_exempt` (local break-glass accounts,
+  case-insensitively unique). `radius_admin_mfa_hex(user_hex, client_hex, kind)` (SECURITY DEFINER,
+  execute for `radius_fr` only) → `'off'`, `'exempt'` (local accounts on the list), `'unavailable'`
+  (the rule's provider is off), `'<type>:<id>'`, or NULL for malformed input or an error. Live: read
+  on every login.
+- **Policy** (`radius_admin_admin_authorize`). After `radius_admin_admin_directory_hex`, the client
+  shortname goes to `&control:Tmp-String-5` and `radius_admin_mfa_hex('%{hex:User-Name}',
+  '%{hex:control:Tmp-String-5}', 'local'|'directory')` to `&control:Tmp-String-7` (kind `directory`
+  when the directory function said so). A provider →
+  `&control:Proxy-To-Realm := "radius_admin_mfa_<id>"`, `&control:Tmp-Integer-0` = 1 (duo) or 2
+  (remote), method `pap-admin+mfa` / `admin-ldap+mfa`, the management-subnet check (reject before
+  anything is proxied); for a remote server a directory account is looked up with `ldap_user`
+  (groups to `&control:Tmp-String-9`, no bind) and a local account is rejected; then `return`, so no
+  later module sets an Auth-Type. `'unavailable'` → reject "a second factor is required for this
+  login, but its provider is turned off"; anything other than `'off'`/`'exempt'` → reject "could not
+  determine whether this login needs a second factor". FreeRADIUS proxies only if the realm exists;
+  a realm that was never applied leaves the request unproxied and without an Auth-Type, so it is
+  rejected.
+- **Post-auth** (device admin branch). With `&control:Tmp-Integer-0`: reject unless
+  `&proxy-reply:Packet-Type == Access-Accept` ("… did not reach its provider (… not applied)"); for
+  Duo the proxy reply's Class must be `radius-admin:pap-admin` / `radius-admin:admin-ldap` matching
+  the method ("… did not carry the password check of radius-admin-mfa-primary"); a remote marker
+  with a local method is rejected. Then `update { &reply: !* ANY }` (the provider's own attributes
+  never reach the device) and: Duo → the profile's `admin_full` attributes when `admin_priv15` is on;
+  remote → the directory group check of section 28 on the groups looked up before proxying, then the
+  same attributes. Local logins without a second factor are unchanged.
+- **Reject reasons** (`radius_admin_reject`, only when no reason is set yet): a proxied login that the
+  provider refused → "refused in the second-factor chain (wrong password, not a device admin, or the
+  second factor was denied)" (Duo) or "the second-factor server refused the login (wrong password or
+  second factor denied)" (remote); no answer → "the second-factor provider did not answer".
+- **Password check for Duo** (`freeradius/sites-available/radius-admin-mfa-primary`, enabled by the
+  freeradius phase). Virtual server; the Duo proxy sends the login back here before the second
+  factor. authorize: `filter_username`, `radius_admin_mfa_primary_authorize` (reject without
+  User-Password or with EAP; directory accounts: `ldap_user` and `Auth-Type ldap_user`), `sql`,
+  `pap`; post-auth `radius_admin_mfa_primary_postauth`: directory group check or
+  `SQL-Group == "net-admins"`, then `reply:Class := "radius-admin:<method>"`, else reject. It writes
+  no authentication log (the default server does).
+- **Clients file** (`render_clients(..., mfa)` → `render_mfa(providers)`, deterministic, sorted by
+  id, enabled providers only): per provider `home_server` / `home_server_pool` (fail-over) / `realm`
+  named `radius_admin_mfa_<id>` (type auth, udp, `ipv4addr`/`ipv6addr` literal, port, secret,
+  `require_message_authenticator` yes (duo) or the setting (remote), `response_window` = timeout
+  (duo 60; remote 5–60), `zombie_period` = 2 × timeout, `revive_interval = 60`,
+  `status_check = none`); with an enabled Duo provider (at most one) also `listen { type = auth;
+  ipv4addr = 127.0.0.1; port = 18121; proto = udp; virtual_server = radius-admin-mfa-primary;
+  clients = radius_admin_mfa }` and `clients radius_admin_mfa` with one client
+  `radius-admin-duo-proxy` (127.0.0.1, the password-check secret, `require_message_authenticator =
+  yes`). The Duo proxy listens on 127.0.0.1:18120. Provider changes need Apply; `render_all` decrypts
+  the secrets with the data key (the app's, or `cli render` loads it from `key_file`).
+- **Helper** (section 6 clients grammar). Also accepted, with every key and value pinned: one MFA
+  `listen` (virtual_server `radius-admin-mfa-primary`, 127.0.0.1, port 1024–65535) with exactly one
+  `clients radius_admin_mfa` section holding one client (127.0.0.1, quoted secret,
+  `require_message_authenticator = yes`); up to 8 `home_server radius_admin_mfa_<id>` (keys above;
+  address literal, not a network; `response_window` 1–60, `zombie_period` 1–120,
+  `revive_interval` 10–3600), each with `home_server_pool` (type fail-over, its own home_server) and
+  `realm` (its own auth_pool) of the same name. The returned client count leaves out the Duo proxy.
+- **Portal.** Integrations page (`/integrations/`, navigation under Device admins; viewers see it):
+  rules, providers, available integrations. Admin + step-up: add/edit/remove a remote MFA server
+  (id, description, address, port, shared secret write-only, timeout 5–60, require
+  Message-Authenticator, on/off; a provider used by an enabled rule cannot be turned off, and one named
+  by any rule cannot be removed); Second-factor rules (`/integrations/policy`): per account kind on/off,
+  provider (must be on; a remote server only for directory accounts), all or selected clients
+  (at least one), exempt local device admins (at most 10, must be local device admins). Audit:
+  `integration.provider_create` / `_update` / `_delete` (detail without secrets: `shared_key_set`,
+  `shared_key_updated`), `integration.policy`. FIPS mode: remote servers are not offered and the rules
+  refuse them (the password would leave the server protected only by RADIUS's MD5-based hiding); in
+  standard mode no page mentions FIPS.
+- **Bench.** `tests/freeradius/fake-mfa-proxy.py` stands in for the Duo proxy (password check through
+  radius-admin-mfa-primary, then a scripted second factor) and for a remote server (own password,
+  extra reply attributes and a forged Class). Cases: rules off/on per kind, exemptions, selected
+  clients, Duo accept/deny/no Class/retransmit with one prompt, wrong password and non-admin without a
+  prompt, management subnet before proxying, provider off, provider not applied, remote server for a
+  local account, remote accept with group check, reply attributes dropped, remote no answer,
+  injection through the user name; the SQL audit checks the new hex-only call.
+- **Upgrade.** `--phase postgres` (tables, function), `app`, and `freeradius` with a restart (new
+  virtual server, new policy branches). Nothing changes until a provider and a rule are configured.
+
+### 29.1 Provider installs: signed catalog and helper actions
+
+The plumbing for installing a provider on this server (the portal's install pages and the Duo
+installer itself follow in the next step).
+
+- **Catalog.** `integrations/catalog.json`: `{"format": 1, "serial": N, "entries": [...]}`; each
+  entry `provider` (known to the helper: `duo`), `version` (X.Y.Z), `file`
+  (`duoauthproxy-<version>-src.tgz`), `url` (exactly `https://dl.duosecurity.com/` + file),
+  `size`, `sha256`, `fips` (bool; `true` only with `fips_tested`, the platforms checked),
+  `withdrawn` (bool), optional `min_radius_admin`. Edited only with `tools/integrations/catalog.py`
+  (`add` needs the vendor's published SHA-256 and the vendor's file name and refuses when they
+  differ; `fips`, `withdraw`; each change bumps `serial`). `tools/release/make-release.sh` signs it
+  with the update key (ECDSA P-384, SHA-384; checked against the pinned public key) and
+  `make-bundle.sh --catalog-sig` puts `integrations/catalog.json.sig` into the bundle; an invalid
+  catalog stops the release. The `app` phase installs `integrations/` as
+  `/opt/radius-admin/integrations/` (root, 0644; `*.sh` 0755) and removes a stale signature when
+  installing from a checkout (no signature: no catalog).
+- **Helper.conf** (defaults): `integration_dir = /var/lib/radius-admin/integrations` (owned by
+  `integration_owner = radius-admin`, created by the installer, 0750), `integration_catalog =
+  /opt/radius-admin/integrations/catalog.json`, `integration_fetch_unit`,
+  `integration_install_unit`, `integration_max_mib = 128`, `integration_log_dir =
+  /var/log/radius-admin`, `duo_dir = /opt/duoauthproxy`. The helper knows per provider the file
+  pattern, the download prefix, its service (`duoauthproxy.service`), its address (127.0.0.1:18120),
+  its API host pattern (`api-*.duosecurity.com`) and its build packages; the request only names the id.
+- **Catalog checks** (every action that uses it). The shipped catalog and `.sig` must be
+  root-owned, writable only by root, ≤ 256 KiB, and verify with `update_pubkey`
+  (`openssl dgst -sha384 -verify` on a private copy); every entry must match the provider's rules or
+  the catalog is refused. The helper keeps the newest verified catalog in its work dir
+  (`integrations-catalog.json` + `.sig`): a shipped catalog replaces it only with a higher serial; a
+  lower serial, or the same serial with other content, is ignored with a message (a downgrade cannot
+  bring back a withdrawn build). Without a verified catalog: serial 0, no entries.
+- **Actions** (section 6 additions):
+  - `integration_status` → `{"fips_enabled", "integrations": {id: {label, installed (from
+    <duo_dir>/.radius-admin, root-owned: version, sha256, verified, installed, fips), service_active,
+    listening, state}}}`; an install whose unit no longer runs is marked failed.
+  - `integration_catalog` → `{serial, source: release|kept|none, fips_enabled, entries, message}`.
+  - `integration_preflight {"id", "api_host"?}` → `{ready, checks: [{check, ok, detail}]}`: free
+    space (≥ 1 GiB) for `duo_dir`'s parent and the work dir, OS (Ubuntu/Debian from
+    `/etc/os-release`, read not sourced), missing build packages (`dpkg-query`), and with a valid
+    `api_host` a TCP connection to port 443. Read-only.
+  - `integration_fetch {"id", "version"}` → starts `<integration_fetch_unit>@<id>-<version>.service`.
+    Refused for a withdrawn build, and in FIPS mode for any build the catalog does not list as FIPS.
+  - `integration_install {"id", "file", "sha256"?, "actor"?}`: `file` must match the provider's
+    pattern; it is opened in `integration_dir` (which must belong to `integration_owner` and not be
+    world-writable) with O_NOFOLLOW, must be a regular single-linked file of that user ≤
+    `integration_max_mib`, and is copied into `<work_dir>/integration/<id>/` (root 0700) while
+    hashing (SHA-256). A catalog entry with that hash → `verified: catalog` (size and version must
+    match; withdrawn, a non-FIPS entry in FIPS mode, or `min_radius_admin` above the installed build
+    → refused). Not in the catalog: refused in FIPS mode; otherwise refused with the file's SHA-256
+    in the message unless `sha256` equals it → `verified: pasted-hash`. Writes `request.json` (id,
+    version, file, sha256, size, verified, fips, catalog_serial), the state (`queued`, actor) and
+    starts `<integration_install_unit>@<id>.service`; refused while that unit runs.
+  - `integration_log {"id", "offset"?}`: as `update_log`, for the log the state names
+    (`integration-<id>-<YYYYmmddTHHMMSSZ>.log` in `integration_log_dir`).
+- **Download** (`radius_admin.integration_fetch`, unit `radius-admin-integration-fetch@.service`:
+  radius-admin, the update check's sandbox, writes only `integration_dir`, `HTTPS_PROXY` from
+  `update.env`). Instance `<provider>-<X.Y.Z>`; downloads `https://dl.duosecurity.com/duoauthproxy-
+  <version>-src.tgz` only (a redirect off that host is refused) into `integration_dir`, checks size
+  and SHA-256 when the shipped catalog lists the build, keeps one build per provider, and reports in
+  `integration_dir/fetch-<provider>.json` (state downloading|done|failed, version, file, size,
+  sha256, listed, message). App config: `integration_dir`, `integration_catalog`.
+- **Install** (`deploy/integration-install.sh` → `/usr/local/libexec/radius-admin/radius-admin-
+  integration-install`, unit `radius-admin-integration-install@.service`, root, 1 h timeout): checks
+  the copy against `request.json` again (SHA-256, size, id), runs the release's root-owned
+  `/opt/radius-admin/integrations/<id>/install.sh REQUEST BUILD` (refused when missing, a symlink or
+  writable by others), records `installing` / `done` / `failed` with the log path in
+  `integration-state.json`, and removes the copy.
+- **Units.** The helper unit may read `/var/lib/radius-admin/integrations`.
+
+### 29.2 Duo Authentication Proxy: installer, configuration, removal
+
+Checked against Duo Authentication Proxy 6.8.1 (source read, built and run in the lab: the
+FreeRADIUS → Duo → radius-admin-mfa-primary round trip with Class and Message-Authenticator works;
+the second factor itself needs a Duo account and was replaced by `failmode=safe` with the Duo API
+unreachable). The portal pages that drive this follow.
+
+- **Installer** (`integrations/duo/install.sh REQUEST BUILD`, run by the install dispatcher):
+  build packages `build-essential libffi-dev zlib1g-dev perl` (missing ones only, apt,
+  `NEEDRESTART_SUSPEND=1`); extraction as the system user `radius-admin-build` (created when
+  missing) with Python's tarfile `data` filter, and only when every member is under
+  `duoauthproxy-<version>-src/`; plain `make` (Duo's Makefile is not safe for `-j`) as that user;
+  then the tree becomes `root:root`, `go-w`, before Duo's installer runs as root:
+  `duoauthproxy-build/install --install-dir /opt/duoauthproxy --service-user duo_authproxy_svc
+  --log-group duo_authproxy_grp --create-init-script yes --enable-selinux no --silent` (it creates
+  the user and group, writes and enables `/etc/systemd/system/duoauthproxy.service`, Type=forking,
+  twistd started as root dropping to the service user; `conf/authproxy.cfg` owned by the service
+  user, 0640). A running proxy is stopped first. Drop-in
+  `duoauthproxy.service.d/radius-admin.conf`: `ProtectSystem=strict` with write access to
+  `log`, `run`, `conf` and `-/etc/duoauthproxy` (Duo's secret storage), private /tmp and devices,
+  protected kernel and cgroups, `RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK`,
+  no namespaces, no SUID/SGID, locked personality. `/opt/duoauthproxy/.radius-admin` (root 0644):
+  version, sha256, verified, fips, installed. The proxy is (re)started only when `authproxy.cfg`
+  starts with `; radius-admin` (an applied configuration), otherwise left stopped.
+- **Removal** (`integrations/duo/remove.sh`, `radius-admin-integration-install --remove duo`,
+  unit `radius-admin-integration-remove@.service`): only an install with `.radius-admin`; the
+  configuration is copied to `/var/backups/radius-admin/duoauthproxy-authproxy.cfg-<time>` (0600),
+  the service stopped, Duo's `uninstall --no-prompt` run, the drop-in removed.
+- **Outcome audit.** The dispatcher records `integration.install` / `integration.remove` (result
+  done, removed or failed; version; message; the actor from the state) with
+  `python3 -m radius_admin.cli record-integration`.
+- **Configuration** (`unlang.render_duo_config(settings, fips)`, deterministic):
+  `[main] log_auth_events=true` (+ `fips_mode=true` in FIPS mode); `[radius_client] host=127.0.0.1,
+  port=18121, secret=<password-check secret>, pass_through_attr_names=Class`; `[radius_server_auto]
+  ikey, skey, api_host, radius_ip_1=127.0.0.1, radius_secret_1=<proxy secret>, interface=127.0.0.1,
+  port=18120, client=radius_client, failmode (secure|safe; FIPS: secure), factors (auto, push, phone,
+  passcode), pass_through_attr_names=Message-Authenticator, force_message_authenticator=true`.
+  Duo's RADIUS client adds Message-Authenticator to its request only when the incoming request's is
+  passed through, and its server adds one to replies only when forced: both are needed because the
+  loopback client and the home server require it. Settings: ikey `DI` + 18 upper-case letters or
+  digits, skey 40 letters or digits, `api-<1-16>.duosecurity.com`, secrets 16–128 letters or
+  digits (the INI format has comment characters).
+- **Helper.** Staged file `provider-duo` (optional; same rules as the other staged files).
+  Grammar (`check_duo_config`): first line `; radius-admin`; sections `main`, `radius_client`,
+  `radius_server_auto` once each; only the keys above, values as above (hosts and interface
+  127.0.0.1, ports 1024–65535, `client=radius_client`); in FIPS mode `fips_mode=true` and
+  `failmode=secure` are required. `validate` checks it (and that Duo is installed). `apply` with a
+  staged Duo file backs up the live `authproxy.cfg` too (`duo_managed` in the backup), installs it
+  keeping its owner, group and mode, restarts `duoauthproxy.service` and waits for 127.0.0.1:18120
+  (`restart_wait`) before touching FreeRADIUS; a proxy that does not come up gets its previous file
+  back and FreeRADIUS is left unchanged; a FreeRADIUS failure restores both. An unchanged Duo file
+  does not restart the proxy. Responses and the state carry `duo_sha256`. `rollback` restores a
+  backed-up Duo file that radius-admin wrote; Duo's own sample is not restored (the restored
+  FreeRADIUS files do not use Duo). With a changed Duo file the worst case of apply is about 180 s;
+  the portal waits longer for it (section 29.4).
+- **Actions.** `integration_remove {"id", "actor"?}`: refused unless radius-admin installed it, while
+  the live clients file still has the `radius-admin-mfa-primary` listener ("turn the provider off
+  and apply first") or an install/removal runs; state `queued` with `action: remove`; starts
+  `<integration_remove_unit>@<id>.service`. `integration_test {"id"}`: runs Duo's
+  `usr/local/bin/authproxy_connectivity_tool` (root-owned, writable only by root) for at most
+  120 s; `{passed, output}` with lines naming skey, secret or password redacted.
+
+### 29.3 Duo in the portal
+
+- **Provider row.** `ui.mfa_provider` id `duo`, type `duo`, created on the first save of the Duo
+  settings (off) with two random 32-character secrets (`secret`: default server → Duo proxy;
+  `primary_secret`: Duo proxy → radius-admin-mfa-primary). Settings: ikey, api_host, failmode,
+  factors; secrets (encrypted): skey and the two shared secrets. It can be turned on only while the
+  helper reports Duo installed, and turned off only when no enabled rule names it. It is not removed
+  through the providers table.
+- **Staging.** `services.render_provider_files()` → `{"provider-duo": render_duo_config(...)}`
+  while the Duo provider is on (FIPS mode from `require_fips`). The apply page stages it next to
+  policy and clients (`write_staging(..., providers=)` writes it, or removes it when Duo is off),
+  shows its diff with `skey`, `secret` and `radius_secret_N` masked, includes
+  `providers_sha256` (one SHA-256 over the provider files, '' without any) in the "expected" token
+  and in `ui.apply_log.providers_sha256` (new column, sql/101-mfa.sql); `pending_state` compares it
+  with the last apply (NULL counts as ''). The applied copy and its history keep the provider files;
+  a rollback to a set without a Duo file leaves the applied Duo copy, like the helper.
+- **Page** `/integrations/duo` (viewers: state; operators: test; admin + step-up: everything else):
+  state (installed version, catalog-checked or Unverified, service running and listening, provider
+  on/off, last install or removal), live progress and the install log (`/integrations/duo/status`,
+  `/integrations/duo/log`, the updates page's indicators); 1. Check this server
+  (`integration_preflight`, with the API hostname when set); 2. Get and install: the catalog's builds
+  (FIPS mode: FIPS-capable only; withdrawn hidden) with Download (`integration_fetch`), without
+  catalog entries a version field (standard mode only), the download's state from
+  `fetch-duo.json`, Upload, and Install for each build in `integration_dir` (with, in standard mode
+  only, a SHA-256 field and a required confirmation that it was compared with Duo's published value);
+  3. Connect to Duo (ikey, skey write-only, API hostname, fail mode (standard mode only), factors,
+  on/off); 4. Test (`integration_test`); Remove (refused while the provider is on).
+- **Upload** `POST /integrations/duo/upload`: multipart field `build`; the file name (directory part
+  dropped) must be `duoauthproxy-X.Y.Z-src.tgz`; at most 128 MiB, written to a temporary file in
+  `integration_dir` and renamed (0640). The request size limit is 2 MiB everywhere else; this path
+  allows 129 MiB (`app.request_class`), and nginx `client_max_body_size 130m` for exactly this
+  location. The portal service may write `/var/lib/radius-admin/integrations`.
+- **Audit:** `integration.fetch`, `integration.upload` (file, size, SHA-256),
+  `integration.install_requested` (file, verified, SHA-256), `integration.configure` (changes;
+  `duo_skey_updated`, never the key), `integration.test`, `integration.remove_requested`; the outcome
+  of an install or removal is `integration.install` / `integration.remove` (section 29.2).
+
+### 29.4 Second factor: alerts, reports, apply time, FIPS
+
+- **Alerts** (`alerts.py`, monitor every 60 s; `sql/101-mfa.sql` adds the kinds to
+  `alert_kind_check`, `ui.alert_settings.mfa_enabled`, `mfa_timeout_enabled`,
+  `mfa_timeout_threshold` (1–100000, default 3), `mfa_timeout_window_minutes` (1–1440, default 15)
+  and `ui.alert.reminded_at`):
+  - `mfa_provider_down` (subject `duo`): the Duo provider is on, the last successful apply/rollback
+    has a non-empty `providers_sha256`, and the helper's `integration_status` reports Duo not
+    installed, not active or not listening on 127.0.0.1:18120, in two checks in a row. A helper
+    error (or a helper without the action) neither opens nor resolves.
+  - `mfa_timeouts`: rejects with reason exactly `radius-admin: the second-factor provider did not
+    answer` (= `unlang._MFA_NO_ANSWER`) in the window ≥ threshold; resolves below threshold/2; its own
+    switch.
+  - `mfa_unverified` (subject `duo`): the provider is on and its build was installed with
+    `verified = pasted-hash` while no catalog entry with that SHA-256 (not withdrawn) exists; in FIPS
+    mode also when the build is not FIPS-capable (below), with a message starting "FIPS mode:".
+  - `mfa_withdrawn` (subject `duo`): an installed build (on or off) matches a withdrawn catalog entry
+    by SHA-256 or version.
+  - The last two are sent again (`alerts.remind_alert`, prefix "Still open: ") 24 h after they were
+    last sent, while open. `mfa_enabled` switches the three provider alerts. The monitor calls
+    `integration_status` every round and `integration_catalog` at most once an hour, only while
+    Duo is installed. `integrations.build_check(installed, entries)` → `verified`, `listed`,
+    `withdrawn`, `fips_capable` is shared with the Duo page, which now shows a build the catalog
+    lists later as checked and a withdrawn build in red.
+- **Reports and logs.** Privileged-access report: the "Two-factor" column of device admin rows is
+  "exempt (break-glass)", "not required", "<provider>, on all clients|selected clients: …" or
+  "required …, but <provider> is off: these logins are rejected" (`integrations.coverage`,
+  `coverage_text`), plus a section "Second factor for device admin logins" (accounts, required,
+  provider, provider state, clients, exempt) and notes (no exempt local account; reject when the
+  provider is off or silent). Auth log detail of `pap-admin+mfa` / `admin-ldap+mfa`: "Second factor"
+  with the provider the rule for that account kind named at the login's time
+  (`integrations.provider_at`: the current rule with every later successful `integration.policy`
+  change of `provider_id` undone; "Provider not known" when it named none). radpostauth gets no
+  provider column (rule 3). Setup checklist: optional step `mfa` "Second factor for device admins",
+  done when a rule is on and its provider is on, linking to the Integrations page.
+- **Device timeout.** Vendor profiles gain `setup.mfa_timeout` (section 26; Catalyst 1200/1300:
+  `radius-server timeout 30` + `radius-server retransmit 2`; generic-rfc `null` → the generic text;
+  custom profiles: form field `setup_mfa_timeout`). The Integrations page lists, per profile of the
+  enabled clients the enabled rules cover (all enabled clients when a rule covers all, or no rule
+  is on), the profile's commands or the generic text and the client count.
+- **Apply time.** Worst case of apply/rollback with a changed Duo file: lock 10 + validate 30 + 4 ×
+  (restart 20 + wait 15) = 180 s. The app waits `helper_duo_timeout` (default 210 s; never less than
+  `helper_timeout`) for `apply` when the staged `provider-duo` differs from the applied copy, and for
+  `rollback` when a Duo configuration was applied or a Duo provider exists; otherwise
+  `helper_timeout` (120 s). gunicorn `--timeout 240`, nginx `proxy_read_timeout 240s`. The Apply
+  button's busy text says it can take a few minutes when providers are pending. No helper protocol
+  change.
+- **FIPS.** In FIPS mode the helper's `validate`/`apply`/`rollback` with a staged Duo file also
+  require (`check_duo_fips`) that `<duo_dir>/.radius-admin` says `fips: true` (installed in FIPS
+  mode) and that the verified catalog has an entry with that SHA-256, `fips: true`, not withdrawn;
+  otherwise "FIPS mode: the installed Duo Authentication Proxy X is not a FIPS-capable build …" or
+  "… was installed before FIPS mode was turned on …", and nothing changes. The Duo page refuses
+  "On" for such a build in FIPS mode and says why (standard mode: no wording). FIPS-capable
+  catalog entries: duo 6.8.1 (`fips_tested`: `ubuntu-24.04-pro-fips-updates-amd64`); the Duo RADIUS
+  hops on loopback are covered by SECURITY.md exception 9. `tools/integrations/duo-fips-check.py` (`source`, `host`, `installed`, `all`;
+  `--running`, `--json`) is the maintainers' lab check before `catalog.py fips` (RUNBOOK §6.9b):
+  R1 kernel FIPS, R2 system OpenSSL FIPS provider active, R3 Duo's `pkgs/fips_modules/<arch>/fips.so`
+  HMAC-SHA256 (OpenSSL's public fipsinstall key) equals its `module-mac`, in the source and the
+  installed tree, same file, R4 the installed provider loads with Duo's `openssl.cnf` (self-tests),
+  R5 Duo's Python with FIPS enabled refuses MD5 and computes SHA-256, R6 applied `fips_mode=true`,
+  `failmode=secure`, listening, log "FIPS mode is enabled"; M1 (CMVP certificate of the provider
+  version) and M2 (prebuilt provider, `cryptography` wheel with its own OpenSSL) are decided by the
+  maintainer. Exit 0 only when every required check that ran passed.

@@ -34,7 +34,20 @@ def create_app(config_path=None, overrides=None):
         except Exception as e:      # the database may not be up yet; the console still refuses it
             print("radius-admin: could not check the PEAP setting for FIPS mode: %s" % e, file=sys.stderr)
 
+    from flask import Request
+
+    class _Request(Request):
+        """Requests are limited to MAX_CONTENT_LENGTH (2 MiB), except the upload of a
+        second-factor provider build (SPEC section 29.2; nginx allows the same path more)."""
+        @property
+        def max_content_length(self):
+            if self.path == "/integrations/duo/upload":
+                from .integrations import UPLOAD_MAX
+                return UPLOAD_MAX + 1024 * 1024
+            return super().max_content_length
+
     app = Flask(__name__, static_folder="static", template_folder="templates")
+    app.request_class = _Request
     app.config["RA"] = cfg
     app.config["MAX_CONTENT_LENGTH"] = 2 * 1024 * 1024
     app.config["SESSION_COOKIE_NAME"] = "unused"  # Flask sessions are not used
@@ -69,12 +82,12 @@ def create_app(config_path=None, overrides=None):
     install_listnav(app)
 
     from .views import (account, admins, alerts as alerts_v, apply as apply_v, auth, clients, dashboard, dot1x_users, logs,
-                        mab, profiles, reports, rules, sessions, settings as settings_v, setup, snmp as snmp_v,
-                        sso as sso_v, switch_admins, updates)
+                        integrations as integrations_v, mab, profiles, reports, rules, sessions, settings as settings_v,
+                        setup, snmp as snmp_v, sso as sso_v, switch_admins, updates)
     for bp in (auth.bp, account.bp, dashboard.bp, clients.bp, switch_admins.bp, switch_admins.legacy_bp,
                dot1x_users.bp, rules.bp,
                mab.bp, apply_v.bp, logs.bp, settings_v.bp, admins.bp, snmp_v.bp, sessions.bp,
-               alerts_v.bp, reports.bp, sso_v.bp, setup.bp, updates.bp, profiles.bp):
+               alerts_v.bp, reports.bp, sso_v.bp, setup.bp, updates.bp, profiles.bp, integrations_v.bp):
         app.register_blueprint(bp)
 
     # The SAML assertion consumer service receives a cross-site POST from the identity

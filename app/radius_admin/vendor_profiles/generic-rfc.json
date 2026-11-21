@@ -33,6 +33,7 @@
   },
   "setup": {
     "accounting": null,
-    "coa": null
+    "coa": null,
+    "mfa_timeout": null
   }
 }

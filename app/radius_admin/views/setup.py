@@ -2,7 +2,7 @@
 here changes configuration itself, it links to the page where each step is done."""
 from flask import Blueprint, abort, redirect, render_template, request, url_for
 
-from .. import db, sso
+from .. import db, integrations, sso
 from ..flashing import flash
 from ..security import role_required
 from ..services import get_settings, pending_state, set_setting
@@ -30,6 +30,11 @@ def checklist():
     fr_ok = bool(st.get("ok") and st.get("service_active") and st.get("listening"))
     saml_on = sso.settings(s["saml"])["enabled"]
     radsec_on = str(s["radsec"].get("enabled", "false")).lower() == "true"
+    cov = integrations.coverage()
+    covered = [k for k in integrations.ACCOUNT_KINDS if cov[k]["enabled"] and cov[k]["provider_on"]]
+    mfa_on = bool(covered)
+    mfa_detail = "; ".join("%s: %s" % (cov[k]["label"], integrations.coverage_text(cov[k]))
+                           for k in integrations.ACCOUNT_KINDS if cov[k]["enabled"]) or "Off"
     return [
         ("freeradius", "FreeRADIUS is running and reachable", True, fr_ok,
          (st.get("radiusd_version") or "") if fr_ok else (st.get("message") or "Not running or not listening."),
@@ -55,6 +60,7 @@ def checklist():
          "%d device admin%s%s" % (n["switch_admins"], "" if n["switch_admins"] == 1 else "s",
                                   ", plus directory groups" if s["admin_directory"] and s["admin_directory_groups"]
                                   else ""), "switch_admins.index"),
+        ("mfa", "Second factor for device admins", False, mfa_on, mfa_detail, "integrations.index"),
         ("sso", "Single sign-on for the console", False, saml_on, "On" if saml_on else "Off", "sso.settings"),
         ("radsec", "RadSec for clients that support it", False, radsec_on, "On" if radsec_on else "Off",
          "clients.radsec"),

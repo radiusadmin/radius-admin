@@ -26,6 +26,20 @@
 </section>
 
 <section class="panel narrow">
+  <h2>Second factor for device admins</h2>
+  <label class="check"><input type="checkbox" name="mfa_enabled" value="1" {{ 'checked' if s.mfa_enabled }}> Alert when the Duo Authentication Proxy is down, and about builds that are unverified or withdrawn from the signed catalog</label>
+  <p class="small muted">The proxy is checked every minute once a configuration with Duo has been applied; it alerts after 2 failed checks. Unverified and withdrawn builds are reported again once a day while they stay installed.</p>
+  <label class="check"><input type="checkbox" name="mfa_timeout_enabled" value="1" {{ 'checked' if s.mfa_timeout_enabled }}> Alert when logins get no answer from the second-factor provider</label>
+  <div class="grid-2">
+    <div><label for="mfa_timeout_threshold">Logins without an answer</label>
+      <input id="mfa_timeout_threshold" name="mfa_timeout_threshold" value="{{ s.mfa_timeout_threshold }}" inputmode="numeric"{{ m.described(errors, 'mfa_timeout_threshold') }}>{{ m.field_error(errors, 'mfa_timeout_threshold') }}</div>
+    <div><label for="mfa_timeout_window_minutes">Within (minutes)</label>
+      <input id="mfa_timeout_window_minutes" name="mfa_timeout_window_minutes" value="{{ s.mfa_timeout_window_minutes }}" inputmode="numeric"{{ m.described(errors, 'mfa_timeout_window_minutes') }}>{{ m.field_error(errors, 'mfa_timeout_window_minutes') }}</div>
+  </div>
+  <p class="small muted">Counts device admin logins rejected with “the second-factor provider did not answer”. Unanswered pushes are normal now and then; the alert clears when the count falls below half the threshold.</p>
+</section>
+
+<section class="panel narrow">
   <h2>Delivery</h2>
   <label class="check"><input type="checkbox" name="syslog_enabled" value="1" {{ 'checked' if s.syslog_enabled }}> Syslog</label>
   <p class="small muted">Written as <span class="mono">radius-admin: ALERT OPEN|RESOLVED &lt;kind&gt;: …</span> (warning; critical for FreeRADIUS down). Forward the radius-admin log to your SIEM with rsyslog.</p>

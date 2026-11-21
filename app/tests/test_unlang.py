@@ -58,8 +58,10 @@ def test_sql_arguments_are_hex_or_constant_only():
     attributes (FreeRADIUS un-escapes %{sql:} arguments after SQL escaping)."""
     p = render()
     calls = _sql_calls(p)
-    # device admin source check and priv15 appear for local and directory accounts (SPEC section 28)
-    assert len(calls) == 12
+    # device admin source check and priv15 appear for local and directory accounts (SPEC section 28);
+    # the second factor (SPEC section 29) adds its decision (local / directory), a source check, the
+    # password check's directory and group calls, and priv15 / group calls after a provider's accept
+    assert len(calls) == 20
     allowed = {
         # %{hex:...} output is [0-9a-f] only; Tmp-String-5 is checked against hex below
         "SELECT radius_admin_mab_hex('%{control:Tmp-String-2}', '%{hex:NAS-IP-Address}', "
@@ -69,6 +71,9 @@ def test_sql_arguments_are_hex_or_constant_only():
         # device admins with directory accounts: the user name and the group list, hex only
         "SELECT radius_admin_admin_directory_hex('%{hex:User-Name}')",
         "SELECT radius_admin_admin_group_hex('%{control:Tmp-String-3}')",
+        # second factor: the user name and the client shortname (configuration) as hex, the kind constant
+        "SELECT radius_admin_mfa_hex('%{hex:User-Name}', '%{hex:control:Tmp-String-5}', 'local')",
+        "SELECT radius_admin_mfa_hex('%{hex:User-Name}', '%{hex:control:Tmp-String-5}', 'directory')",
         "SELECT radius_admin_vlan_rule_hex(%{control:Tmp-String-7}, '%{control:Tmp-String-8}', "
         "'%{control:Tmp-String-3}')",
         # EAP-TTLS: the inner User-Name and the logged user, hex only
@@ -93,9 +98,9 @@ def test_sql_arguments_are_hex_or_constant_only():
 
 def test_group_lists_skip_duplicate_names():
     p = render()
-    # EAP-TLS loop, both directory-user loops (EAP-TTLS, PEAP) and the directory device admin loop
-    # use the de-duplicating append
-    assert p.count('if ("%{control:Tmp-String-3}," !~ /,%{control:Tmp-String-2},/) {') == 4
+    # EAP-TLS loop, both directory-user loops (EAP-TTLS, PEAP), the directory device admin loop and the
+    # second factor's two (password check for Duo, after a remote server's accept) use the de-duplicating append
+    assert p.count('if ("%{control:Tmp-String-3}," !~ /,%{control:Tmp-String-2},/) {') == 6
     assert '&Tmp-String-3 := "%{control:Tmp-String-3},%{hex:' not in p
     for start in ("foreach &control:LDAP-Group {", "foreach &control:Tmp-String-7 {"):
         i = p.index(start)
@@ -136,10 +141,11 @@ def test_admin_branch_uses_live_settings():
     assert "outside the management subnet" in adm and "not in group net-admins" in adm
     assert "\"%{sql:SELECT radius_admin_priv15()}\" == \"t\"" in adm
     assert '&Cisco-AVPair += "shell:priv-lvl=15"' in adm
-    # wrong source, not a device admin, and (one tab deeper, also counted here) a directory
-    # account in no device admin group
-    assert adm.count("\t\t\treject\n") == 3
-    assert adm.count("\t\t\t\treject\n") == 1
+    # wrong source, not a device admin, and (deeper, also counted here) a directory account in no
+    # device admin group; second factor (SPEC section 29): not proxied, remote server for a local
+    # account, answer without the password check, remote accept for an account in no admin group
+    assert adm.count("\t\t\treject\n") == 7
+    assert adm.count("\t\t\t\treject\n") == 5
 
 
 def test_authmethod_markers():

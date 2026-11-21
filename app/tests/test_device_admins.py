@@ -138,7 +138,7 @@ def _policy():
 
 def test_policy_authorize_asks_the_directory_only_after_the_subnet():
     p = _policy()
-    a = p[p.index("radius_admin_admin_authorize {"):p.index("radius_admin_inner_authorize {")]
+    a = p[p.index("radius_admin_admin_authorize {"):p.index("radius_admin_mfa_primary_authorize {")]
     # the user name reaches SQL only as hex
     assert "radius_admin_admin_directory_hex('%{hex:User-Name}')" in a
     assert "'%{User-Name}'" not in a
@@ -147,7 +147,10 @@ def test_policy_authorize_asks_the_directory_only_after_the_subnet():
     assert "!&EAP-Message && (!&NAS-Port-Type || &NAS-Port-Type != Ethernet) && !&Called-Station-Id" in a
     assert "&User-Password" in a and "!&control:Auth-Type" in a
     assert "&Tmp-String-9 += &control:ldap_user-LDAP-Group[*]" in a
-    assert a.count("reject\n") == 3      # outside the subnet, not in the directory, directory unreachable
+    # directory accounts: outside the subnet, not in the directory, directory unreachable (3); second
+    # factor (SPEC section 29): outside the subnet, not in the directory, directory unreachable, local
+    # account for a remote server, provider off, undecided (6)
+    assert a.count("reject\n") == 9
 
 
 def test_policy_postauth_requires_a_directory_group():
@@ -162,7 +165,7 @@ def test_policy_postauth_requires_a_directory_group():
     # the subnet check comes before either kind of account
     assert adm.index("outside the management subnet") < adm.index('elsif (&control:Tmp-String-1 == "admin-ldap")')
     # a local login never inherits the directory marker, and the marker is only kept, not set here
-    assert 'if (!&control:Tmp-String-1 || &control:Tmp-String-1 != "admin-ldap")' in adm
+    assert 'if (!&control:Tmp-Integer-0 && (!&control:Tmp-String-1 || &control:Tmp-String-1 != "admin-ldap"))' in adm
 
 
 def test_policy_reject_names_a_refused_directory_password():

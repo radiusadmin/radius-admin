@@ -7,6 +7,50 @@ release, so previews sort after it.
 
 ## Unreleased
 
+### Added
+- **A second factor for device admin logins (Integrations).** A new Integrations page sets which
+  device admin logins must be approved with a second factor: local or directory accounts, on all
+  clients or selected ones, with exempt break-glass accounts. First provider: a remote RADIUS MFA
+  server (for example a Network Policy Server with the Entra multifactor extension, privacyIDEA or
+  an Okta RADIUS agent) for directory accounts; FreeRADIUS still checks the management subnet first
+  and the device admin group after the server's accept. The FreeRADIUS side of the Duo
+  Authentication Proxy (on this server, password checked here before the push) is in place;
+  installing Duo from the portal follows. Logins that need a second factor fail closed. Auth log
+  methods `pap-admin+mfa` and `admin-ldap+mfa`.
+- **Signed integrations catalog.** Releases carry a catalog of provider builds this project has
+  checked, signed with the update key. The root helper can download a provider build, check it
+  against the catalog (or, outside FIPS mode, a SHA-256 the admin enters) and hand it to an install
+  unit; FIPS mode accepts only builds the catalog lists as FIPS-capable. The install pages follow.
+- **Duo Authentication Proxy installer.** Builds Duo's source as an unprivileged user, installs it
+  with a hardened systemd unit and configures it from the portal: applying changes writes Duo's
+  configuration and restarts it before FreeRADIUS, restoring both if either fails. Removal and
+  Duo's connectivity check through the root helper. Checked with Duo 6.8.1.
+- **Duo set up from the portal.** Integrations → Duo Authentication Proxy: check the server,
+  download or upload Duo, install it with a live log, enter its keys, test the connection, remove
+  it. Duo then serves local and directory device admin accounts; its configuration is applied, shown
+  as a diff and rolled back together with FreeRADIUS's files.
+- **Second-factor alerts.** Alerts when the Duo proxy stops or stops listening, when device admin
+  logins get no answer from the second-factor provider (threshold and window in Alert settings),
+  and once a day while the Duo build in use is unverified or was withdrawn from the signed catalog.
+- **Second factor in reports and logs.** The privileged-access report shows per account whether a
+  second factor is needed, by which provider and on which clients, and the break-glass exemptions;
+  the auth log detail of a `+mfa` login names its provider; the setup checklist has an optional
+  "Second factor for device admins" step; the Integrations page shows each device profile's RADIUS
+  timeout commands (Catalyst 1200/1300: `radius-server timeout 30`, `retransmit 2`), and custom
+  profiles have a field for them.
+
+### Changed
+- An apply that also restarts the Duo proxy may take up to about three minutes; the portal, nginx
+  and gunicorn now wait long enough for it (`helper_duo_timeout`, 210 s; 240 s in front).
+- A Duo build the signed catalog marks FIPS-capable is now required in FIPS mode for turning Duo on
+  and for every apply with Duo, not only for installing.
+- **Duo in FIPS mode.** The signed catalog lists Duo Authentication Proxy 6.8.1 and marks it
+  FIPS-capable, checked on Ubuntu 24.04 Pro `fips-updates` (amd64): Duo runs with its FIPS mode on
+  its bundled OpenSSL FIPS Provider 3.1.2 (CMVP certificate #4985) for TLS to Duo. Its RADIUS hops
+  on this server's loopback still use RADIUS's MD5, as FreeRADIUS does; SECURITY.md records this as
+  a documented exception and lists the controls to put in place (§1.3).
+- The Duo page shows a build as checked once a later catalog lists it, and flags a withdrawn build.
+
 ### Changed
 - **Licence: from the GNU AGPL to the Business Source License 1.1 (source available).**
   Free for personal use, for organizations with fewer than 50 people and for a 60-day trial;

@@ -196,8 +196,9 @@ body.app {
 
 .main { grid-area: main; padding: 1.5rem 2rem 3rem; max-width: none; width: 100%; min-width: 0; }
 .main:focus { outline: none; }
-.crumb { margin: 0 0 .5rem; font-size: .9rem; }
-.crumb a::before { content: "\2190\00a0"; }
+.crumb { margin: 0 0 .75rem; }
+/* back buttons above a page heading: a quiet button with a leading arrow */
+.btn-back::before { content: "\2190"; margin-right: .35rem; }
 
 /* Settings overview: one panel per category */
 /* columns, not a grid: cards stack without the gaps a tall card leaves in its row */
@@ -738,3 +739,12 @@ td.coa-state { display: table-cell; white-space: normal; }
 .coa-state .cell-sub { margin-top: .1rem; }
 .row-actions .coa-state { margin-right: .5rem; }
 @media print { .bulk-bar, .check-cell { display: none !important; } }
+
+/* Integrations: Duo page (SPEC section 29.2) */
+.check-results { list-style: none; padding: 0; margin: .75rem 0 0; }
+.check-results li { margin: .3rem 0; }
+.inline-form { display: flex; flex-wrap: wrap; align-items: flex-end; gap: .5rem; margin: .75rem 0; }
+.inline-form label { flex-basis: 100%; }
+.install-form { border-top: 1px solid var(--line); padding-top: .75rem; margin-top: .75rem; }
+.panel-head-actions { display: flex; flex-wrap: wrap; gap: .5rem; }
+.catalog-action { margin: .5rem 0 0; }

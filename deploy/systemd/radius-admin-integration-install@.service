@@ -1,0 +1,17 @@
+# Installs a checked second-factor provider build (SPEC section 29). Started only by the
+# root helper, after it checked the build into /var/lib/radius-admin-helper/integration/%i.
+[Unit]
+Description=radius-admin integration install: %i
+Documentation=file:/opt/radius-admin/docs/RUNBOOK.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/radius-admin/radius-admin-integration-install %i
+# building a provider from source takes a while
+TimeoutStartSec=3600
+UMask=0077
+NoNewPrivileges=yes
+ProtectHome=yes
+PrivateTmp=yes

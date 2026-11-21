@@ -723,3 +723,75 @@ def test_clients_vendor_profile_refused(env, value):
     env.stage(clients=b"client a {\n ipaddr = 192.0.2.1\n secret = \"0123456789abcdefg\"\n"
                       b" radius_admin_profile = " + value + b"\n}\n")
     assert env.call({"action": "validate"})["ok"] is False, value
+
+
+# ------------------------------------------------------------------ second-factor providers (SPEC section 29)
+MFA_PROVIDERS = [dict(id="duo", type="duo", enabled=True, secret="TestDuoProxySecret0123456",
+                      primary_secret="TestMfaPrimarySecret01234"),
+                 dict(id="nps-mfa", type="radius-mfa", enabled=True, address="2001:db8::50", port=1812,
+                      secret="TestRemoteMfaSecret012345", timeout=30, require_ma="yes")]
+
+
+def _mfa_text(env, radsec=True):
+    """Clients file with RadSec and both kinds of provider, as unlang.py renders it."""
+    sys.path.insert(0, os.path.join(HERE, "..", "..", "app"))
+    from radius_admin import unlang
+    text = _radsec_text(env).decode() if radsec else unlang.render_clients(
+        [dict(name="sw1", ipaddr="192.0.2.11", secret="AbCdEfGhIjKlMnOpQrStUvWx12345678", enabled=True)])
+    return (text + unlang.render_mfa(MFA_PROVIDERS)).encode()
+
+
+@pytest.mark.parametrize("radsec", [True, False])
+def test_mfa_rendered_file_passes(env, radsec):
+    text = _mfa_text(env, radsec)
+    assert b"virtual_server = radius-admin-mfa-primary" in text and b"realm radius_admin_mfa_nps-mfa {" in text
+    env.stage(clients=text)
+    r = env.call({"action": "validate"})
+    assert r["ok"] is True, r
+
+
+MFA_BAD = [
+    (b"ipv4addr = 127.0.0.1\n\tport = 18121", b"ipv4addr = 0.0.0.0\n\tport = 18121"),   # listener on all addresses
+    (b"port = 18121", b"port = 99"),
+    (b"\tproto = udp\n\tvirtual_server = radius-admin-mfa-primary", b"\tproto = tcp\n\tvirtual_server = radius-admin-mfa-primary"),
+    (b"clients = radius_admin_mfa", b"clients = radius_admin_radsec"),
+    (b"\t\tipv4addr = 127.0.0.1\n\t\tsecret", b"\t\tipv4addr = 192.0.2.0/24\n\t\tsecret"),  # the proxy client
+    (b"\t\trequire_message_authenticator = yes\n\t}", b"\t\trequire_message_authenticator = no\n\t}"),
+    (b"\t\tshortname = radius-admin-duo-proxy\n", b"\t\tshortname = radius-admin-duo-proxy\n\t\tvirtual_server = x\n"),
+    (b"home_server radius_admin_mfa_duo {", b"home_server localhost {"),
+    (b"status_check = none", b"status_check = request"),
+    (b"\ttype = fail-over", b"\ttype = load-balance"),
+    (b"auth_pool = radius_admin_mfa_nps-mfa", b"auth_pool = radius_admin_mfa_duo"),
+    (b"home_server = radius_admin_mfa_duo", b"home_server = radius_admin_mfa_nps-mfa"),
+    (b"ipv6addr = 2001:db8::50", b"ipv6addr = 2001:db8::/32"),
+    (b"ipv6addr = 2001:db8::50", b"ipaddr = radius.example.net"),
+    (b"response_window = 30", b"response_window = 600"),
+    (b'secret = "TestRemoteMfaSecret012345"', b'secret = "${confdir}TestRemoteMfaSec"'),
+    (b"\tstatus_check = none\n}\n\nhome_server_pool radius_admin_mfa_nps-mfa",
+     b"\tstatus_check = none\n\tvirtual_server = evil\n}\n\nhome_server_pool radius_admin_mfa_nps-mfa"),
+    (b"realm radius_admin_mfa_nps-mfa {\n\tauth_pool = radius_admin_mfa_nps-mfa\n",
+     b"realm radius_admin_mfa_nps-mfa {\n\tauth_pool = radius_admin_mfa_nps-mfa\n\tacct_pool = radius_admin_mfa_nps-mfa\n"),
+]
+
+
+@pytest.mark.parametrize("old,new", MFA_BAD)
+def test_mfa_whitelist(env, old, new):
+    text = _mfa_text(env)
+    assert old in text, old
+    env.stage(clients=text.replace(old, new, 1))
+    r = env.call({"action": "validate"})
+    assert r["ok"] is False, new
+
+
+def test_mfa_sections_come_together(env):
+    text = _mfa_text(env, radsec=False).decode()
+    listen = text[text.index("\nlisten {"):text.index("\nclients radius_admin_mfa")]
+    section = text[text.index("\nclients radius_admin_mfa"):text.index("\nhome_server radius_admin_mfa_duo")]
+    realm = text[text.index("\nrealm radius_admin_mfa_duo"):text.index("\nhome_server radius_admin_mfa_nps-mfa")]
+    for bad in (text.replace(section, "\n"),                       # listener without its client
+                text.replace(listen, "\n"),                        # client without the listener
+                text + listen,                                     # two listeners
+                text.replace(realm, "\n"),                         # home server without its realm
+                text + "\nrealm radius_admin_mfa_x {\n\tauth_pool = radius_admin_mfa_x\n}\n"):
+        env.stage(clients=bad.encode())
+        assert env.call({"action": "validate"})["ok"] is False

@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block title %}{{ 'Add remote MFA server' if is_new else 'Edit ' ~ v.id }}{% endblock %}
+{% block content %}
+<header class="page-head"><h1>{{ 'Add remote MFA server' if is_new else 'Edit remote MFA server ' ~ v.id }}</h1></header>
+{{ m.apply_note() }}
+<section class="panel narrow">
+<p class="small muted">The remote server checks the password and asks for the second factor. FreeRADIUS sends it directory accounts only, and still requires one of the device admin groups. The password travels to that server protected by the shared secret, as in any RADIUS request: use a server on a trusted network.</p>
+<form method="post" class="stack">
+  {{ m.csrf() }}
+  {% if is_new %}
+  <label for="id">Provider id</label>
+  <input id="id" name="id" value="{{ v.id or '' }}" required maxlength="32" class="mono" autocomplete="off" aria-describedby="id-hint{{ ' id-error' if errors.id else '' }}"{{ ' aria-invalid=true' if errors.id else '' }}>
+  <p id="id-hint" class="small muted">Lower-case letters, digits and hyphens, for example <span class="mono">nps-mfa</span>. Cannot be changed later.</p>
+  {{ m.field_error(errors, 'id') }}
+  {% endif %}
+  <label for="label">Description</label>
+  <input id="label" name="label" value="{{ v.label or '' }}" maxlength="100">
+  <label for="address">Server address</label>
+  <input id="address" name="address" value="{{ v.address or '' }}" required maxlength="64" class="mono" autocomplete="off" aria-describedby="address-hint{{ ' address-error' if errors.address else '' }}"{{ ' aria-invalid=true' if errors.address else '' }}>
+  <p id="address-hint" class="small muted">An IPv4 or IPv6 address, for example <span class="mono">192.0.2.50</span>.</p>
+  {{ m.field_error(errors, 'address') }}
+  <label for="port">Port</label>
+  <input id="port" name="port" value="{{ v.port }}" required inputmode="numeric" maxlength="5" class="mono"{{ m.described(errors, 'port') }}>
+  {{ m.field_error(errors, 'port') }}
+  <label for="secret">Shared secret</label>
+  <input id="secret" name="secret" type="password" {{ 'required' if is_new else '' }} maxlength="128" autocomplete="new-password" aria-describedby="secret-hint{{ ' secret-error' if errors.secret else '' }}"{{ ' aria-invalid=true' if errors.secret else '' }}>
+  <p id="secret-hint" class="small muted">{% if not is_new %}A secret is set; leave empty to keep it. {% endif %}16–128 printable characters, no spaces, double quotes or backslashes. Stored encrypted.</p>
+  {{ m.field_error(errors, 'secret') }}
+  <label for="timeout">Wait for the answer (seconds)</label>
+  <input id="timeout" name="timeout" value="{{ v.timeout }}" required inputmode="numeric" maxlength="2" class="mono" aria-describedby="timeout-hint{{ ' timeout-error' if errors.timeout else '' }}"{{ ' aria-invalid=true' if errors.timeout else '' }}>
+  <p id="timeout-hint" class="small muted">5–60. Long enough for the person to approve the prompt; no answer in time means reject.</p>
+  {{ m.field_error(errors, 'timeout') }}
+  <label class="check"><input type="checkbox" name="require_ma" value="1" {{ 'checked' if v.require_ma == 'yes' else '' }}> Require Message-Authenticator in the server's answers (recommended)</label>
+  <label class="check"><input type="checkbox" name="enabled" value="1" {{ 'checked' if v.enabled else '' }}{{ m.described(errors, 'enabled') }}> On</label>
+  {{ m.field_error(errors, 'enabled') }}
+  <div class="actions"><button type="submit" class="btn btn-primary">{{ 'Add server' if is_new else 'Save' }}</button>
+  <a class="btn btn-quiet" href="{{ url_for('integrations.index') }}">Cancel</a></div>
+</form>
+</section>
+{% endblock %}

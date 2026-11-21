@@ -21,6 +21,7 @@ log_syslog = true
 
 # Optional (defaults shown):
 # helper_timeout = 120              ; seconds the app waits for the helper (apply/rollback)
+# helper_duo_timeout = 210          ; ... when the apply/rollback also restarts the Duo proxy
 # ip_failure_limit = 20             ; failed logins per source IP ...
 # ip_failure_window_minutes = 15    ; ... within this window -> reject
 # trust_proxy_headers = true        ; client IP from X-Real-IP set by nginx (unix socket peer)

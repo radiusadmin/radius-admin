@@ -91,6 +91,7 @@ STAGING=$LIB/staging
 HELPER_DIR=/var/lib/radius-admin-helper
 HELPER_BIN=/usr/local/libexec/radius-admin/radius-admin-helper
 UPDATE_BIN=/usr/local/libexec/radius-admin/radius-admin-update-install
+INTEGRATION_BIN=/usr/local/libexec/radius-admin/radius-admin-integration-install
 UPDATE_KEY=/usr/local/share/radius-admin/update-signing.pem
 TS=$(date -u +%Y%m%dT%H%M%SZ)
 
@@ -397,6 +398,8 @@ phase_users() {
     install -d -o radius-admin -g radius-admin -m 0750 "$LIB"
     install -d -o radius-admin -g radius-admin -m 0700 "$STAGING"
     install -d -o radius-admin -g radius-admin -m 0750 "$LIB/updates"
+    # second-factor provider builds: downloads (fetch unit) and uploads (portal); SPEC section 29
+    install -d -o radius-admin -g radius-admin -m 0750 "$LIB/integrations"
     install -d -o root -g root -m 0711 "$HELPER_DIR"
     install -d -o root -g root -m 0700 "$HELPER_DIR/backups" "$RA_BACKUP_DIR"
     install -d -o root -g adm -m 0750 /var/log/radius-admin
@@ -923,6 +926,10 @@ phase_freeradius() {
         || ln -s ../sites-available/radius-admin-inner "$RA_RADDB/sites-enabled/radius-admin-inner"
     [[ -L $RA_RADDB/sites-enabled/radius-admin-peap ]] \
         || ln -s ../sites-available/radius-admin-peap "$RA_RADDB/sites-enabled/radius-admin-peap"
+    # the password check of device admin logins that need a second factor (SPEC section 29);
+    # it only receives requests while a Duo provider is enabled (listener in the clients file)
+    [[ -L $RA_RADDB/sites-enabled/radius-admin-mfa-primary ]] \
+        || ln -s ../sites-available/radius-admin-mfa-primary "$RA_RADDB/sites-enabled/radius-admin-mfa-primary"
     [[ -L $RA_RADDB/mods-enabled/mschap ]] || ln -s ../mods-available/mschap "$RA_RADDB/mods-enabled/mschap"
     if [[ -d $RA_RADDB/policy.d ]]; then chmod o-w "$RA_RADDB/policy.d"; fi
 
@@ -971,6 +978,21 @@ phase_app() {
     install_app_config
     put "$SRC/helper/radius-admin-helper" "$HELPER_BIN" root:root 0755 || true
     put "$HERE/update-install.sh" "$UPDATE_BIN" root:root 0755 || true
+    put "$HERE/integration-install.sh" "$INTEGRATION_BIN" root:root 0755 || true
+    # second-factor providers (SPEC section 29): the catalog (signed in release bundles) and
+    # the provider installers, root-owned; the root helper reads nothing else about them
+    install -d -o root -g root -m 0755 "$OPT/integrations"
+    local f rel
+    while IFS= read -r -d '' f; do
+        rel=${f#"$SRC"/integrations/}
+        install -d -o root -g root -m 0755 "$OPT/integrations/$(dirname "$rel")"
+        if [[ $f == *.sh ]]; then put "$f" "$OPT/integrations/$rel" root:root 0755 || true
+        else put "$f" "$OPT/integrations/$rel" root:root 0644 || true; fi
+    done < <(find "$SRC/integrations" -type f -print0 2>/dev/null)
+    if [[ ! -s $SRC/integrations/catalog.json.sig ]]; then
+        rm -f "$OPT/integrations/catalog.json.sig"
+        info "no signed integrations catalog (not a release bundle): provider builds need an entered SHA-256"
+    fi
     # updates (SPEC section 16): the public key every downloaded build must be signed with,
     # and which build this is
     if [[ -s $SRC/deploy/keys/update-signing.pem ]]; then
@@ -1014,7 +1036,8 @@ phase_app() {
     local u reload=0
     for u in radius-admin.service radius-admin-helper.socket radius-admin-helper@.service \
              radius-admin-update-check.service radius-admin-update-check.timer \
-             radius-admin-update-install@.service; do
+             radius-admin-update-install@.service radius-admin-integration-install@.service \
+             radius-admin-integration-fetch@.service radius-admin-integration-remove@.service; do
         if put "$HERE/systemd/$u" "/etc/systemd/system/$u" root:root 0644; then reload=1; fi
     done
     if put "$HERE/firewall/radius-admin-firewall.service" /etc/systemd/system/radius-admin-firewall.service root:root 0644; then reload=1; fi

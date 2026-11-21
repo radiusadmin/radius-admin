@@ -120,6 +120,27 @@ fingerprints (`hashlib`).
    SECURITY DEFINER), never shown, logged or audited. The MD4 for it is a small Python
    implementation (OpenSSL 3 no longer offers MD4) used for nothing else; FreeRADIUS uses its
    own. Prefer EAP-TLS, then EAP-TTLS/PAP (both FIPS-approved).
+9. **Duo second factor in FIPS mode: RADIUS MD5 on loopback, and Duo's own FIPS module.**
+   The Duo chain adds two RADIUS hops on 127.0.0.1 (FreeRADIUS → Duo proxy on 18120, Duo →
+   `radius-admin-mfa-primary` on 18121). They use the same RADIUS MD5 as exception 1 and carry
+   the device admin's password with the same User-Password hiding as exception 2. Duo computes
+   that MD5 with its bundled Python's built-in MD5 (its RADIUS library asks for it with
+   `used_for_security=Depends`), outside its FIPS module, exactly as FreeRADIUS uses its internal
+   MD5 under exception 1. Duo's documentation says the same: a `radius_client` without PEAP "is
+   not FIPS-compliant due to RADIUS's use of the md5 hash", and "LDAPS is the only FIPS-compliant
+   authentication method". Everything else Duo does in FIPS mode (`fips_mode=true`) goes through
+   the OpenSSL FIPS Provider 3.1.2 that Duo ships prebuilt (`pkgs/fips_modules/<arch>/fips.so`):
+   TLS 1.2+ to Duo's API (ECDHE, AES-GCM, Extended Master Secret), hashes, HMAC and its random
+   numbers; MD5, ChaCha20, Ed25519 and X25519 are refused. That module version is CMVP
+   certificate #4985 (FIPS 140-3, active, sunset 2030-03-10). Caveats for the SSP: the binary is
+   built and shipped by Duo (radius-admin checks its integrity: module MAC, catalog SHA-256, not
+   its build provenance); Ubuntu 24.04 is not one of the certificate's tested operational
+   environments (FIPS 140-3 IG 2.3.B: the validation holds, CMVP makes no statement about
+   correct operation there); Duo's `cryptography` wheel links its own OpenSSL 3.3.2, which hands
+   every approved operation to that provider. Checked for Duo 6.8.1 on Ubuntu 24.04 Pro
+   `fips-updates`, amd64 (RUNBOOK §6.9b; aarch64 not checked, and the release bundle is amd64
+   only). Compensating controls: §1.3. Remote RADIUS MFA servers are not offered in FIPS mode,
+   because their RADIUS crosses the network.
 
 ### 1.2 TLS parameters
 
@@ -130,6 +151,62 @@ TLS 1.3 (nginx): `TLS_AES_256_GCM_SHA384:TLS_AES_128_GCM_SHA256`; groups
 RSA-3072) generated on the host by `make-csr.sh`, 0600, never exported.
 Verified in the sandbox: TLS 1.1 refused; ChaCha20 refused; negotiated
 `ECDHE-ECDSA-AES256-GCM-SHA384` over secp384r1 on TLS 1.2, `TLS_AES_256_GCM_SHA384` on 1.3.
+
+### 1.3 Duo in FIPS mode: controls to put in place
+
+Duo is available in FIPS mode for builds the signed catalog marks FIPS-capable (Duo 6.8.1 on
+Ubuntu 24.04 Pro `fips-updates`, amd64). The product enforces some of the controls below; the
+others are the operator's. Record exceptions 1, 2 and 9 in the SSP, with these controls.
+
+Enforced by radius-admin:
+- Only a catalog-verified, FIPS-capable build installs, turns on or applies in FIPS mode, and only
+  if it was installed while FIPS mode was on (helper `check_duo_fips`); a withdrawn build alerts
+  daily and is refused at the next apply.
+- Duo runs with `fips_mode=true` and fail mode `secure` (no login without Duo's answer); its
+  configuration is written only by the helper from a fixed grammar.
+- Both Duo hops listen and talk on 127.0.0.1 only, each with its own random 32-character secret
+  and Message-Authenticator required in both directions; the internal listener accepts the Duo
+  proxy as its only client.
+- The management-subnet check runs before anything is sent to Duo; unknown and non-admin accounts
+  are refused before the push.
+- Remote RADIUS MFA servers are hidden and refused in FIPS mode.
+- Every change is admin + step-up and audited; Duo's secret key is write-only.
+
+Operator controls:
+1. **Host:** Ubuntu 24.04 LTS amd64 with Ubuntu Pro, booted in FIPS mode
+   (`/proc/sys/crypto/fips_enabled` = 1), `require_fips = true`. The kernel's SP 800-90B entropy
+   source is what Duo's FIPS 140-3 guidance requires. `fips-updates` gives validated modules with
+   security fixes; an assessment that requires the exact certified binaries needs the `fips`
+   stream (F-1).
+2. **Network for the device leg (exceptions 1, 2):** RADIUS from devices only from an isolated
+   management network that nothing else can reach (VLAN plus firewall policy); the policy's
+   management-subnet check on; RADIUS that crosses sites or untrusted segments inside IPsec with
+   approved algorithms between the sites' firewalls; RadSec for every device that supports it (it
+   removes the MD5 exception for that device).
+3. **RADIUS clients:** a unique random 32-character shared secret per device;
+   Message-Authenticator required for every device that sends it (F-9, BlastRADIUS).
+4. **Host firewall:** inbound RADIUS only from the management network; nothing may reach
+   127.0.0.1:18120/18121 from outside the host; outbound from the Duo proxy only to
+   `api-*.duosecurity.com:443` (`deploy/firewall`).
+5. **Duo account:** a Duo edition that fits the framework (for FedRAMP-style requirements Duo's
+   Federal editions); factors limited to push or passcode (hardware token) rather than phone
+   call (SP 800-63B treats telephone authenticators as restricted); Duo's lockout and fraud
+   reporting on, against push fatigue.
+6. **Break-glass:** at least one exempt local account, with a long random password kept offline,
+   used only when Duo is unreachable; its logins show in the auth log and should alert in the
+   SIEM.
+7. **Monitoring:** the alerts `mfa_provider_down`, `mfa_timeouts`, `mfa_unverified` and
+   `mfa_withdrawn` forwarded to syslog/SIEM with a response procedure; the audit log reviewed for
+   `integration.*` changes.
+8. **Updates:** install a newer Duo build when a release's catalog lists one; a build is marked
+   FIPS-capable only after the maintainers' FIPS check (RUNBOOK §6.9b). Keep the evidence:
+   `sudo python3 tools/integrations/duo-fips-check.py installed --running --json duo-fips.json`
+   from the release bundle, on the server, after each install or update (R3i–R6 must pass; R1/R2
+   are checked with `host`).
+9. **SSP / POA&M:** list exception 9 with its caveats (Duo-built module, untested operational
+   environment, Duo's own statement) and, where the framework scores non-validated cryptography
+   (for example NIST SP 800-171 3.13.11), the RADIUS legs as a documented deviation with these
+   controls.
 
 ## 2. Security architecture (summary)
 
@@ -346,7 +423,7 @@ component or fully organisational.
 | 3.4.2 / 3.4.6 | Security configuration / least functionality | Unused EAP methods and FreeRADIUS modules removed, inner-tunnel removed, PostgreSQL local only, nginx port 80 disabled, systemd sandboxing | Baseline documentation (CM plan) |
 | 3.4.3 | Track, review, approve, log changes | Pending-change diff, validate, apply with backup id and hashes in `ui.apply_log` + audit log; rollback | Change approval (CAB) is organisational; the UI does not enforce two-person approval |
 | 3.5.1 / 3.5.2 | Identify and authenticate users | Unique usernames; password + MFA for every login | — |
-| 3.5.3 | MFA for privileged and network access | All UI accounts require a second factor (TOTP or site client certificate checked against OCSP); enrolment forced at first login | Switch-admin logins to the network devices are **password-only** via RADIUS (see §1.1 exc. 2) — 3.5.3 for device administration must be covered otherwise (e.g. jump host with MFA) |
+| 3.5.3 | MFA for privileged and network access | All UI accounts require a second factor (TOTP or site client certificate checked against OCSP); enrolment forced at first login | Device admin logins to the network devices are password-only via RADIUS (see §1.1 exc. 2) unless a second factor is required for them (Integrations: a remote RADIUS MFA server, or Duo, which is available in FIPS mode with the controls of §1.3); otherwise cover 3.5.3 for device administration another way (e.g. jump host with MFA) |
 | 3.5.4 | Replay-resistant authentication | TLS for the UI; TOTP step replay protection (`totp_last_step`); EAP-TLS for 802.1X | RADIUS PAP admin logins are not replay-resistant beyond the RADIUS authenticator |
 | 3.5.7 | Password complexity / change of characters | Minimum length 15 (configurable, cannot go below 15); length-based policy per SP 800-63B | Org policy may require more; no composition rules by design |
 | 3.5.8 | Prohibit password reuse | Last 5 passwords (PBKDF2 hashes) rejected | Generations number per policy |
@@ -356,7 +433,7 @@ component or fully organisational.
 | 3.13.1 | Monitor/control communications at boundaries | nginx ACL + host firewall restrict the UI to the management network | Network firewalls/VLAN ACLs |
 | 3.13.8 | Cryptographic protection of CUI in transit | TLS (UI), LDAPS (AD), EAP-TLS | RADIUS/UDP itself (exception 1); LDAPS cipher policy not enforced client-side (exception 5) |
 | 3.13.10 | Establish and manage cryptographic keys | UI TLS key generated on host (make-csr.sh), cert from internal PKI; data key 0400 radius-admin; RADIUS secrets generated from DRBG | Key/cert lifecycle, backup of data.key, secret rotation schedule |
-| 3.13.11 | FIPS-validated cryptography for CUI | All app/nginx/EAP crypto via the OpenSSL FIPS provider (validated only on the `fips` stream's certified packages — see F-1); app refuses non-FIPS start | Exceptions §1.1 (RADIUS MD5; LDAPS via GnuTLS); F-1 stream choice |
+| 3.13.11 | FIPS-validated cryptography for CUI | All app/nginx/EAP crypto via the OpenSSL FIPS provider (validated only on the `fips` stream's certified packages — see F-1); app refuses non-FIPS start | Exceptions §1.1 (RADIUS MD5; LDAPS via GnuTLS; Duo second factor, exception 9 with the controls of §1.3); F-1 stream choice |
 | 3.13.15 | Protect authenticity of communications sessions | TLS; server-side sessions with 256-bit random tokens, rotated at login and MFA, `__Host-` Secure HttpOnly SameSite=Strict cookie; CSRF token + Origin/Referer checks; HSTS, CSP, frame-ancestors none | — |
 | 3.14.6 / 3.14.7 | Monitor systems / identify unauthorized use | Auth log (radpostauth) with reject reasons and per-record detail, live sessions (accounting), unknown-device queue, alerts (reject spikes, unresponsive switches, FreeRADIUS down, portal down) to syslog/email, audit log, failed-login records | Forward alerts to the SIEM and define response procedures |
 
@@ -378,7 +455,7 @@ package does about each. Check every one on the server you migrate.
 | F-9 | **Message-Authenticator** not required for switches (BlastRADIUS, CVE-2024-3596) | High | Migrated as `auto`; per switch, after confirming it sends Message-Authenticator, set `yes` in the UI (RUNBOOK §5); set `limit_proxy_state = yes` |
 | F-10 | Shared secrets generated by a script, stored in cleartext files, unknown age | Medium | Rotate to UI-generated 32-character random secrets, one switch at a time; protect database backups |
 | F-11 | RadSec would remove the MD5 exception, but switch support is not assumed | Info | Re-evaluate per vendor; until then keep RADIUS on management networks |
-| F-12 | Device admin logins are single-factor PAP | Medium | Consider an MFA-protected jump host for device administration (800-171 3.5.3); keep the source-subnet restriction |
+| F-12 | Device admin logins are single-factor PAP | Medium | Require a second factor for device admin logins (Integrations, SPEC section 29; in FIPS mode with the controls of §1.3), or an MFA-protected jump host (800-171 3.5.3); keep the source-subnet restriction |
 | F-13 | Single RADIUS server, no redundancy | Medium (availability) | Keep local emergency accounts on switches; consider a second server |
 | F-14 | All device admins get priv 15 | Info | Consider read-only roles (priv-lvl per group) |
 | F-15 | `data.key` loss makes all TOTP enrolments unusable; compromise exposes TOTP secrets | Medium | Back it up encrypted offline; restrict root access |
@@ -391,6 +468,65 @@ Syslog identifiers: `radius-admin` (web app and CLI) and `radius-admin-helper`
 and contains a disabled forwarding block for the SIEM. Passwords, TOTP codes, session
 tokens and RADIUS secrets are never logged; the helper redacts `secret = …` and
 `password = …` lines from radiusd output it returns.
+
+## Second factor for device admin logins (SPEC section 29)
+
+- **Fail closed.** A login whose rule names a provider is accepted only on that provider's
+  Access-Accept: provider turned off, not applied (no realm), no answer, a database error while
+  deciding, or (Duo) an answer without the Class of the local password check all reject. The
+  post-auth test is written so that a condition that cannot be evaluated lands in a reject branch.
+- **Order.** The management-subnet check runs before anything is proxied; for a remote server the
+  directory lookup runs first, so unknown names never leave the server. After a remote accept the
+  device admin group is still checked here. The provider's own reply attributes are removed before
+  the device's are added.
+- **Duo chain.** The Duo proxy reaches the password check only on 127.0.0.1:18121, as the single
+  client of the listener `radius-admin-mfa-primary`, with its own random secret
+  (`require_message_authenticator = yes`). Both secrets are stored encrypted with the data key
+  (AES-256-GCM, bound to the provider id) and written only into the clients file (root:freerad 0640).
+- **Remote servers** receive the device admin's password protected only by RADIUS's MD5-based
+  User-Password hiding (exception 1.1-1); use them on a trusted network. They are not offered in
+  FIPS mode.
+- **Break-glass.** Exempt local accounts (at most 10) never need a second factor; the rules page
+  warns when there is none. Exemptions and rule changes are audited (`integration.*`).
+- **Live decision.** `radius_admin_mfa_hex` gets the user name and the client shortname as hex only
+  (rule 2); the bench injection cases cover it.
+- **Provider builds** (section 29.1). A build is installed only when its SHA-256 matches an entry of
+  the integrations catalog signed with the update key (ECDSA P-384), or, in standard mode only, the
+  SHA-256 the admin entered after comparing it with the vendor's published value (recorded as
+  `pasted-hash`). In FIPS mode only catalog entries marked FIPS-capable are accepted, by the helper,
+  whatever the portal sends. The helper keeps the newest catalog (serial) it has verified, so an
+  older release cannot reinstate a withdrawn build. The download unit is unprivileged, reaches only
+  the vendor's fixed host, and its output is never trusted: the helper copies the file into its own
+  root-only directory (O_NOFOLLOW, single link, owner and size checked) and hashes that copy; the
+  install unit checks it again and runs only the release's root-owned installer. The provider id is
+  the only thing the request chooses; file names, URLs, services and ports are fixed in the helper.
+- **Duo pages** (section 29.3). Every change needs an admin with step-up and is audited; the
+  secret key is write-only and never shown or logged; the apply page masks Duo's secrets. Only the
+  upload path accepts large requests (129 MiB in the app, 130 MiB in nginx); the uploaded file is
+  only stored, and the root helper decides whether it may be installed.
+- **Duo install** (section 29.2). Duo's source is unpacked with Python's tarfile `data` filter and
+  built by a dedicated unprivileged user; the tree is made root-owned and read-only before Duo's
+  installer runs as root, so nothing the build user can change afterwards runs with privileges.
+  The proxy runs as `duo_authproxy_svc` under a radius-admin systemd drop-in (ProtectSystem=strict,
+  write access only to its log, run and conf directories and its secret store). Its configuration
+  holds the Duo secret key (owner: the service user, 0640) and is written only by the helper from a
+  whitelist grammar; it listens and talks only on 127.0.0.1. New outbound traffic: the proxy to
+  `api-*.duosecurity.com:443`. Duo bundles its own Python and an OpenSSL FIPS module
+  (`pkgs/fips_modules`); a build is marked FIPS-capable only after the maintainers' check of that
+  build on a FIPS lab machine (exception 9).
+- **FIPS mode** (section 29.4). Duo is installed, turned on and applied only for a build the signed
+  catalog marks FIPS-capable and that was installed in FIPS mode; the helper refuses to apply a Duo
+  configuration otherwise, so a Duo installed before FIPS mode was turned on never gets a new
+  configuration. Duo 6.8.1 ships OpenSSL FIPS Provider 3.1.2 as a prebuilt binary, and its
+  `cryptography` wheel links its own OpenSSL 3.3.2; with `fips_mode` only the FIPS provider serves
+  its cryptography (MD5 refused); its RADIUS MD5 stays outside the module (exception 9). Each build
+  is checked with `tools/integrations/duo-fips-check.py` on a FIPS lab machine before the catalog
+  marks it FIPS-capable: Duo 6.8.1 passed on Ubuntu 24.04 Pro `fips-updates`, amd64, and is
+  FIPS-capable, accepted on CMVP #4985 for the bundled provider version and with Duo's prebuilt
+  binaries. The controls an operator puts in place are in §1.3.
+- **Monitoring** (section 29.4). Alerts when the applied Duo proxy is down, when logins get no
+  answer from the provider, daily while an unverified or withdrawn build is in use. The audit trail
+  of rule changes shows which provider a past login was sent to.
 
 ## Universal edition additions (SPEC section 14)
 

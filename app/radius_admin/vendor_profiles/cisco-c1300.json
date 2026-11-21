@@ -33,6 +33,7 @@
   },
   "setup": {
     "accounting": "aaa accounting dot1x start-stop group radius",
-    "coa": "aaa server radius dynamic-author\n client <this RADIUS server's IP> server-key <the switch's shared secret in this console>\n exit"
+    "coa": "aaa server radius dynamic-author\n client <this RADIUS server's IP> server-key <the switch's shared secret in this console>\n exit",
+    "mfa_timeout": "radius-server timeout 30\nradius-server retransmit 2"
   }
 }
