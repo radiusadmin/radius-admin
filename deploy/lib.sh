@@ -23,6 +23,11 @@ RA_NGINX_MIN_VERSION=${RA_NGINX_MIN_VERSION:-1.24.0-2ubuntu7.20}
 # stock 30 s). The second-factor providers wait up to 60 s for the person (SPEC section 29), so
 # the freeradius phase raises max_request_time to at least this; a higher live value is kept.
 RA_FR_MAX_REQUEST_TIME=${RA_FR_MAX_REQUEST_TIME:-90}
+# A full install from a git checkout downloads the signed release of its VERSION from here
+# (<url>/v<version>/manifest.json, manifest.json.sig, radius-admin-<version>.tar.gz)
+# and unpacks it under RA_RELEASE_DIR
+RA_RELEASE_URL=${RA_RELEASE_URL:-https://github.com/radiusadmin/radius-admin/releases/download}
+RA_RELEASE_DIR=${RA_RELEASE_DIR:-/usr/local/src}
 
 if [[ -t 1 ]]; then
     C_RED=$'\e[31m'; C_GRN=$'\e[32m'; C_YEL=$'\e[33m'; C_BLD=$'\e[1m'; C_OFF=$'\e[0m'
@@ -88,6 +93,57 @@ detect_bundled_fr() {
     arch=$(dpkg --print-architecture 2>/dev/null) || return 1
     compgen -G "$dir/radius-admin-freeradius_*~${dist}_$arch.deb" | sort -V | tail -n1 | grep .
 }
+
+# fetch_release SRC: download the release bundle of SRC/VERSION from RA_RELEASE_URL, verify
+# it (manifest signed with SRC/deploy/keys/update-signing.pem, ECDSA P-384 / SHA-384; bundle
+# SHA-384 from the manifest; no paths outside radius-admin/) and unpack it to
+# RA_RELEASE_DIR/radius-admin-<version>. Prints that directory; messages go to stderr.
+fetch_release() (   # a subshell: die and the EXIT trap stay inside
+    local src=$1 ver key base url proto w name sum listing dir stage
+    ver=$(tr -d '[:space:]' < "$src/VERSION" 2>/dev/null) || true
+    [[ $ver =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "$src/VERSION does not hold a release version (x.y.z): '$ver'"
+    key=$src/deploy/keys/update-signing.pem
+    [[ -s $key ]] || die "$key is missing: cannot verify a downloaded release"
+    command -v curl >/dev/null || die "curl is needed to download the release (apt-get install curl)"
+    base=${RA_RELEASE_URL%/}; url=$base/v$ver
+    proto='=https'; [[ $base == file://* ]] && proto='=file'
+    w=$(mktemp -d)
+    trap 'rm -rf "$w"' EXIT
+    info "downloading release v$ver from $url" >&2
+    _fetch() { curl -fsSL --proto "$proto" --tlsv1.2 --retry 3 -o "$w/$1" "$url/$1"; }
+    _fetch manifest.json && _fetch manifest.json.sig \
+        || die "release v$ver not found at $url (a development checkout? Install a release, or use --from-checkout to install this checkout as it is)"
+    openssl dgst -sha384 -verify "$key" -signature "$w/manifest.json.sig" "$w/manifest.json" >/dev/null 2>&1 \
+        || die "the manifest of release v$ver is not signed by $key"
+    read -r name sum < <("$RA_PYTHON" -I -c '
+import json, re, sys
+m = json.load(open(sys.argv[1], encoding="utf-8"))
+b = m.get("bundle") if isinstance(m, dict) else None
+v = sys.argv[2]
+if (isinstance(b, dict) and m.get("product") == "radius-admin" and m.get("version") == v
+        and b.get("name") == "radius-admin-%s.tar.gz" % v
+        and isinstance(b.get("sha384"), str) and re.fullmatch(r"[0-9a-f]{96}", b["sha384"])):
+    print(b["name"], b["sha384"])
+' "$w/manifest.json" "$ver" 2>/dev/null) || true
+    [[ -n ${sum:-} ]] || die "the manifest of release v$ver is not for radius-admin $ver"
+    _fetch "$name" || die "cannot download $url/$name"
+    [[ $(sha384sum "$w/$name" | cut -d' ' -f1) == "$sum" ]] || die "$name does not match its signed manifest (SHA-384)"
+    listing=$(tar -tzf "$w/$name") || die "$name is not a readable .tar.gz"
+    if grep -qvE '^radius-admin(/|$)' <<<"$listing"; then die "$name contains files outside radius-admin/"; fi
+    if grep -qE '(^|/)\.\.(/|$)' <<<"$listing"; then die "$name contains '..' paths"; fi
+    grep -qx 'radius-admin/deploy/install.sh' <<<"$listing" || die "$name has no deploy/install.sh"
+    grep -qx 'radius-admin/BUILD.json' <<<"$listing" || die "$name has no BUILD.json"
+    install -d -m 0755 "$RA_RELEASE_DIR"
+    dir=$RA_RELEASE_DIR/radius-admin-$ver
+    stage=$(mktemp -d "$RA_RELEASE_DIR/.radius-admin-$ver.XXXXXX")
+    tar -C "$stage" --no-same-owner -xzf "$w/$name" || { rm -rf "$stage"; die "cannot unpack $name"; }
+    chmod -R go-w "$stage/radius-admin"
+    rm -rf "$dir"
+    mv "$stage/radius-admin" "$dir"
+    rm -rf "$stage"
+    info "release v$ver verified (signed manifest, SHA-384) and unpacked to $dir" >&2
+    printf '%s\n' "$dir"
+)
 
 # Directory holding rlm_*.so of the build that $1 (radiusd) belongs to.
 detect_fr_libdir() {

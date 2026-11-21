@@ -125,6 +125,21 @@ needed, a second one. Allow 2 hours including verification.
 
 Every phase is idempotent and can be re-run. `install.sh --help` lists options.
 
+**Getting the release.** Clone the repository and run the installer from the clone:
+
+```bash
+git clone --depth 1 https://github.com/radiusadmin/radius-admin.git
+sudo radius-admin/deploy/install.sh
+```
+
+A clone has no FreeRADIUS package, no signed integrations catalog and no `BUILD.json`, so a full
+install from it downloads the release of the clone's `VERSION` from GitHub, checks the manifest
+signature against the clone's `deploy/keys/update-signing.pem` and the bundle's SHA-384, unpacks it
+to `/usr/local/src/radius-admin-<version>` and continues with that bundle's installer, with the
+same options. A release bundle copied to the server (`tar -xzf radius-admin-<version>.tar.gz`)
+installs as it is and needs no download, as do `--phase`/`--from` runs. `--from-checkout` installs
+a checkout without downloading anything (development; the result is a `local` build).
+
 **Crypto mode (choose before the first install).** Standard mode is the default. FIPS mode is an
 explicit choice: answers key `fips: on`, the last interactive question, or `install.sh --fips`
 (`--standard-mode` or `fips: off` choose standard mode explicitly). FIPS mode is refused unless

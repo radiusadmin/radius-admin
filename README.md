@@ -146,32 +146,25 @@ FreeRADIUS when you click **Apply**. More detail: [SPEC.md](SPEC.md) and
 
 ## Getting started
 
-1. **Download the release** from
-   [Releases](https://github.com/radiusadmin/radius-admin/releases) onto the server (set `V` to
-   the version you install), check its signature and checksum, and unpack it:
+1. **Install.** Clone the repository and run the installer:
    ```bash
-   V=0.3.0
-   base=https://github.com/radiusadmin/radius-admin/releases/download/v$V
-   curl -fLO "$base/radius-admin-$V.tar.gz" -fLO "$base/manifest.json" -fLO "$base/manifest.json.sig"
-   curl -fL -o update-signing.pem https://raw.githubusercontent.com/radiusadmin/radius-admin/main/deploy/keys/update-signing.pem
-   openssl dgst -sha384 -verify update-signing.pem -signature manifest.json.sig manifest.json
-   python3 -c 'import json,hashlib; m=json.load(open("manifest.json"))["bundle"]; print("checksum OK" if hashlib.sha384(open(m["name"],"rb").read()).hexdigest()==m["sha384"] else "CHECKSUM MISMATCH")'
-   tar xzf "radius-admin-$V.tar.gz" && cd radius-admin
+   git clone --depth 1 https://github.com/radiusadmin/radius-admin.git
+   sudo radius-admin/deploy/install.sh
    ```
-   `Verified OK` and `checksum OK` mean the bundle is the one this project signed. Run the
-   commands below from the unpacked `radius-admin` directory.
-2. **Check the server** (read-only):
-   ```bash
-   sudo ./deploy/preflight.sh
-   ```
-3. **Install.** Run the installer with no options and answer the questions: server name,
+   From a clone, the installer downloads the release of the same version from
+   [Releases](https://github.com/radiusadmin/radius-admin/releases), checks its signed manifest
+   (ECDSA P-384) and SHA-384, unpacks it to `/usr/local/src/radius-admin-<version>` and continues
+   from there: the release carries the FreeRADIUS package. It starts with a read-only check of the
+   server (`deploy/preflight.sh`) and, with no options, asks the questions: server name,
    management subnet, portal address, DNS resolvers, portal certificate (self-signed to start,
    a CSR for your CA, or existing files), the first administrator, the crypto mode (standard by
    default; FIPS mode on a FIPS host), the 802.1X (EAP) server certificate (your files, or
-   self-signed to replace later) and an optional OCSP responder:
-   ```bash
-   sudo ./deploy/install.sh
-   ```
+   self-signed to replace later) and an optional OCSP responder. A release bundle you copied to
+   the server installs the same way from its unpacked `radius-admin` directory, without a download.
+
+   On a server that already runs FreeRADIUS with a SQLite database, add `--confirm-migrate`; plan
+   a maintenance window first ([RUNBOOK §2](docs/RUNBOOK.md#2-plan-the-maintenance-window)).
+
    For unattended installs, put the same answers in a file
    (the format is described in [deploy/answers.sh](deploy/answers.sh)):
    ```yaml
@@ -185,17 +178,17 @@ FreeRADIUS when you click **Apply**. More detail: [SPEC.md](SPEC.md) and
    eap_tls: self-signed
    ```
    ```bash
-   sudo ./deploy/install.sh --answers site.yaml --print-answers   # check only
-   sudo ./deploy/install.sh --answers site.yaml
+   sudo radius-admin/deploy/install.sh --answers site.yaml --print-answers   # check only
+   sudo radius-admin/deploy/install.sh --answers site.yaml
    ```
    The installer keeps your answers in `/etc/radius-admin/site.yaml` for later runs. On a new
    server, FreeRADIUS starts without a directory and rejects every 802.1X user until you add
    access rules and set up the directory
    ([RUNBOOK §13.4](docs/RUNBOOK.md#134-a-new-server-directory-eap-certificates-and-ocsp)).
-4. **Sign in.** Browse from the management subnet to `https://<server name>/`, sign in with the
+2. **Sign in.** Browse from the management subnet to `https://<server name>/`, sign in with the
    one-time password the installer printed, choose your own password and set up two-factor
    authentication.
-5. **Follow the setup checklist** on the dashboard: add RADIUS clients, create access rules, set
+3. **Follow the setup checklist** on the dashboard: add RADIUS clients, create access rules, set
    the device admin subnet and apply. Optional steps include single sign-on, RadSec, switch
    monitoring and alert e-mail.
 
