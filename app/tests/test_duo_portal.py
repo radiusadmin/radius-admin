@@ -70,6 +70,21 @@ def test_preflight_shows_the_checks(browser, superconn, logged_in, idir):
     admin(browser, superconn, logged_in)
     r = browser.post("/integrations/duo/check", csrf_page="/integrations/duo")
     assert r.status_code == 200 and "Ubuntu 24.04 LTS" in browser.text(r)
+    # rule 12: the check (it contacts Duo's API host through the helper) is audited
+    assert audit(superconn, "integration.preflight") == [{"ready": True, "failed": []}]
+
+
+def test_preflight_audit_names_the_failed_checks(browser, superconn, logged_in, idir):
+    admin(browser, superconn, logged_in)
+    q(superconn, "INSERT INTO ui.mfa_provider (id, type, label, settings) VALUES ('duo', 'duo', 'Duo', %s)"
+                 " ON CONFLICT (id) DO UPDATE SET settings = EXCLUDED.settings",
+      ('{"api_host": "api-test.duosecurity.com"}',))
+    r = browser.post("/integrations/duo/check", csrf_page="/integrations/duo")
+    assert r.status_code == 200
+    rows = q(superconn, "SELECT success, object_type, object_id, detail::text FROM ui.audit_log"
+                        " WHERE action = 'integration.preflight'")
+    assert len(rows) == 1 and rows[0][:3] == (False, "integration", "duo"), rows
+    assert json.loads(rows[0][3]) == {"ready": False, "failed": ["api"], "api_host": "api-test.duosecurity.com"}
 
 
 def test_fetch_and_install_go_to_the_helper(browser, superconn, logged_in, idir):

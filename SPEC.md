@@ -1724,7 +1724,8 @@ unreachable). The portal pages that drive this follow.
   location. The portal service may write `/var/lib/radius-admin/integrations`.
 - **Audit:** `integration.fetch`, `integration.upload` (file, size, SHA-256),
   `integration.install_requested` (file, verified, SHA-256), `integration.configure` (changes;
-  `duo_skey_updated`, never the key), `integration.test`, `integration.remove_requested`; the outcome
+  `duo_skey_updated`, never the key), `integration.test`, `integration.preflight` (ready, the
+  failed checks, the API host), `integration.remove_requested`; the outcome
   of an install or removal is `integration.install` / `integration.remove` (section 29.2).
 
 ### 29.4 Second factor: alerts, reports, apply time, FIPS
