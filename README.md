@@ -38,7 +38,8 @@ automatically if FreeRADIUS does not come back up.
   device, optional expiry, vendor names, and an approval queue: unknown devices that try to
   connect show up for one-click approval.
 - **Switch and device administrator logins** over RADIUS (PAP), limited to the management
-  subnet, with optional privilege level 15.
+  subnet, with optional privilege level 15 and an optional second factor (Duo push or your own
+  RADIUS MFA server).
 - **Access points and controllers over untrusted networks.** RadSec (RADIUS over TLS) per
   client: switch an AP to RadSec while your switches stay on plain RADIUS.
 - **Security-conscious and regulated environments.** Optional FIPS mode, a hash-chained audit
@@ -58,6 +59,10 @@ automatically if FreeRADIUS does not come back up.
 - MAB devices and the unknown-device approval queue.
 - Device administrator logins for switches, access points and firewalls: local accounts
   (PBKDF2-hashed) or members of chosen directory groups with their directory password (LDAPS).
+- A second factor for device administrator logins: the Duo Authentication Proxy, installed and
+  configured from the portal (the password is checked here before the push), or a remote RADIUS
+  MFA server such as a Network Policy Server with the Entra multifactor extension. Per account type
+  and client, with break-glass exemptions; logins that need it fail closed.
 - Custom unlang policy for administrators, checked before it is installed.
 - Certificates in the console: the 802.1X server certificate, the CA for client certificates, OCSP
   for EAP-TLS and the portal's HTTPS certificate. Upload them, or make the key and request on the
