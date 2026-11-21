@@ -146,11 +146,25 @@ FreeRADIUS when you click **Apply**. More detail: [SPEC.md](SPEC.md) and
 
 ## Getting started
 
-1. **Check the server** (read-only):
+1. **Download the release** from
+   [Releases](https://github.com/radiusadmin/radius-admin/releases) onto the server (set `V` to
+   the version you install), check its signature and checksum, and unpack it:
+   ```bash
+   V=0.3.0
+   base=https://github.com/radiusadmin/radius-admin/releases/download/v$V
+   curl -fLO "$base/radius-admin-$V.tar.gz" -fLO "$base/manifest.json" -fLO "$base/manifest.json.sig"
+   curl -fL -o update-signing.pem https://raw.githubusercontent.com/radiusadmin/radius-admin/main/deploy/keys/update-signing.pem
+   openssl dgst -sha384 -verify update-signing.pem -signature manifest.json.sig manifest.json
+   python3 -c 'import json,hashlib; m=json.load(open("manifest.json"))["bundle"]; print("checksum OK" if hashlib.sha384(open(m["name"],"rb").read()).hexdigest()==m["sha384"] else "CHECKSUM MISMATCH")'
+   tar xzf "radius-admin-$V.tar.gz" && cd radius-admin
+   ```
+   `Verified OK` and `checksum OK` mean the bundle is the one this project signed. Run the
+   commands below from the unpacked `radius-admin` directory.
+2. **Check the server** (read-only):
    ```bash
    sudo ./deploy/preflight.sh
    ```
-2. **Install.** Run the installer with no options and answer the questions: server name,
+3. **Install.** Run the installer with no options and answer the questions: server name,
    management subnet, portal address, DNS resolvers, portal certificate (self-signed to start,
    a CSR for your CA, or existing files), the first administrator, the crypto mode (standard by
    default; FIPS mode on a FIPS host), the 802.1X (EAP) server certificate (your files, or
@@ -178,10 +192,10 @@ FreeRADIUS when you click **Apply**. More detail: [SPEC.md](SPEC.md) and
    server, FreeRADIUS starts without a directory and rejects every 802.1X user until you add
    access rules and set up the directory
    ([RUNBOOK §13.4](docs/RUNBOOK.md#134-a-new-server-directory-eap-certificates-and-ocsp)).
-3. **Sign in.** Browse from the management subnet to `https://<server name>/`, sign in with the
+4. **Sign in.** Browse from the management subnet to `https://<server name>/`, sign in with the
    one-time password the installer printed, choose your own password and set up two-factor
    authentication.
-4. **Follow the setup checklist** on the dashboard: add RADIUS clients, create access rules, set
+5. **Follow the setup checklist** on the dashboard: add RADIUS clients, create access rules, set
    the device admin subnet and apply. Optional steps include single sign-on, RadSec, switch
    monitoring and alert e-mail.
 

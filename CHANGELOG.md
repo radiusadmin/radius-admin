@@ -89,6 +89,14 @@ release, so previews sort after it.
   (`tools/release/prev-tag.sh`). `make-release.sh` refuses such a previous tag too.
 
 ### Fixed
+- **An interactive install stopped at "Install with these settings?"** with
+  `confirm: command not found` and "aborted": every `install.sh` run without `-y` or an answers
+  file failed there (since the first release). It now asks and goes ahead on `y`.
+- **The suggested management subnet could be a /32 on the loopback interface** (on WSL, its DNS
+  stub address), and the portal address with it. The installer now suggests the address of the
+  interface that carries the default route, and never one on `lo`.
+- README: how to download the release bundle and check its signature and checksum before
+  installing.
 - **A second factor approved after 30 seconds was rejected.** FreeRADIUS's stock
   `max_request_time` (30 s) cut the Duo proxy's and remote MFA servers' wait of up to 60 s, so a
   person who approved later got "the second-factor provider did not answer". The freeradius phase
