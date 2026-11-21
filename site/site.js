@@ -1,5 +1,6 @@
-/* Plays the safe-apply sequence in the hero. Without this script the figure shows every step
-   and both endings; nothing else on the page needs JavaScript. */
+/* Plays the safe-apply sequence in the hero and adds copy buttons to the install commands.
+   Without this script the figure shows every step and both endings, and the commands can be
+   selected by hand. */
 (function () {
   "use strict";
   var fig = document.getElementById("safe-apply");
@@ -60,4 +61,37 @@
     });
   });
   play("ok", true);
+}());
+
+/* Copy buttons for the install commands. */
+(function () {
+  "use strict";
+  if (!navigator.clipboard) { return; }
+  var pres = document.querySelectorAll("#install pre.cmd");
+  Array.prototype.forEach.call(pres, function (pre) {
+    var box = document.createElement("div");
+    var btn = document.createElement("button");
+    var timer = 0;
+    box.className = "cmd-box";
+    btn.type = "button";
+    btn.className = "cmd-copy";
+    btn.textContent = "Copy";
+    btn.setAttribute("aria-label", "Copy this command");
+    pre.parentNode.insertBefore(box, pre);
+    box.appendChild(pre);
+    box.appendChild(btn);
+    btn.addEventListener("click", function () {
+      navigator.clipboard.writeText(pre.textContent.replace(/\s+$/, "") + "\n").then(function () {
+        btn.textContent = "Copied";
+        btn.classList.add("is-copied");
+        window.clearTimeout(timer);
+        timer = window.setTimeout(function () {
+          btn.textContent = "Copy";
+          btn.classList.remove("is-copied");
+        }, 2000);
+      }, function () {
+        btn.textContent = "Select and copy";
+      });
+    });
+  });
 }());

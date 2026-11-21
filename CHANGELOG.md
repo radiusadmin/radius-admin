@@ -8,6 +8,11 @@ release, so previews sort after it.
 ## 0.3.0 - 2026-11-20
 
 ### Added
+- **Install from a git clone.** `git clone` and `sudo radius-admin/deploy/install.sh` is the whole
+  install: from a checkout, the installer downloads the release of the same version from GitHub,
+  verifies its signed manifest (ECDSA P-384) and SHA-384, and continues with that release, which
+  carries the FreeRADIUS package. `--from-checkout` installs a checkout as it is. The website's
+  install steps show the two cases (new server, existing FreeRADIUS server).
 - **A second factor for device admin logins (Integrations).** A new Integrations page sets which
   device admin logins must be approved with a second factor: local or directory accounts, on all
   clients or selected ones, with exempt break-glass accounts. First provider: a remote RADIUS MFA
@@ -103,6 +108,12 @@ release, so previews sort after it.
 - `install.sh --interactive --print-answers > site.yaml` wrote the questions' help lines and
   warnings into the file, which `--answers` then refused ("expected 'key: value'"). They now go to
   stderr; the output is the answers only.
+- Re-running the installer after a first install stopped part way: the set-up questions are asked
+  again on a terminal when no answers were saved yet, whatever other options are given (before,
+  any option such as `--skip-preflight` skipped them and the nginx phase stopped with
+  "management subnet unknown"); preflight no longer blocks on the package's stock FreeRADIUS
+  configuration of a new server; a PostgreSQL cluster created on another port than 5432 is
+  named with the command that fixes it, and "PostgreSQL not ready" shows the end of its log.
 - README: how to download the release bundle and check its signature and checksum before
   installing.
 - **A second factor approved after 30 seconds was rejected.** FreeRADIUS's stock

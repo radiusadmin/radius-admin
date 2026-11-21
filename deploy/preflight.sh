@@ -125,6 +125,10 @@ else
             # before instantiating modules.
             if OUT=$(timeout 60 "$RADIUSD" -XC -d "$RA_RADDB" 2>&1) && grep -q 'appears to be OK' <<<"$OUT"; then
                 ok "current configuration passes radiusd -XC"
+            elif [[ ! -e $RA_RADDB/policy.d/radius-admin && ! -e $RA_SQLITE_DB ]]; then
+                # a new server: this is still the package's stock configuration (its EAP module
+                # wants certificates the freeradius phase installs); that phase replaces it
+                info "the stock configuration does not pass radiusd -XC yet ($(tail -n 1 <<<"$OUT")): on this new server the freeradius phase replaces it"
             else
                 bad "current configuration FAILS radiusd -XC: $(tail -n 3 <<<"$OUT" | tr '\n' ' ')"
             fi

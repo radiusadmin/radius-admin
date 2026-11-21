@@ -125,6 +125,21 @@ needed, a second one. Allow 2 hours including verification.
 
 Every phase is idempotent and can be re-run. `install.sh --help` lists options.
 
+**Getting the release.** Clone the repository and run the installer from the clone:
+
+```bash
+git clone --depth 1 https://github.com/radiusadmin/radius-admin.git
+sudo radius-admin/deploy/install.sh
+```
+
+A clone has no FreeRADIUS package, no signed integrations catalog and no `BUILD.json`, so a full
+install from it downloads the release of the clone's `VERSION` from GitHub, checks the manifest
+signature against the clone's `deploy/keys/update-signing.pem` and the bundle's SHA-384, unpacks it
+to `/usr/local/src/radius-admin-<version>` and continues with that bundle's installer, with the
+same options. A release bundle copied to the server (`tar -xzf radius-admin-<version>.tar.gz`)
+installs as it is and needs no download, as do `--phase`/`--from` runs. `--from-checkout` installs
+a checkout without downloading anything (development; the result is a `local` build).
+
 **Crypto mode (choose before the first install).** Standard mode is the default. FIPS mode is an
 explicit choice: answers key `fips: on`, the last interactive question, or `install.sh --fips`
 (`--standard-mode` or `fips: off` choose standard mode explicitly). FIPS mode is refused unless
@@ -1463,7 +1478,13 @@ the rollback option is no longer needed.
 portal address, switch networks (where the monitor may send SNMP and CoA, §6.3), DNS resolvers, portal certificate, first administrator, crypto mode (standard by default, FIPS mode on request: §3), the 802.1X (EAP) certificate of a new server and an OCSP responder (§13.4), shows a summary and
 asks for confirmation. Unattended: `--answers FILE` (format in `deploy/answers.sh`);
 `--print-answers` only checks and prints. The answers are kept in `/etc/radius-admin/site.yaml`
-(root 0640); re-run later with `--answers /etc/radius-admin/site.yaml`.
+(root 0640); re-run later with `--answers /etc/radius-admin/site.yaml`. If a first install stops
+before it saved them (before the `site` phase), a re-run on a terminal asks the questions again,
+even with options such as `--skip-preflight`. On such a half-installed new server, preflight
+reports the package's stock FreeRADIUS configuration failing `radiusd -XC` as information: the
+`freeradius` phase replaces it. The PostgreSQL cluster must be on port 5432 (radius-admin uses
+its Unix socket only); if 5432 was taken when the cluster was created, the `postgres` phase stops
+and prints the `pg_conftool … set port 5432` command that fixes it.
 
 Runs without answers (updates, or `--phase nginx` by hand) keep the portal settings this server
 already uses: server name, management subnet, portal address and resolvers come from `site.yaml`,

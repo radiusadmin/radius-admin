@@ -468,28 +468,55 @@
 
       <ol class="steps">
         <li>
-          <h3>Check the server</h3>
-          <p>A read-only check. It changes nothing.</p>
-          <pre class="cmd" tabindex="0"><code>sudo ./deploy/preflight.sh</code></pre>
-        </li>
-        <li>
           <h3>Install</h3>
-          <p>Run the installer with no options and answer the questions: server name, management subnet, portal address, DNS resolvers, portal certificate, the first administrator, the crypto mode (standard unless you choose FIPS mode), the 802.1X server certificate (your files, or self-signed to replace later) and an optional OCSP responder.</p>
-          <pre class="cmd" tabindex="0"><code>sudo ./deploy/install.sh</code></pre>
-          <details>
-            <summary>Unattended install with an answers file</summary>
-            <p>Put the same answers in a file. The format is described in <a href="https://github.com/radiusadmin/radius-admin/blob/main/deploy/answers.sh">deploy/answers.sh</a>.</p>
-            <pre class="cmd" tabindex="0"><code>server_name: radius.example.net
+          <p>Pick the case that matches your server. The installer downloads the signed release of the version you cloned, verifies it and installs from it. It starts with a read-only check of the server and stops before changing anything if the check fails. Without a settings file it asks its questions as it goes.</p>
+
+          <details class="inst-opt" open>
+            <summary><span class="inst-opt-t">New server, FreeRADIUS included <span class="tag tag-ok">Recommended</span></span><span class="inst-opt-d">Installs everything, including the bundled FreeRADIUS 3.2.10.</span></summary>
+            <div class="inst-opt-body">
+              <pre class="cmd" tabindex="0"><code>git clone --depth 1 https://github.com/radiusadmin/radius-admin.git
+sudo radius-admin/deploy/install.sh</code></pre>
+              <details class="inst-sub">
+                <summary>Optional: install unattended with a settings file</summary>
+                <p>Save your answers as <code>site.yaml</code> (the format is described in <a href="https://github.com/radiusadmin/radius-admin/blob/main/deploy/answers.sh">deploy/answers.sh</a>), then add <code>--answers site.yaml</code> to the install command.</p>
+                <pre class="cmd" tabindex="0"><code>cat &gt; site.yaml &lt;&lt;'EOF'
+server_name: radius.example.net
 admin_net: 192.0.2.0/24
 switch_nets: "192.0.2.0/24 198.51.100.0/24"
 listen_ip: 192.0.2.10
 resolver: "192.0.2.53"
 tls: self-signed
 admin_username: netadmin
-eap_tls: self-signed</code></pre>
-            <pre class="cmd" tabindex="0"><code>sudo ./deploy/install.sh --answers site.yaml --print-answers   # check only
-sudo ./deploy/install.sh --answers site.yaml</code></pre>
-            <p>The installer keeps your answers in <code>/etc/radius-admin/site.yaml</code> for later runs.</p>
+eap_tls: self-signed
+EOF</code></pre>
+                <pre class="cmd" tabindex="0"><code>sudo radius-admin/deploy/install.sh --answers site.yaml</code></pre>
+              </details>
+              <p class="fine">The installer keeps your answers in <code>/etc/radius-admin/site.yaml</code> for later runs. FreeRADIUS starts without a directory and rejects every 802.1X user until you add access rules and set up the directory in the portal.</p>
+            </div>
+          </details>
+
+          <details class="inst-opt">
+            <summary><span class="inst-opt-t">Existing FreeRADIUS server</span><span class="inst-opt-d">Keeps your FreeRADIUS and moves its SQLite data to PostgreSQL.</span></summary>
+            <div class="inst-opt-body">
+              <pre class="cmd" tabindex="0"><code>git clone --depth 1 https://github.com/radiusadmin/radius-admin.git
+sudo radius-admin/deploy/install.sh --confirm-migrate</code></pre>
+              <p>For a server that already runs FreeRADIUS 3.2 with a SQLite database. Your FreeRADIUS is kept and <code>/etc/freeradius</code> is backed up first. Users, groups, RADIUS clients and accounting history are imported into PostgreSQL (with a dry run first), and the server check confirms that your build has the PostgreSQL driver. Plan a maintenance window and read the <a href="https://github.com/radiusadmin/radius-admin/blob/main/docs/RUNBOOK.md#2-plan-the-maintenance-window">runbook</a> first: switch administrators get new passwords.</p>
+              <details class="inst-sub">
+                <summary>Optional: install unattended with a settings file</summary>
+                <p>The same <code>site.yaml</code> as for a new server, without <code>eap_tls</code>: your FreeRADIUS keeps its certificates. Add <code>--sqlite</code> only if your database is not at <code>/var/lib/freeradius/sqlite/freeradius.db</code>.</p>
+                <pre class="cmd" tabindex="0"><code>cat &gt; site.yaml &lt;&lt;'EOF'
+server_name: radius.example.net
+admin_net: 192.0.2.0/24
+switch_nets: "192.0.2.0/24 198.51.100.0/24"
+listen_ip: 192.0.2.10
+resolver: "192.0.2.53"
+tls: self-signed
+admin_username: netadmin
+EOF</code></pre>
+                <pre class="cmd" tabindex="0"><code>sudo radius-admin/deploy/install.sh --confirm-migrate --answers site.yaml --sqlite /path/to/freeradius.db</code></pre>
+              </details>
+              <p class="fine">FreeRADIUS keeps running its current configuration until you restart it: <code>sudo systemctl restart freeradius</code>. The SQLite snapshot in <code>/var/backups/radius-admin/</code> contains cleartext passwords; shred it once you have checked the result.</p>
+            </div>
           </details>
         </li>
         <li>
