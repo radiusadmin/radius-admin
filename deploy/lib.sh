@@ -102,10 +102,21 @@ detect_fr_libdir() {
     return 1
 }
 
+# primary_ipv4_cidr: this host's main IPv4 address with its prefix (192.0.2.10/24), for the
+# installer's default management subnet. The interface of the default route first, then any other;
+# never lo (WSL puts a /32 DNS stub address on lo, which ip lists first). Empty if there is none.
+primary_ipv4_cidr() {
+    local dev
+    dev=$(ip -4 route show default 2>/dev/null | awk '{for (i = 1; i < NF; i++) if ($i == "dev") {print $(i + 1); exit}}')
+    { if [[ -n $dev ]]; then ip -o -4 addr show dev "$dev" scope global; fi
+      ip -o -4 addr show scope global; } 2>/dev/null | awk '$2 != "lo" && !f {print $4; f = 1}' || true
+    # (awk reads to the end: an early exit would kill the writer with SIGPIPE under pipefail)
+}
+
 # This host's IPv4 address inside the admin network (first match).
 detect_vlan_ip() {
     local net=${1:-$RA_ADMIN_NET}
-    ip -o -4 addr show scope global 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | while read -r a; do
+    ip -o -4 addr show scope global 2>/dev/null | awk '$2 != "lo" {print $4}' | cut -d/ -f1 | while read -r a; do
         if python3 -c 'import ipaddress,sys; sys.exit(0 if ipaddress.ip_address(sys.argv[1]) in ipaddress.ip_network(sys.argv[2]) else 1)' "$a" "$net"; then
             printf '%s\n' "$a"
         fi
