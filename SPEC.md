@@ -714,6 +714,15 @@ CSV columns (header row required, exact names, any order tolerated by name):
   takes the same unattended; `--print-answers` validates and prints only. New phase `site` writes
   `/etc/radius-admin/site.yaml` (root 0640) and the certificate; `bootstrap` creates the first
   admin. With a CSR the run stops until the issued certificate is installed.
+- **Install from a checkout** (install.sh + `fetch_release` in `deploy/lib.sh`): a full install
+  (no `--phase`/`--from`, no `--print-*`) from a tree without `BUILD.json` downloads release
+  `v<VERSION>` (`manifest.json`, `manifest.json.sig`, `radius-admin-<VERSION>.tar.gz` from
+  `RA_RELEASE_URL`, default the repository's GitHub release downloads), verifies the manifest
+  with the checkout's `deploy/keys/update-signing.pem` (ECDSA P-384 / SHA-384), checks product,
+  version, bundle name and SHA-384 and that every path is under `radius-admin/`, unpacks it to
+  `RA_RELEASE_DIR/radius-admin-<VERSION>` (default `/usr/local/src`, replaced on a re-run) and
+  `exec`s that bundle's `install.sh` with the original arguments in the original directory.
+  Any failure stops before anything is installed. `--from-checkout` installs the tree as it is.
 - **New server** (install.sh `fr_blank`: no `policy.d/radius-admin` and no SQLite database): the
   `freeradius` phase needs nothing from the stock FreeRADIUS files. Empty `ui.access_rule` only
   warns (it still refuses while a SQLite database exists). `mods-available/ldap` without a

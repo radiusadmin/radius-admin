@@ -8,6 +8,11 @@ release, so previews sort after it.
 ## 0.3.0 - 2026-11-20
 
 ### Added
+- **Install from a git clone.** `git clone` and `sudo radius-admin/deploy/install.sh` is the whole
+  install: from a checkout, the installer downloads the release of the same version from GitHub,
+  verifies its signed manifest (ECDSA P-384) and SHA-384, and continues with that release, which
+  carries the FreeRADIUS package. `--from-checkout` installs a checkout as it is. The website's
+  install steps show the two cases (new server, existing FreeRADIUS server).
 - **A second factor for device admin logins (Integrations).** A new Integrations page sets which
   device admin logins must be approved with a second factor: local or directory accounts, on all
   clients or selected ones, with exempt break-glass accounts. First provider: a remote RADIUS MFA

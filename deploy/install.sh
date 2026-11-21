@@ -41,6 +41,9 @@
 #   --confirm-migrate       allow the migrate phase to run
 #   --restart-freeradius    restart FreeRADIUS at the end of the fr-package and freeradius phases
 #   --freeradius-deb FILE   FreeRADIUS package for fr-package (default: the bundled one in packages/)
+#   --from-checkout         install this git checkout as it is. Without it, a full install from a
+#                           checkout (no BUILD.json) downloads the signed release of its VERSION
+#                           from GitHub, verifies it and runs that release's installer instead
 #   --listen-ip IP          nginx bind address (default: detected address in admin net)
 #   --admin-net CIDR        management subnet allowed to reach the portal
 #   --server-name NAME      FQDN of the portal
@@ -102,6 +105,8 @@ PRINT_SETTINGS=0
 USE_ANSWERS=0
 CSR_PENDING=0
 [[ $# -eq 0 && -t 0 ]] && INTERACTIVE=1
+ORIG_ARGS=("$@")
+FROM_CHECKOUT=0
 
 OPT=/opt/radius-admin
 ETC=/etc/radius-admin
@@ -134,6 +139,7 @@ while [[ $# -gt 0 ]]; do
             OPT_FIPS=$m; shift ;;
         --sqlite) RA_SQLITE_DB=$2; shift 2 ;;
         --skip-preflight) SKIP_PREFLIGHT=1; shift ;;
+        --from-checkout) FROM_CHECKOUT=1; shift ;;
         -y|--yes) ASSUME_YES=1; shift ;;
         -i|--interactive) INTERACTIVE=1; shift ;;
         --answers) ANSWERS=$2; shift 2 ;;
@@ -144,6 +150,19 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 require_root
+
+# A git checkout (or a source archive) has no FreeRADIUS package, no signed integrations catalog
+# and no BUILD.json. A full install from one downloads the signed release of the same version
+# and continues with that release's installer, so the result is the same as from a bundle.
+if [[ ! -s $SRC/BUILD.json ]] && (( ! FROM_CHECKOUT && ! PRINT_ANSWERS && ! PRINT_SETTINGS )) \
+        && [[ ${#PHASES[@]} -eq 0 && -z $FROM ]]; then
+    hdr "Release"
+    info "$SRC is a source checkout, not a release bundle"
+    rel=$(fetch_release "$SRC") || exit 1
+    [[ -s $rel/BUILD.json && -x $rel/deploy/install.sh ]] || die "$rel is not a release bundle"
+    ok "continuing with $rel/deploy/install.sh"
+    exec "$rel/deploy/install.sh" "${ORIG_ARGS[@]}"
+fi
 
 # A first install that stopped before the site phase saved its answers: on a terminal, ask the
 # set-up questions even when options were given (--skip-preflight, -y, --phase …). Only when the
