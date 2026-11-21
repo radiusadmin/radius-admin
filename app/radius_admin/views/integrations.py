@@ -379,6 +379,15 @@ def duo_check():
     if p is not None and p["settings"].get("api_host"):
         params["api_host"] = p["settings"]["api_host"]
     r = _helper("integration_preflight", **params)
+    # audited (rule 12): the check reaches Duo's API host through the helper
+    detail = {"ready": bool(r.get("ready")),
+              "failed": [str(c.get("check", ""))[:40] for c in (r.get("checks") or []) if not c.get("ok")][:20]}
+    if "api_host" in params:
+        detail["api_host"] = params["api_host"]
+    if not r.get("ok"):
+        detail["message"] = str(r.get("message", ""))[:300]
+    ev("integration.preflight", success=bool(r.get("ok") and r.get("ready")), object_type="integration",
+       object_id="duo", detail=detail)
     return _duo_page(preflight=r)
 
 
