@@ -37,9 +37,19 @@ def test_last_admin_race_serialized(app, superconn, make_user):
     t1 = threading.Thread(target=run, args=(ba, ta, b.id, "a"))
     t2 = threading.Thread(target=run, args=(bb, tb, a.id, "b"))
     t1.start(); t2.start(); t1.join(); t2.join()
-    assert results == {"a": 302, "b": 302}, results     # both requests complete; one is refused
+    # Both requests must complete (an exception or a missing result is a failure). The
+    # winner's disable succeeds (302). The loser either loads its session before the
+    # winner commits and is refused by the last-admin check (302), or loads it after the
+    # winner deleted its sessions and gets 403 (form expired). Never both 403.
+    assert sorted(results) == ["a", "b"], results
+    assert all(isinstance(v, int) for v in results.values()), results
+    codes = sorted(results.values())
+    assert codes in ([302, 302], [302, 403]), results
     n = q(superconn, "SELECT count(*) FROM ui.admin_user WHERE role='admin' AND enabled")[0][0]
     assert n == 1
+    if 403 in codes:    # the 403 side is the one the other admin disabled
+        loser = a if results["a"] == 403 else b
+        assert q(superconn, "SELECT enabled FROM ui.admin_user WHERE id=%s", (loser.id,)) == [(False,)]
 
 
 def test_last_admin_lock_blocks_concurrent_transaction(app, superconn, make_user):
