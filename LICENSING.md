@@ -66,7 +66,8 @@ the final price is the one in the signed agreement.
 ## How to get a commercial licence
 
 E-mail **licensing@radiusadmin.net** with your organization's name, its headcount and a short
-description of the deployment.
+description of the deployment. You receive a signed licence file; install it under
+Settings → Licence in the portal. The file is checked on your server, offline.
 
 Prices are open to discussion. radius-admin is made by one person, not a sales department: if
 the list price does not fit your organization, or your situation is unusual, please get in

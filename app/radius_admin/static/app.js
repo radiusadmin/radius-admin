@@ -121,6 +121,23 @@
       sync();
     });
 
+    // Select-controlled reveal boxes (space-separated ids): shown, fields enabled, only for one option.
+    document.querySelectorAll("select[data-reveal-box]").forEach(function (sel) {
+      var boxes = sel.getAttribute("data-reveal-box").split(" ").map(function (id) {
+        return document.getElementById(id);
+      }).filter(function (b) { return b; });
+      var want = sel.getAttribute("data-reveal-value");
+      function sync() {
+        var on = sel.value === want;
+        boxes.forEach(function (box) {
+          box.hidden = !on;
+          box.querySelectorAll("input, textarea, button").forEach(function (i) { i.disabled = !on; });
+        });
+      }
+      sel.addEventListener("change", sync);
+      sync();
+    });
+
     // Copy buttons.
     document.querySelectorAll("[data-copy]").forEach(function (btn) {
       btn.addEventListener("click", function () {

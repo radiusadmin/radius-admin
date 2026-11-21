@@ -2,7 +2,7 @@
 here changes configuration itself, it links to the page where each step is done."""
 from flask import Blueprint, abort, redirect, render_template, request, url_for
 
-from .. import db, integrations, sso
+from .. import db, integrations, licence, sso
 from ..flashing import flash
 from ..security import role_required
 from ..services import get_settings, pending_state, set_setting
@@ -35,7 +35,10 @@ def checklist():
     mfa_on = bool(covered)
     mfa_detail = "; ".join("%s: %s" % (cov[k]["label"], integrations.coverage_text(cov[k]))
                            for k in integrations.ACCOUNT_KINDS if cov[k]["enabled"]) or "Off"
+    lic = licence.status(licence.load_state(), licence.today())
     return [
+        ("licence", "Choose how this server is licensed", True, lic["case"] in licence.CASES,
+         lic["label"] if lic["case"] in licence.CASES else "Not answered yet", "licence.index"),
         ("freeradius", "FreeRADIUS is running and reachable", True, fr_ok,
          (st.get("radiusd_version") or "") if fr_ok else (st.get("message") or "Not running or not listening."),
          "dashboard.index"),

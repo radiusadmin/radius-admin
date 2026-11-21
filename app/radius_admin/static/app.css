@@ -154,6 +154,29 @@ body.app {
 .setup-strip { display: flex; gap: 1rem; align-items: center; justify-content: space-between; flex-wrap: wrap;
   border-left: 4px solid var(--amber); }
 .setup-strip p { margin: 0 0 .3rem; }
+.licence-strip { display: flex; gap: 1rem; align-items: center; justify-content: space-between; flex-wrap: wrap;
+  border-left: 4px solid var(--steel-300); }
+.licence-strip p { margin: 0; }
+.licence-banner { display: flex; gap: 1rem; align-items: center; justify-content: space-between; flex-wrap: wrap;
+  margin: 0; padding: .6rem 1.5rem; background: var(--amber-bg); color: var(--ink); border-bottom: 1px solid var(--amber); }
+.licence-banner p { margin: 0; }
+.licence-help { margin: .4rem 0 0; padding-left: 1.1rem; }
+.licence-help li { margin: .15rem 0; padding-left: .2rem; }
+.licence-file { display: flex; flex-direction: column; gap: .35rem; margin-top: .6rem; padding-top: .8rem;
+  border-top: 1px solid var(--line); }
+.licence-file[hidden] { display: none; }
+.licence-file p { margin: 0 0 .2rem; }
+.licence-file label { font-weight: 600; font-size: .9rem; margin-top: .4rem; }
+.licence-paste { margin-top: .3rem; }
+.licence-paste summary { cursor: pointer; font-size: .9rem; color: var(--focus); }
+.licence-paste textarea { width: 100%; margin-top: .4rem; }
+.licence-trial { margin-top: .9rem; padding: .7rem .9rem; border: 1px dashed var(--line); border-radius: var(--radius-s); }
+.licence-trial[hidden] { display: none; }
+.licence-trial p { margin: 0 0 .5rem; }
+.licence-remove { margin-top: .8rem; }
+.licence-contact { margin: 1rem 0 0; }
+.app-foot { margin-top: 2.5rem; padding-top: .8rem; border-top: 1px solid var(--line); font-size: .8rem; color: var(--ink-soft); }
+.app-foot p { margin: 0; }
 .setup-strip progress { width: min(320px, 100%); accent-color: var(--teal); }
 .gate-or { text-align: center; margin: .2rem 0 .6rem; }
 /* colour theme: a three-way segmented control in the account menu */

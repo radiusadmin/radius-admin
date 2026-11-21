@@ -669,3 +669,22 @@ exception 8).
   them only through Apply with a backup, and restores everything when FreeRADIUS does not restart or
   the portal does not reload and serve the new certificate. A wrong portal certificate therefore
   cannot lock admins out; the previous one is back within the same apply.
+
+## Licence page and licence files (SPEC section 30)
+
+- **No technical enforcement.** The licence status never changes what the portal or FreeRADIUS
+  does; an expired or missing licence changes wording on the Licence page, an admin-only dashboard
+  line and, after a trial, an admin-only banner. The one interaction is the required first setup
+  step: until the licence question is answered, admins' page loads go to the Licence page (POSTs,
+  operators, viewers and RADIUS are unaffected, and a failing check redirects nobody). The server
+  never contacts anyone about licensing.
+- **Crypto.** Licence files are signed with ECDSA P-384 / SHA-384 (rule 6), with a key separate from
+  the update-signing key. The app holds only public keys (`app/radius_admin/licence_keys/`). The
+  signature is checked before any field of the file is used; the file is limited to 16 KiB and its
+  fields are length-checked and shown escaped.
+- **Signing key.** The private key lives only on the maintainer's machine (0600, directory 0700),
+  backed up offline; it is never in the repository or CI. A lost or exposed key is replaced with a
+  new one whose public half ships in the next release; files signed with the old key keep working
+  while its public key stays in the directory, so remove it in that release if it was exposed.
+- **Issuing page.** `licence-tool.py serve` listens on 127.0.0.1 only and requires the one-time
+  token it prints, a form token and a same-host Origin on every change.

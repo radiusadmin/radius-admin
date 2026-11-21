@@ -13,7 +13,7 @@
 <a class="skip" href="#main">Skip to content</a>
 {# pages reached from the Settings button at the bottom of the side panel #}
 {% set _ep = request.endpoint or '' %}
-{% set in_settings = _ep.startswith(('settings.', 'admins.', 'setup.', 'updates.')) and _ep not in ('settings.custom_policy', 'settings.policy_preview')
+{% set in_settings = _ep.startswith(('settings.', 'admins.', 'setup.', 'updates.', 'licence.')) and _ep not in ('settings.custom_policy', 'settings.policy_preview')
    or _ep in ('sso.settings', 'alerts.settings') %}
 {% if current_user %}
 <header class="topbar">
@@ -103,6 +103,10 @@
 </div>
 {% endif %}
 {% endif %}
+{% if licence_banner and not _ep.startswith('licence.') %}
+<div class="licence-banner" role="status"><p>{{ licence_banner }}</p>
+  <a class="btn btn-small" href="{{ url_for('licence.index') }}">Open the Licence page</a></div>
+{% endif %}
 <main id="main" class="main" tabindex="-1">
   {% if current_user and in_settings and _ep != 'settings.overview' %}
   <p class="crumb"><a class="btn btn-quiet btn-small btn-back" href="{{ url_for('settings.overview') }}">All settings</a></p>
@@ -115,6 +119,9 @@
   {% endif %}
   {% endwith %}
   {% block content %}{% endblock %}
+  {% if current_user %}
+  <footer class="app-foot"><p>Source available under the Business Source License 1.1. Free for personal use and organizations with fewer than 50 people. <a href="https://radiusadmin.net/#licence" rel="noopener">Licensing</a></p></footer>
+  {% endif %}
 </main>
 </body>
 </html>
