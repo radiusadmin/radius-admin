@@ -187,6 +187,7 @@ class FakeHelper:
                     "listening": False, "state": {}}
         self.catalog = {"serial": 0, "entries": [], "source": "none", "message": ""}
         self.integration_log = ""
+        self.cert_status = {}           # what cert_status adds to its answer (SPEC section 30)
         self._sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self._sock.bind(path)
         self._sock.listen(8)
@@ -293,6 +294,10 @@ class FakeHelper:
         if a == "integration_test":
             return {"ok": True, "action": a, "message": "the connectivity check passed", "passed": True,
                     "output": "The Auth Proxy was able to reach Duo\nskey [redacted]"}
+        if a == "cert_status":
+            return dict({"eap_server": None, "client_ca": None, "eap_ocsp": None, "portal_server": None,
+                         "portal_configured": False, "portal_server_name": None}, ok=True, action=a, message="ok",
+                        **self.cert_status)
         return {"ok": False, "action": a or "", "message": "unknown action"}
 
     def close(self):
@@ -335,6 +340,7 @@ def clean_db(superconn):
         cur.execute("DELETE FROM ui.mfa_policy_client")
         cur.execute("DELETE FROM ui.mfa_exempt")
         cur.execute("DELETE FROM ui.mfa_provider")
+        cur.execute("DELETE FROM ui.tls_cert")
         cur.execute("INSERT INTO ui.setting (key, value) VALUES ('admin_subnet','192.0.2.0/24'),"
                     " ('admin_priv15','false'), ('custom_policy',''),"
                     " ('banner_text','This system is for authorized use only. Testing banner text.')")

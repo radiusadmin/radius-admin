@@ -59,6 +59,9 @@ automatically if FreeRADIUS does not come back up.
 - Device administrator logins for switches, access points and firewalls: local accounts
   (PBKDF2-hashed) or members of chosen directory groups with their directory password (LDAPS).
 - Custom unlang policy for administrators, checked before it is installed.
+- Certificates in the console: the 802.1X server certificate, the CA for client certificates, OCSP
+  for EAP-TLS and the portal's HTTPS certificate. Upload them, or make the key and request on the
+  server; they are installed with Apply and rolled back if FreeRADIUS or the portal does not take them.
 
 **Operations**
 - Dashboard, live sessions, and change of authorization (disconnect, re-authenticate, bounce port).
@@ -199,8 +202,7 @@ allow TCP 2083 from those clients.
 Being a young project, some parts are still to come:
 
 - The directory (LDAP/AD) of a new server is set up by hand in `mods-available/ldap`; a portal
-  Setup step for the directory and certificates comes with the generated FreeRADIUS
-  configuration, the next phase.
+  Setup step for the directory comes with the generated FreeRADIUS configuration, the next phase.
 - The bundled FreeRADIUS package is built for Ubuntu 24.04 (amd64); Debian 12 follows.
 - Vendor profiles: Cisco Catalyst 1200/1300 is the tested switch family today.
 

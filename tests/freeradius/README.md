@@ -35,6 +35,10 @@ Sandbox setup the scripts expect:
   (`radiusmap freerad radius_fr`), and an OS user `freerad` (radiusd drops to it).
 * `/etc/hosts`: `127.0.0.1 dc01.example.net pki.example.net`
   so the unchanged production LDAP server and OCSP URL resolve to the emulators.
+* On a lab VM with AppArmor (Ubuntu server images; WSL has none), the packaged slapd profile
+  denies the emulator its files under the checkout and the bench directory, and radiusd then
+  fails to start ("Can't contact LDAP server"). Unload it for the bench:
+  `ln -s /etc/apparmor.d/usr.sbin.slapd /etc/apparmor.d/disable/; apparmor_parser -R /etc/apparmor.d/usr.sbin.slapd`.
 * Loopback aliases used as RADIUS client source addresses:
   `ip addr add 192.0.2.10/32 dev lo; ip addr add 198.51.100.10/32 dev lo;
   ip addr add 203.0.113.201/32 dev lo`.

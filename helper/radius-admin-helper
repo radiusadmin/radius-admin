@@ -59,7 +59,7 @@ SAFE_ENV = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C", "LC_ALL": "C"}
 ACTIONS = ("status", "validate", "apply", "rollback", "update_status", "update_check",
            "update_install", "update_log", "integration_status", "integration_catalog",
            "integration_preflight", "integration_fetch", "integration_install", "integration_log",
-           "integration_remove", "integration_test")
+           "integration_remove", "integration_test", "cert_status")
 UPDATE_VERSION_RE = re.compile(r"^(\d{1,4})\.(\d{1,4})\.(\d{1,4})(?:-(dev|rc)\.(\d{1,6}))?\Z")
 UPDATE_CHANNELS = ("main", "testing", "dev")
 UPDATE_LOG_RE = re.compile(r"^update-\d{1,4}\.\d{1,4}\.\d{1,4}(?:-(?:dev|rc)\.\d{1,6})?-\d{8}T\d{6}Z\.log\Z")
@@ -101,6 +101,12 @@ CONFIG_DEFAULTS = {
     "portal_service": "nginx.service",
     "portal_site": "/etc/nginx/sites-enabled/radius-admin",
     "portal_port": "443",
+    # certificates managed in the portal (SPEC section 30): the portal's TLS files, nginx for its
+    # check and reload, and whether the reloaded portal must be seen serving the new certificate
+    "portal_tls_dir": "/etc/radius-admin/tls",
+    "nginx": "/usr/sbin/nginx",
+    "systemd_run": "/usr/bin/systemd-run",
+    "portal_verify_tls": "true",
     "restart_wait": "15",
     "restart_timeout": "20",
     "validate_timeout": "30",
@@ -176,7 +182,8 @@ def load_config(path):
                               "and not group/world writable" % path)
     for key in ("radiusd", "raddb", "staging_dir", "work_dir", "systemctl", "runuser",
                 "ss", "fips_file", "update_dir", "update_pubkey", "openssl", "build_file", "portal_site",
-                "update_log_dir", "integration_dir", "integration_catalog", "integration_log_dir", "duo_dir"):
+                "update_log_dir", "integration_dir", "integration_catalog", "integration_log_dir", "duo_dir",
+                "portal_tls_dir", "nginx", "systemd_run"):
         cfg[key] = _abs(cfg, key)
     if not re.match(r"^[A-Za-z0-9@_.:-]{1,128}$", cfg["service"]):
         raise HelperError("helper.conf: invalid service name")
@@ -197,6 +204,7 @@ def load_config(path):
             cfg[key] = int(cfg[key])
         except ValueError:
             raise HelperError("helper.conf: %s must be an integer" % key)
+    cfg["portal_verify_tls"] = cfg["portal_verify_tls"].lower() in ("1", "true", "yes", "on")
     if cfg["keep_backups"] < 1:
         raise HelperError("helper.conf: keep_backups must be >= 1")
     try:
@@ -1002,7 +1010,7 @@ def _copy_tree(src_root, dst_root):
         os.chmod(t, _plain_mode(st))
 
 
-def build_validation_tree(cfg, vroot, policy, clients):
+def build_validation_tree(cfg, vroot, policy, clients, cert_files=None):
     """Copy raddb into a private dir (root:freerad 0750) with the candidate files
     overlaid at their live positions, and point raddbdir at the copy."""
     tmp = tempfile.mkdtemp(prefix="raddb.", dir=vroot)
@@ -1047,6 +1055,8 @@ def build_validation_tree(cfg, vroot, policy, clients):
         st = os.lstat(os.path.join(cfg["raddb"], cfg["config_name"] + ".conf"))
         atomic_write(main, txt.encode("utf-8", "surrogateescape"), st.st_uid, st.st_gid,
                      _plain_mode(st))
+    # the copy reads its own certs/site (candidate certificate files, if any, in place)
+    overlay_certs(rd, cfg, {k: v for k, v in (cert_files or {}).items() if k in FR_CERT_FILES})
     return tmp, rd
 
 
@@ -1061,13 +1071,13 @@ def run_check(cfg, rd):
     return run(argv, cfg["validate_timeout"])
 
 
-def validate_candidate(cfg, vroot, policy, clients):
+def validate_candidate(cfg, vroot, policy, clients, cert_files=None):
     """Content checks + radiusd -XC on a private copy. Returns (ok, output_tail, n_clients)."""
     check_policy(policy)
     n = check_clients(clients, os.path.join(cfg["raddb"], "certs", "site"))
     tmp = None
     try:
-        tmp, rd = build_validation_tree(cfg, vroot, policy, clients)
+        tmp, rd = build_validation_tree(cfg, vroot, policy, clients, cert_files)
         rc, out = run_check(cfg, rd)
     finally:
         if tmp:
@@ -1165,7 +1175,7 @@ def duo_cfg_path(cfg):
     return os.path.join(cfg["duo_dir"], "conf", "authproxy.cfg")
 
 
-def make_backup(cfg, bdir, reason, duo_managed=False):
+def make_backup(cfg, bdir, reason, duo_managed=False, cert_names=()):
     for _ in range(3):
         bid = utc_id()
         path = os.path.join(bdir, bid)
@@ -1176,10 +1186,13 @@ def make_backup(cfg, bdir, reason, duo_managed=False):
             time.sleep(1.05)
     else:
         raise HelperError("could not allocate a backup id")
-    meta = {"id": bid, "reason": reason, "files": {}, "duo_managed": bool(duo_managed)}
+    meta = {"id": bid, "reason": reason, "files": {}, "duo_managed": bool(duo_managed),
+            "certs": sorted(cert_names)}
     sources = [(cfg["policy_target"], "policy"), (cfg["clients_target"], "clients")]
     if duo_managed:     # this apply changes the Duo Authentication Proxy's configuration too
         sources.append((duo_cfg_path(cfg), "duo"))
+    for name in sorted(cert_names):     # the certificate files this apply replaces (SPEC 30)
+        sources.append((cert_target(cfg, name)[0], name))
     for src, name in sources:
         data = read_root_file(src)
         if data is None:
@@ -1208,7 +1221,9 @@ def load_backup(bdir, bid):
         raise HelperError("backup %s is incomplete" % bid)
     meta = json.loads(raw.decode())
     files = {"duo_managed": meta.get("duo_managed") is True}
-    for name in ("policy", "clients") + (("duo",) if files["duo_managed"] else ()):
+    certs = [n for n in meta.get("certs") or [] if n in CERT_FILES]
+    files["certs"] = {}
+    for name in ("policy", "clients") + (("duo",) if files["duo_managed"] else ()) + tuple(certs):
         if meta["files"].get(name) is None:
             files[name] = None
             continue
@@ -1216,6 +1231,8 @@ def load_backup(bdir, bid):
         if data is None or sha256(data) != meta["files"][name]:
             raise HelperError("backup %s is corrupt (%s)" % (bid, name))
         files[name] = data
+    for name in certs:
+        files["certs"][name] = files.pop(name, None)
     return files
 
 
@@ -1250,6 +1267,359 @@ def write_state(cfg, state):
                  json.dumps(state, sort_keys=True).encode(), 0, 0, 0o600)
 
 
+# --------------------------------------------------------------------------- certificates (SPEC section 30)
+
+STAGED_CERTS = "certificates"
+CERT_SECTIONS = ("format", "eap_server", "client_ca", "eap_ocsp", "portal_server")
+OCSP_URL_RE = re.compile(r"\Ahttps?://[A-Za-z0-9.-]{1,253}(:[0-9]{1,5})?(/[A-Za-z0-9._~/-]{0,200})?\Z")
+PEM_CERT_RE = re.compile(r"-----BEGIN CERTIFICATE-----\n[A-Za-z0-9+/=\n]{1,20000}?\n-----END CERTIFICATE-----")
+PEM_KEY_RE = re.compile(r"\A-----BEGIN (EC |RSA |)PRIVATE KEY-----\n[A-Za-z0-9+/=\n]{1,20000}?\n-----END \1PRIVATE KEY-----\n?\Z")
+# The files a certificate change can touch, by name (backups and responses use these names)
+CERT_FILES = ("eap_cert", "eap_key", "eap_ca", "eap_conf", "portal_cert", "portal_key", "portal_ca")
+FR_CERT_FILES = ("eap_cert", "eap_key", "eap_ca", "eap_conf")
+PORTAL_CERT_FILES = ("portal_cert", "portal_key", "portal_ca")
+MAX_CERT_PEM = 64 * 1024
+
+
+def cert_target(cfg, name):
+    """(path, uid, gid, mode, relative path in raddb or None) of a certificate file."""
+    site = os.path.join(cfg["raddb"], "certs", "site")
+    g, tls = cfg["freerad_gid"], cfg["portal_tls_dir"]
+    return {"eap_cert": (os.path.join(site, "radius.pem"), 0, g, 0o640, "certs/site/radius.pem"),
+            "eap_key": (os.path.join(site, "radius.key"), 0, g, 0o640, "certs/site/radius.key"),
+            "eap_ca": (os.path.join(site, "ca.pem"), 0, g, 0o640, "certs/site/ca.pem"),
+            "eap_conf": (os.path.join(cfg["raddb"], "mods-available", "eap"), 0, g, 0o640,
+                         "mods-available/eap"),
+            "portal_cert": (os.path.join(tls, "server.crt"), 0, 0, 0o644, None),
+            "portal_key": (os.path.join(tls, "server.key"), 0, 0, 0o600, None),
+            "portal_ca": (os.path.join(tls, "client-ca.pem"), 0, 0, 0o644, None)}[name]
+
+
+def read_staged_certs(cfg):
+    """The staged certificates file (JSON), or None."""
+    dfd = _staging_dirfd(cfg)
+    try:
+        return _read_staged_file(cfg, dfd, STAGED_CERTS, optional=True)
+    finally:
+        os.close(dfd)
+
+
+def _ossl(cfg, args, data):
+    rc, out = run([cfg["openssl"]] + args, 20, input_data=data.encode() if isinstance(data, str) else data)
+    return rc, out
+
+
+def _cert_blocks(text, what):
+    if not isinstance(text, str) or not text.strip() or len(text) > MAX_CERT_PEM:
+        raise HelperError("%s: expected PEM text" % what)
+    text = text.replace("\r\n", "\n").strip() + "\n"
+    blocks = PEM_CERT_RE.findall(text)
+    rest = PEM_CERT_RE.sub("", text)
+    if not blocks or rest.strip():
+        raise HelperError("%s: only PEM certificates (BEGIN CERTIFICATE) are allowed" % what)
+    return blocks
+
+
+def _cert_info(cfg, pem):
+    """Facts about one PEM certificate from openssl x509 -text."""
+    rc, out = _ossl(cfg, ["x509", "-noout", "-text", "-nameopt", "RFC2253", "-fingerprint", "-sha256"], pem)
+    if rc != 0:
+        raise HelperError("not a valid certificate: %s" % tail(out, 2))
+    info = {"text": out}
+    for key, rx in (("subject", r"^\s*Subject: (.*)$"), ("issuer", r"^\s*Issuer: (.*)$"),
+                    ("not_before", r"Not Before\s*: (.*)$"), ("not_after", r"Not After\s*: (.*)$"),
+                    ("sig", r"^\s*Signature Algorithm: (\S+)"),
+                    ("sha256", r"(?i)sha256 Fingerprint=([0-9A-F:]+)")):
+        m = re.search(rx, out, re.M)
+        info[key] = m.group(1).strip() if m else ""
+    m = re.search(r"X509v3 Subject Alternative Name:[^\n]*\n\s*([^\n]*)", out)
+    info["san"] = [s.strip() for s in m.group(1).split(",")] if m else []
+    m = re.search(r"X509v3 Extended Key Usage:[^\n]*\n\s*([^\n]*)", out)
+    info["eku"] = [s.strip() for s in m.group(1).split(",")] if m else []
+    m = re.search(r"X509v3 Basic Constraints:[^\n]*\n\s*([^\n]*)", out)
+    info["ca"] = bool(m and "CA:TRUE" in m.group(1))
+    if re.search(r"Public Key Algorithm: rsaEncryption", out):
+        m = re.search(r"Public-Key: \((\d+) bit\)", out)
+        info["key"] = "RSA %s" % (m.group(1) if m else "?")
+    elif re.search(r"Public Key Algorithm: id-ecPublicKey", out):
+        m = re.search(r"NIST CURVE: (P-\d+)", out) or re.search(r"ASN1 OID: (\S+)", out)
+        info["key"] = "ECDSA %s" % (m.group(1) if m else "?")
+    else:
+        m = re.search(r"Public Key Algorithm: (\S+)", out)
+        info["key"] = m.group(1) if m else "unknown"
+    rc, _ = _ossl(cfg, ["x509", "-noout", "-checkend", "0"], pem)
+    info["expired"] = rc != 0
+    return info
+
+
+def _key_allowed(desc):
+    """FIPS-safe key types (SPEC section 7): RSA >= 3072, ECDSA P-256 / P-384."""
+    m = re.match(r"RSA (\d+)\Z", desc)
+    if m:
+        return int(m.group(1)) >= 3072
+    return desc in ("ECDSA P-256", "ECDSA P-384", "ECDSA prime256v1", "ECDSA secp384r1")
+
+
+def _check_server(cfg, section, what, server_name=None):
+    if not isinstance(section, dict) or set(section) != {"cert", "key"}:
+        raise HelperError("%s: expected {cert, key}" % what)
+    blocks = _cert_blocks(section["cert"], what + " certificate")
+    key = section["key"]
+    if not isinstance(key, str) or len(key) > MAX_CERT_PEM:
+        raise HelperError("%s: expected a PEM private key" % what)
+    key = key.replace("\r\n", "\n").strip() + "\n"
+    if not PEM_KEY_RE.match(key):
+        raise HelperError("%s: the key must be one unencrypted PEM private key" % what)
+    leaf = _cert_info(cfg, blocks[0])
+    if leaf["expired"]:
+        raise HelperError("%s: the certificate has expired (%s)" % (what, leaf["not_after"]))
+    if not _key_allowed(leaf["key"]):
+        raise HelperError("%s: key type %s is not allowed (use RSA 3072 or larger, or ECDSA P-256/P-384)"
+                          % (what, leaf["key"]))
+    if not re.search(r"(?i)sha(256|384|512)", leaf["sig"]):
+        raise HelperError("%s: signature algorithm %s is not allowed (SHA-256, SHA-384 or SHA-512 only)"
+                          % (what, leaf["sig"]))
+    if leaf["ca"]:
+        raise HelperError("%s: the first certificate is a CA certificate, not a server certificate" % what)
+    if leaf["eku"] and "TLS Web Server Authentication" not in leaf["eku"]:
+        raise HelperError("%s: the certificate is not for server authentication (extended key usage)" % what)
+    rc1, pub_c = _ossl(cfg, ["x509", "-noout", "-pubkey"], blocks[0])
+    rc2, pub_k = _ossl(cfg, ["pkey", "-pubout"], key)
+    if rc1 != 0 or rc2 != 0 or pub_c.strip() != pub_k.strip():
+        raise HelperError("%s: the private key does not belong to the certificate" % what)
+    if server_name is not None and "DNS:%s" % server_name not in leaf["san"]:
+        raise HelperError("%s: the certificate does not name %s (subject alternative name)" % (what, server_name))
+    for b in blocks[1:]:
+        _cert_info(cfg, b)
+    return "\n".join(blocks) + "\n", key
+
+
+def _check_ca_bundle(cfg, text, what):
+    blocks = _cert_blocks(text, what)
+    for b in blocks:
+        info = _cert_info(cfg, b)
+        if not info["ca"]:
+            raise HelperError("%s: %s is not a CA certificate" % (what, info["subject"] or "a certificate"))
+        if info["expired"]:
+            raise HelperError("%s: %s has expired" % (what, info["subject"]))
+    return "\n".join(blocks) + "\n"
+
+
+def portal_server_name(cfg):
+    """server_name of the installed portal site, or None."""
+    try:
+        path = os.path.realpath(cfg["portal_site"])
+        raw = read_root_file(path)
+    except HelperError:
+        return None
+    m = re.search(rb"(?m)^\s*server_name\s+([A-Za-z0-9.-]+)\s*;", raw or b"")
+    return m.group(1).decode() if m else None
+
+
+def portal_listen(cfg):
+    try:
+        raw = read_root_file(os.path.realpath(cfg["portal_site"])) or b""
+    except HelperError:
+        return None
+    m = re.search(rb"(?m)^\s*listen\s+([0-9.]+|\[[0-9a-fA-F:]+\]):%d\b" % cfg["portal_port"], raw)
+    return m.group(1).decode() if m else None
+
+
+def set_eap_ocsp(text, enable, url):
+    """mods-available/eap with ocsp { enable, url } of tls-config tls-common set."""
+    m = re.search(r"(?m)^([ \t]*)tls-config[ \t]+tls-common[ \t]*\{", text)
+    if not m:
+        raise HelperError("mods-available/eap has no tls-config tls-common section")
+    o = re.compile(r"(?m)^([ \t]*)ocsp[ \t]*\{[^\n]*\n(.*?)^\1\}", re.S).search(text, m.end())
+    if not o:
+        raise HelperError("mods-available/eap has no ocsp { } section")
+    body = o.group(2)
+    body, n = re.subn(r"(?m)^([ \t]*)enable[ \t]*=.*$", lambda x: x.group(1) + "enable = " + ("yes" if enable else "no"),
+                      body, count=1)
+    if n != 1:
+        raise HelperError("mods-available/eap: ocsp { } has no enable line")
+    if url:
+        body, n = re.subn(r"(?m)^([ \t]*)#?[ \t]*url[ \t]*=.*$", lambda x: x.group(1) + 'url = "%s"' % url, body, count=1)
+        if n != 1:
+            raise HelperError("mods-available/eap: ocsp { } has no url line")
+        body, n = re.subn(r"(?m)^([ \t]*)#?[ \t]*override_cert_url[ \t]*=.*$",
+                          lambda x: x.group(1) + "override_cert_url = yes", body, count=1)
+    return text[:o.start(2)] + body + text[o.end(2):]
+
+
+def eap_ocsp_state(text):
+    o = re.search(r"(?ms)^([ \t]*)ocsp[ \t]*\{[^\n]*\n(.*?)^\1\}", text or "")
+    if not o:
+        return None
+    e = re.search(r"(?m)^[ \t]*enable[ \t]*=[ \t]*(\S+)", o.group(2))
+    u = re.search(r'(?m)^[ \t]*url[ \t]*=[ \t]*"?([^"\n]*)"?', o.group(2))
+    return {"enable": bool(e and e.group(1).strip('"').lower() in ("yes", "true", "1")),
+            "url": u.group(1).strip() if u else ""}
+
+
+def check_certificates(cfg, raw):
+    """Parse and check the staged certificates file. Returns {file name: bytes} for the files
+    that differ from what is installed (SPEC section 30)."""
+    try:
+        doc = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        raise HelperError("staged certificates: not valid JSON")
+    if not isinstance(doc, dict) or doc.get("format") != 1:
+        raise HelperError("staged certificates: format 1 expected")
+    unknown = set(doc) - set(CERT_SECTIONS)
+    if unknown:
+        raise HelperError("staged certificates: unknown section %s" % sorted(unknown)[0])
+    want = {}
+    if "eap_server" in doc:
+        want["eap_cert"], want["eap_key"] = _check_server(cfg, doc["eap_server"], "802.1X server")
+    portal = os.path.lexists(cfg["portal_site"])
+    if "client_ca" in doc:
+        want["eap_ca"] = _check_ca_bundle(cfg, doc["client_ca"], "client CA")
+        if portal:
+            want["portal_ca"] = want["eap_ca"]
+    if "eap_ocsp" in doc:
+        o = doc["eap_ocsp"]
+        if not isinstance(o, dict) or set(o) != {"enable", "url"} or not isinstance(o["enable"], bool) \
+                or not isinstance(o["url"], str):
+            raise HelperError("staged certificates: eap_ocsp must be {enable: bool, url: str}")
+        if o["url"] and not OCSP_URL_RE.match(o["url"]):
+            raise HelperError("staged certificates: the OCSP responder must be an http(s) URL")
+        if o["enable"] and not o["url"]:
+            raise HelperError("staged certificates: OCSP needs a responder URL")
+        live = read_root_file(cert_target(cfg, "eap_conf")[0])
+        if live is None:
+            raise HelperError("mods-available/eap not found")
+        want["eap_conf"] = set_eap_ocsp(live.decode("utf-8", "surrogateescape"), o["enable"], o["url"])
+    if "portal_server" in doc:
+        name = portal_server_name(cfg)
+        if not portal or not name:
+            raise HelperError("the portal certificate can be changed only when the portal's nginx site is installed")
+        want["portal_cert"], want["portal_key"] = _check_server(cfg, doc["portal_server"], "portal", server_name=name)
+    out = {}
+    for k, v in want.items():
+        data = v.encode("utf-8", "surrogateescape")
+        if read_root_file(cert_target(cfg, k)[0]) != data:
+            out[k] = data
+    return out
+
+
+def read_cert_files(cfg, names):
+    return {n: read_root_file(cert_target(cfg, n)[0]) for n in names}
+
+
+def install_cert_files(cfg, files):
+    """Write (bytes) or remove (None) certificate files; eap_conf keeps the live owner and mode."""
+    for name, data in files.items():
+        path, uid, gid, mode, _ = cert_target(cfg, name)
+        if data is None:
+            remove_file(path)
+            continue
+        d = os.path.dirname(path)
+        if not os.path.isdir(d):
+            os.makedirs(d, 0o750)
+            os.chown(d, 0, gid)
+        if name == "eap_conf" and os.path.exists(path):
+            st = os.lstat(path)
+            uid, gid, mode = st.st_uid, st.st_gid, _plain_mode(st)
+        atomic_write(path, data, uid, gid, mode)
+
+
+def overlay_certs(rd, cfg, files):
+    """In a validation copy: put the candidate certificate files in place and point the absolute
+    certs/site paths of mods-available/eap and the clients file (RadSec) at the copy."""
+    for name, data in files.items():
+        rel = cert_target(cfg, name)[4]
+        if rel is None:
+            continue
+        p = os.path.join(rd, rel)
+        if data is None:
+            if os.path.lexists(p):
+                os.unlink(p)
+            continue
+        os.makedirs(os.path.dirname(p), 0o750, exist_ok=True)
+        os.chown(os.path.dirname(p), 0, cfg["freerad_gid"])
+        if os.path.lexists(p):
+            os.unlink(p)
+        atomic_write(p, data, 0, cfg["freerad_gid"], 0o640)
+    live = os.path.join(cfg["raddb"], "certs", "site") + "/"
+    copy = os.path.join(rd, "certs", "site") + "/"
+    for rel in ("mods-available/eap", CLIENTS_NAME):
+        p = os.path.join(rd, rel)
+        if not os.path.isfile(p) or os.path.islink(p):
+            continue
+        with open(p, "r", encoding="utf-8", errors="surrogateescape") as fh:
+            txt = fh.read()
+        if live in txt:
+            st = os.lstat(p)
+            atomic_write(p, txt.replace(live, copy).encode("utf-8", "surrogateescape"), st.st_uid, st.st_gid,
+                         _plain_mode(st))
+
+
+def portal_reload_and_check(cfg, cert_pem):
+    """nginx -t, reload, then the portal must listen and (portal_verify_tls) serve cert_pem."""
+    # nginx -t binds the listen sockets and opens its logs and pid file, which this unit's sandbox
+    # does not allow: it runs as a transient unit of its own (the helper restarts services anyway)
+    rc, out = run([cfg["systemd_run"], "--quiet", "--wait", "--pipe", "--collect", "--service-type=oneshot",
+                   cfg["nginx"], "-t", "-q"], 40)
+    if rc != 0:
+        return False, "nginx -t failed: %s" % tail(out, 3)
+    rc, out = run([cfg["systemctl"], "reload", cfg["portal_service"]], 30)
+    if rc != 0:
+        return False, "nginx reload failed: %s" % tail(out, 3)
+    deadline = time.monotonic() + 15
+    want = None
+    if cert_pem is not None and cfg["portal_verify_tls"]:
+        want = _cert_info(cfg, cert_pem.decode())["sha256"]
+    addr, name = portal_listen(cfg), portal_server_name(cfg)
+    why = "portal not listening on TCP %d" % cfg["portal_port"]
+    while time.monotonic() < deadline:
+        st = portal_status(cfg)
+        if st["portal_active"] and st["portal_listening"]:
+            if want is None:
+                return True, "portal reloaded"
+            if addr and name:
+                rc, out = run([cfg["openssl"], "s_client", "-connect", "%s:%d" % (addr, cfg["portal_port"]),
+                               "-servername", name], 10, input_data=b"")
+                m = PEM_CERT_RE.search(out.replace("\r\n", "\n"))
+                if m and _cert_info(cfg, m.group(0))["sha256"] == want:
+                    return True, "portal reloaded and serves the new certificate"
+                why = "the portal does not serve the new certificate"
+            else:
+                why = "portal listen address unknown"
+        time.sleep(1)
+    return False, why
+
+
+def cert_status(cfg):
+    """Read-only facts about the installed certificates (no keys)."""
+    def one(name):
+        raw = read_root_file(cert_target(cfg, name)[0])
+        if raw is None:
+            return None
+        try:
+            blocks = PEM_CERT_RE.findall(raw.decode("utf-8", "replace").replace("\r\n", "\n"))
+            out = []
+            for b in blocks[:20]:
+                i = _cert_info(cfg, b)
+                out.append({k: i[k] for k in ("subject", "issuer", "not_before", "not_after", "sha256",
+                                              "san", "key", "ca", "expired")})
+            return out
+        except HelperError as e:
+            return [{"error": str(e)}]
+    conf = read_root_file(cert_target(cfg, "eap_conf")[0])
+    portal = os.path.lexists(cfg["portal_site"])
+    return {"eap_server": one("eap_cert"), "client_ca": one("eap_ca"),
+            "eap_ocsp": eap_ocsp_state(conf.decode("utf-8", "replace") if conf else None),
+            "portal_server": one("portal_cert") if portal else None, "portal_configured": portal,
+            "portal_server_name": portal_server_name(cfg) if portal else None}
+
+
+def act_cert_status(cfg, req):
+    r = {"ok": True, "message": "ok"}
+    r.update(cert_status(cfg))
+    return r
+
+
 # --------------------------------------------------------------------------- actions
 
 def act_status(cfg, req):
@@ -1280,18 +1650,23 @@ def act_validate(cfg, req):
     _, vroot = ensure_work_dirs(cfg)
     with Lock(cfg):
         policy, clients = read_staged(cfg)
+        certs_raw = read_staged_certs(cfg)
+        cert_files = check_certificates(cfg, certs_raw) if certs_raw is not None else {}
         duo = read_staged_duo(cfg)
         if duo is not None:
             if not _duo_ready(cfg):
                 raise HelperError("a Duo configuration is staged, but the Duo Authentication Proxy is not installed")
             check_duo_config(duo, fips_on(cfg))
             check_duo_fips(cfg)
-        ok, out, n = validate_candidate(cfg, vroot, policy, clients)
+        ok, out, n = validate_candidate(cfg, vroot, policy, clients, cert_files)
     resp = {"ok": ok, "message": ("configuration valid (%d clients)" % n) if ok
             else "radiusd -XC reported errors", "output": out,
             "policy_sha256": sha256(policy), "clients_sha256": sha256(clients)}
     if duo is not None:
         resp["duo_sha256"] = sha256(duo)
+    if certs_raw is not None:
+        resp["certificates_sha256"] = sha256(certs_raw)
+        resp["certificates_changed"] = sorted(cert_files)
     return resp
 
 
@@ -1346,7 +1721,7 @@ def restart_duo(cfg):
     return False, "%s not active" % prov["unit"] if not active else "%s not listening" % prov["listen"]
 
 
-def _deploy(cfg, bdir, vroot, policy, clients, reason, extra, duo=None):
+def _deploy(cfg, bdir, vroot, policy, clients, reason, extra, duo=None, cert_files=None):
     """Shared by apply and rollback: validate, back up, install, restart, auto-rollback.
     With `duo` (the Duo Authentication Proxy's configuration, SPEC section 29.2) that file is
     installed and the proxy restarted first; a failure of either service restores both."""
@@ -1357,12 +1732,19 @@ def _deploy(cfg, bdir, vroot, policy, clients, reason, extra, duo=None):
             raise HelperError("a Duo configuration is staged, but the Duo Authentication Proxy is not installed")
         check_duo_config(duo, fips_on(cfg))
         check_duo_fips(cfg)
-    ok, out, n = validate_candidate(cfg, vroot, policy, clients)
+    cert_files = cert_files or {}
+    fr_certs = {k: v for k, v in cert_files.items() if k in FR_CERT_FILES}
+    portal_certs = {k: v for k, v in cert_files.items() if k in PORTAL_CERT_FILES}
+    ok, out, n = validate_candidate(cfg, vroot, policy, clients, fr_certs)
     if not ok:
         return dict(extra, ok=False, rolled_back=False, output=out,
                     message="validation failed; nothing changed")
-    bid = make_backup(cfg, bdir, reason, duo_managed=duo is not None)
+    bid = make_backup(cfg, bdir, reason, duo_managed=duo is not None, cert_names=cert_files)
     prev = load_backup(bdir, bid)
+    prev_fr = {k: v for k, v in prev["certs"].items() if k in FR_CERT_FILES}
+    prev_portal = {k: v for k, v in prev["certs"].items() if k in PORTAL_CERT_FILES}
+    if cert_files:
+        extra = dict(extra, certificates_changed=sorted(cert_files))
     duo_changed = duo is not None and duo != prev.get("duo")
     duo_info = {"duo_sha256": sha256(duo)} if duo is not None else {}
     why_d = ""
@@ -1385,19 +1767,46 @@ def _deploy(cfg, bdir, vroot, policy, clients, reason, extra, duo=None):
             return dict(extra, ok=False, rolled_back=True, rollback_ok=True, backup_id=bid, output=out,
                         message="the Duo Authentication Proxy did not start with the new configuration (%s);"
                                 " its previous configuration was restored and FreeRADIUS was not changed" % why_d)
+    def restore_fr():
+        install_files(cfg, prev["policy"], prev["clients"])
+        install_cert_files(cfg, prev_fr)
+
     try:
         install_files(cfg, policy, clients)
+        install_cert_files(cfg, fr_certs)
     except Exception as e:
-        install_files(cfg, prev["policy"], prev["clients"])
+        restore_fr()
         restore_duo()
         raise HelperError("install failed (%s); previous files restored" % e)
     started, why = restart_and_wait(cfg)
+    why_p = ""
+    if started and portal_certs:
+        # the portal's certificate files, checked by nginx -t before the reload and by looking at
+        # what the reloaded portal serves; a failure restores everything this apply changed
+        try:
+            install_cert_files(cfg, portal_certs)
+            good, why_p = portal_reload_and_check(cfg, portal_certs.get("portal_cert"))
+        except Exception as e:
+            good, why_p = False, str(e)
+        if not good:
+            log(syslog.LOG_ERR, "%s: portal failed (%s); restoring backup %s" % (reason, why_p, bid))
+            install_cert_files(cfg, prev_portal)
+            back, why3 = portal_reload_and_check(cfg, None)
+            restore_fr()
+            restore_duo()
+            restarted, why2 = restart_and_wait(cfg)
+            return dict(extra, ok=False, rolled_back=True, rollback_ok=restarted and back, backup_id=bid, output=out,
+                        message="the portal did not take the new certificate files (%s); previous configuration"
+                                " restored%s" % (why_p, "" if restarted and back else
+                                                 " BUT NOT HEALTHY: " + "; ".join(x for x in (why2, why3) if x)))
     if started:
+        cert_info = {"certificates_sha256": extra.pop("_certs_sha", None)} if "_certs_sha" in extra else {}
         return dict(extra, ok=True, rolled_back=False, backup_id=bid, output=out,
-                    policy_sha256=sha256(policy), clients_sha256=sha256(clients), **duo_info,
-                    message="%s; %s%s" % (reason, why, ("; " + why_d) if why_d else ""))
+                    policy_sha256=sha256(policy), clients_sha256=sha256(clients), **duo_info, **cert_info,
+                    message="%s; %s%s%s" % (reason, why, ("; " + why_d) if why_d else "",
+                                            ("; " + why_p) if why_p else ""))
     log(syslog.LOG_ERR, "%s: restart failed (%s); restoring backup %s" % (reason, why, bid))
-    install_files(cfg, prev["policy"], prev["clients"])
+    restore_fr()
     restore_duo()
     restarted, why2 = restart_and_wait(cfg)
     return dict(extra, ok=False, rolled_back=True, rollback_ok=restarted, backup_id=bid,
@@ -1413,6 +1822,7 @@ def _record(cfg, action, resp):
              "policy_sha256": resp.get("policy_sha256"),
              "clients_sha256": resp.get("clients_sha256"),
              "duo_sha256": resp.get("duo_sha256"),
+             "certificates_sha256": resp.get("certificates_sha256"),
              "rolled_back": bool(resp.get("rolled_back")), "message": resp.get("message", "")}
     if resp.get("restored"):
         entry["restored"] = resp["restored"]
@@ -1426,7 +1836,14 @@ def act_apply(cfg, req):
     bdir, vroot = ensure_work_dirs(cfg)
     with Lock(cfg):
         policy, clients = read_staged(cfg)
-        resp = _deploy(cfg, bdir, vroot, policy, clients, "apply", {}, duo=read_staged_duo(cfg))
+        certs_raw = read_staged_certs(cfg)
+        cert_files, extra = {}, {}
+        if certs_raw is not None:
+            cert_files = check_certificates(cfg, certs_raw)
+            extra["_certs_sha"] = sha256(certs_raw)
+        resp = _deploy(cfg, bdir, vroot, policy, clients, "apply", extra, duo=read_staged_duo(cfg),
+                       cert_files=cert_files)
+        resp.pop("_certs_sha", None)
         _record(cfg, "apply", resp)
         prune_backups(cfg, bdir)
     return resp
@@ -1445,8 +1862,9 @@ def act_rollback(cfg, req):
         duo = files.get("duo") if files["duo_managed"] else None
         if duo is not None and not duo.startswith(b"; radius-admin"):
             duo = None
+        # certificate files the backup holds (an apply that changed them) are put back as they were
         resp = _deploy(cfg, bdir, vroot, files["policy"], files["clients"],
-                       "rollback to %s" % bid, {"restored": bid}, duo=duo)
+                       "rollback to %s" % bid, {"restored": bid}, duo=duo, cert_files=files["certs"])
         _record(cfg, "rollback", resp)
         prune_backups(cfg, bdir, protect=(bid,))
     return resp
@@ -2206,7 +2624,7 @@ def utc_now():
     return datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
 
 
-HANDLERS = {"status": act_status, "validate": act_validate, "apply": act_apply,
+HANDLERS = {"cert_status": act_cert_status, "status": act_status, "validate": act_validate, "apply": act_apply,
             "rollback": act_rollback, "update_status": act_update_status,
             "update_check": act_update_check, "update_install": act_update_install,
             "update_log": act_update_log, "integration_status": act_integration_status,

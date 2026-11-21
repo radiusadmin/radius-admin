@@ -4,7 +4,7 @@ import re
 
 from flask import Blueprint, g, redirect, render_template, request, url_for
 
-from .. import db, helper_client
+from .. import certs as certmod, db, helper_client
 from ..crypto import sha256_hex
 from ..flashing import flash
 from ..security import cfg, login_required, role_required, stepup_required
@@ -92,6 +92,10 @@ def index():
         }
         if applied["clients"] is not None and applied["clients"] != clients and not diffs["clients"]:
             diffs["clients"] = [("ctx", "(only shared secrets changed)")]
+        old_c, new_c = applied["providers"].get("certificates"), providers.get("certificates")
+        if old_c is not None or new_c is not None:
+            # certificates: what changes, never the private keys (only their fingerprints)
+            diffs["certificates"] = _diff(certmod.summary(old_c), certmod.summary(new_c), "certificates")
         old_duo, new_duo = applied["providers"].get("provider-duo"), providers.get("provider-duo")
         if old_duo is not None or new_duo is not None:
             diffs["provider-duo"] = _diff(_mask_duo(old_duo), _mask_duo(new_duo), "authproxy.cfg")
@@ -157,9 +161,11 @@ def apply():
         flash("The configuration changed while you were reviewing it. Review the new diff and apply again.",
               "error")
         return redirect(url_for("apply.index"))
-    staged_duo = providers.get("provider-duo")
-    resp = _call("apply", duo_change=staged_duo is not None
-                 and staged_duo != read_applied()["providers"].get("provider-duo"))
+    staged_duo, staged_certs = providers.get("provider-duo"), providers.get("certificates")
+    prev = read_applied()["providers"]
+    # a certificate change may also reload the portal: give the helper the longer time
+    resp = _call("apply", duo_change=(staged_duo is not None and staged_duo != prev.get("provider-duo"))
+                 or (staged_certs is not None and staged_certs != prev.get("certificates")))
     ok = bool(resp.get("ok"))
     # Trust the hashes we staged; flag a mismatch reported by the helper.
     hp, hc = resp.get("policy_sha256"), resp.get("clients_sha256")
@@ -187,8 +193,8 @@ def rollback():
         flash("Choose a valid backup.", "error")
         return redirect(url_for("apply.index"))
     # a backup can carry a Duo configuration that radius-admin applied earlier
-    duo_known = "provider-duo" in read_applied()["providers"] or bool(
-        db.query_one("SELECT 1 AS x FROM ui.mfa_provider WHERE type = 'duo'"))
+    duo_known = "provider-duo" in read_applied()["providers"] or "certificates" in read_applied()["providers"] \
+        or bool(db.query_one("SELECT 1 AS x FROM ui.mfa_provider WHERE type = 'duo'"))
     resp = _call("rollback", duo_change=duo_known, backup_id=backup_id)
     ok = bool(resp.get("ok"))
     hp = resp.get("policy_sha256") if isinstance(resp.get("policy_sha256"), str) else None
@@ -196,7 +202,8 @@ def rollback():
     new_bid = resp.get("backup_id")
     new_bid = new_bid if isinstance(new_bid, str) and BACKUP_RE.match(new_bid) and new_bid != backup_id else None
     if ok:
-        restored = restore_applied_from_history(backup_id, new_backup_id=new_bid)
+        restored = restore_applied_from_history(backup_id, new_backup_id=new_bid,
+                                                certs_restored=bool(resp.get("certificates_changed")))
         if restored and not (hp and hc):
             hp, hc = sha256_hex(restored[0]), sha256_hex(restored[1])
     msg = (resp.get("message") or "") + ("; previous files saved as backup %s" % new_bid if new_bid else "")

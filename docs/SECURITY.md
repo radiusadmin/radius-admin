@@ -654,3 +654,18 @@ exception 8).
 - Local users never reach the domain controller (`MS-CHAP-Use-NTLM-Auth := No` with their NT
   hash); unknown names are rejected by the directory search before any password check. The
   bench proves both with a stand-in ntlm_auth that records every call.
+
+## Certificates managed in the portal (SPEC section 30)
+
+- Private keys of the 802.1X server certificate and the portal certificate, uploaded or made on
+  the server, are stored in PostgreSQL encrypted with the data key (AES-256-GCM), like TOTP seeds.
+  They are written in clear only to the app's staging directory (radius-admin 0700, files 0600) and
+  by the root helper to their targets (`certs/site/radius.key` root:freerad 0640,
+  `/etc/radius-admin/tls/server.key` root 0600). Audit records, the Apply diff and `cert_status`
+  never contain key material; the diff shows a key fingerprint.
+- Allowed keys: RSA ≥ 3072, ECDSA P-256 / P-384; certificates signed with anything but SHA-256, SHA-384 or SHA-512 are refused
+  (SPEC section 7). Keys made on the server use `python3-cryptography` on the system OpenSSL.
+- The helper checks every staged certificate and key again (it does not trust the app), installs
+  them only through Apply with a backup, and restores everything when FreeRADIUS does not restart or
+  the portal does not reload and serve the new certificate. A wrong portal certificate therefore
+  cannot lock admins out; the previous one is back within the same apply.

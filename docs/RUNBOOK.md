@@ -1538,8 +1538,40 @@ configure it. It needs nothing from the stock FreeRADIUS files:
 3. `sudo ./deploy/install.sh --phase freeradius --restart-freeradius`. The phase now carries your
    settings over, tests the bind and starts the connection pool as shipped. Updates keep them.
 
-**Replace the EAP certificates**: install your server certificate (leaf), its key and the CA
-bundle for client certificates as `radius.pem`, `radius.key` and `ca.pem` in
-`/etc/freeradius/certs/site/` (root:freerad 0640). Optionally turn on `ocsp { enable = yes, url = … }`
-in `mods-available/eap`. Then restart FreeRADIUS. Run `--phase nginx` as well, so that the portal
-trusts the same CA for client certificates (`/etc/radius-admin/tls/client-ca.pem`).
+**Replace the EAP certificates** in the console: **Certificates** (§13.5), then Apply changes.
+
+### 13.5 Certificates in the console
+
+**Network access → Certificates** shows the installed certificates (subject, issuer, expiry, key
+type, fingerprint) and lets an administrator (with step-up) change them. Nothing is installed until
+**Apply changes**; the Apply page lists what changes, with private keys only as fingerprints.
+
+- **802.1X server certificate** (FreeRADIUS, also RadSec) and **portal HTTPS certificate**:
+  - *Upload a certificate and key*: PEM certificate (server certificate first, then the
+    intermediate CAs, or the intermediates as a second file) and PEM key, with its password if it
+    has one; or one PKCS#12 file (.p12/.pfx) with its password.
+  - *Make a key and certificate request here*: give the DNS name(s) and key type (ECDSA P-384 by
+    default), download the `.csr`, have your CA issue the certificate (TLS Web Server template),
+    then upload the issued certificate (and the intermediates). The key never leaves the server.
+  - The portal certificate must name the portal (its `server_name`); the 802.1X certificate needs
+    the name your supplicants are configured to expect.
+- **Client certificate CA**: the issuing and root CA certificates of your client certificates.
+  FreeRADIUS trusts them for EAP-TLS and the portal for client-certificate sign-in.
+- **OCSP for EAP-TLS**: leave as installed, off, or on with the responder URL.
+
+Allowed keys: RSA 3072 bits or more, ECDSA P-256 or P-384. Expired certificates, CA certificates as
+server certificates, and certificates for client authentication only are refused.
+
+On Apply the helper checks everything again, validates FreeRADIUS with the new files, restarts it,
+then (portal certificate or client CA) tests and reloads nginx and checks that the portal serves
+the new certificate. If any step fails, every file of that apply is put back. A rollback on the
+Apply page also restores the certificate files of that backup.
+
+**Stop managing it here** leaves the installed certificate as it is and stops the console from
+changing it. Note: re-running the installer with `tls: existing` in the answers installs the
+portal certificate files those answers name; remove `tls_cert`/`tls_key` (or use `tls: self-signed`,
+which keeps an existing certificate) once the console manages the portal certificate.
+
+Troubleshooting: "the private key does not belong to the certificate" (wrong key file, or for an
+issued certificate: the CA signed another request); "does not name …" (add the name as a DNS
+subject alternative name); "key type … is not allowed" (re-issue with RSA 3072+ or ECDSA).

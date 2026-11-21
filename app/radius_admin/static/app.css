@@ -748,3 +748,11 @@ td.coa-state { display: table-cell; white-space: normal; }
 .install-form { border-top: 1px solid var(--line); padding-top: .75rem; margin-top: .75rem; }
 .panel-head-actions { display: flex; flex-wrap: wrap; gap: .5rem; }
 .catalog-action { margin: .5rem 0 0; }
+/* certificates (SPEC section 30) */
+.cert-list { list-style: none; padding: 0; margin: .25rem 0 .75rem; }
+.cert-list li { padding: .4rem 0; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+.cert-list li:last-child { border-bottom: 0; }
+.cert-list .small { display: block; }
+details.disclose { margin: .75rem 0; }
+details.disclose > summary { cursor: pointer; font-weight: 600; }
+details.disclose > form { margin-top: .5rem; }

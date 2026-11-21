@@ -1355,7 +1355,9 @@ phase_nginx() {
     local ca=$RA_RADDB/certs/site/ca.pem
     [[ -s $ca ]] || die "$ca missing (site CA bundle for client certificates)"
     put "$ca" "$ETC/tls/client-ca.pem" root:root 0644 || true
-    if ! openssl verify -CAfile "$ETC/tls/client-ca.pem" -untrusted "$crt" "$crt" >/dev/null 2>&1; then
+    if [[ $(openssl x509 -in "$crt" -noout -subject) == "subject=$(openssl x509 -in "$crt" -noout -issuer | sed 's/^issuer=//')" ]]; then
+        info "the portal certificate is self-signed: replace it in the console (Certificates) or as $crt"
+    elif ! openssl verify -CAfile "$ETC/tls/client-ca.pem" -untrusted "$crt" "$crt" >/dev/null 2>&1; then
         warn "server certificate does not verify against the site CA bundle (wrong issuer or missing intermediate in server.crt?)"
     fi
     if (( OCSP_ON )); then

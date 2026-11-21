@@ -65,6 +65,7 @@
     <li><a href="{{ url_for('dot1x_users.index') }}" {% if ep.startswith('dot1x_users.') %}aria-current="page"{% endif %}>802.1X users</a></li>
     <li><a href="{{ url_for('switch_admins.index') }}" {% if ep.startswith('switch_admins.') %}aria-current="page"{% endif %}>Device admins</a></li>
     <li><a href="{{ url_for('integrations.index') }}" {% if ep.startswith('integrations.') %}aria-current="page"{% endif %}>Integrations</a></li>
+    <li><a href="{{ url_for('certificates.index') }}" {% if ep.startswith('certificates.') %}aria-current="page"{% endif %}>Certificates</a></li>
     {% if has_role('admin') %}
     <li><a href="{{ url_for('settings.custom_policy') }}" {% if ep in ('settings.custom_policy', 'settings.policy_preview') %}aria-current="page"{% endif %}>Custom policy</a></li>
     {% endif %}

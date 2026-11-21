@@ -87,22 +87,30 @@
  
  	#
  	#  The WiMAX specification says that the Calling-Station-Id
-@@ -494,6 +532,14 @@
- 	-ldap
+@@ -491,7 +529,21 @@
  
  	#
+ 	#  The ldap module reads passwords from the LDAP database.
+-	-ldap
++	#  radius-admin: a directory that cannot be reached (or none configured
++	#  yet, RUNBOOK 13.4) does not end authorize here: local accounts and MAB
++	#  do not need it, and the policy's own lookups (EAP-TLS groups, directory
++	#  device admins) still reject when the directory does not answer.
++	ldap {
++		fail = 1
++	}
++
++	#
 +	#  radius-admin: a device admin login (switch, access point, firewall)
 +	#  with a directory account, when the name is not a local account and
 +	#  directory accounts are on: the password is checked with an LDAP bind
 +	#  as that person (Auth-Type ldap_user below; policy.d/radius-admin).
 +	#
 +	radius_admin_admin_authorize
-+
-+	#
- 	#  If you're using Active Directory and PAP, then uncomment
- 	#  the following lines, and the "Auth-Type LDAP" section below.
+ 
  	#
-@@ -590,33 +636,57 @@
+ 	#  If you're using Active Directory and PAP, then uncomment
+@@ -590,33 +642,57 @@
  		pap
  	}
  
@@ -169,7 +177,7 @@
  
  	#
  	#  Pluggable Authentication Modules.
-@@ -668,6 +738,9 @@
+@@ -668,6 +744,9 @@
  preacct {
  	preprocess
  
@@ -179,7 +187,7 @@
  	#
  	#  Merge Acct-[Input|Output]-Gigawords and Acct-[Input-Output]-Octets
  	#  into a single 64bit counter Acct-[Input|Output]-Octets64.
-@@ -777,7 +850,7 @@
+@@ -777,7 +856,7 @@
  #	pgsql-voip
  
  	# For Exec-Program and Exec-Program-Wait
@@ -188,7 +196,7 @@
  
  	#  Filter attributes from the accounting response.
  	attr_filter.accounting_response
-@@ -805,12 +878,15 @@
+@@ -805,12 +884,15 @@
  #	sql
  }
  
@@ -207,7 +215,7 @@
  	#  If you need to have a State attribute, you can
  	#  add it here.  e.g. for later CoA-Request with
  	#  State, and Service-Type = Authorize-Only.
-@@ -925,7 +1001,7 @@
+@@ -925,7 +1007,7 @@
  #	ldap
  
  	# For Exec-Program and Exec-Program-Wait
@@ -216,7 +224,7 @@
  
  	#
  	#  In order to calcualate the various keys for old style WiMAX
-@@ -1020,6 +1096,10 @@
+@@ -1020,6 +1102,10 @@
  	#  The "session-state" attributes are not available here.
  	#
  	Post-Auth-Type REJECT {
@@ -227,7 +235,7 @@
  		# log failed authentications in SQL, too.
  		-sql
  		attr_filter.access_reject
-@@ -1250,5 +1330,37 @@
+@@ -1250,5 +1336,37 @@
  		#
  #		acct_response
  #	}
