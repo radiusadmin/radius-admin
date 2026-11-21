@@ -1463,7 +1463,13 @@ the rollback option is no longer needed.
 portal address, switch networks (where the monitor may send SNMP and CoA, §6.3), DNS resolvers, portal certificate, first administrator, crypto mode (standard by default, FIPS mode on request: §3), the 802.1X (EAP) certificate of a new server and an OCSP responder (§13.4), shows a summary and
 asks for confirmation. Unattended: `--answers FILE` (format in `deploy/answers.sh`);
 `--print-answers` only checks and prints. The answers are kept in `/etc/radius-admin/site.yaml`
-(root 0640); re-run later with `--answers /etc/radius-admin/site.yaml`.
+(root 0640); re-run later with `--answers /etc/radius-admin/site.yaml`. If a first install stops
+before it saved them (before the `site` phase), a re-run on a terminal asks the questions again,
+even with options such as `--skip-preflight`. On such a half-installed new server, preflight
+reports the package's stock FreeRADIUS configuration failing `radiusd -XC` as information: the
+`freeradius` phase replaces it. The PostgreSQL cluster must be on port 5432 (radius-admin uses
+its Unix socket only); if 5432 was taken when the cluster was created, the `postgres` phase stops
+and prints the `pg_conftool … set port 5432` command that fixes it.
 
 Runs without answers (updates, or `--phase nginx` by hand) keep the portal settings this server
 already uses: server name, management subnet, portal address and resolvers come from `site.yaml`,

@@ -267,4 +267,13 @@ detect_firewall() {
 
 pg_conf_dir() { printf '/etc/postgresql/%s/%s\n' "$RA_PG_VERSION" "$RA_PG_CLUSTER"; }
 
+# pg_cluster_port CONFDIR : the port a cluster is configured for: the last "port =" in
+# postgresql.conf and then conf.d/*.conf (read in that order, like PostgreSQL); 5432 if unset.
+pg_cluster_port() {
+    local d=$1 p
+    p=$(cat "$d/postgresql.conf" "$d"/conf.d/*.conf 2>/dev/null \
+        | sed -nE 's/^[[:space:]]*port[[:space:]]*=[[:space:]]*([0-9]+).*/\1/p' | tail -n1 || true)
+    printf '%s\n' "${p:-5432}"
+}
+
 psql_su() { runuser -u postgres -- psql -X -q -v ON_ERROR_STOP=1 "$@"; }

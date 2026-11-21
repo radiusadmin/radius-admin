@@ -103,6 +103,12 @@ release, so previews sort after it.
 - `install.sh --interactive --print-answers > site.yaml` wrote the questions' help lines and
   warnings into the file, which `--answers` then refused ("expected 'key: value'"). They now go to
   stderr; the output is the answers only.
+- Re-running the installer after a first install stopped part way: the set-up questions are asked
+  again on a terminal when no answers were saved yet, whatever other options are given (before,
+  any option such as `--skip-preflight` skipped them and the nginx phase stopped with
+  "management subnet unknown"); preflight no longer blocks on the package's stock FreeRADIUS
+  configuration of a new server; a PostgreSQL cluster created on another port than 5432 is
+  named with the command that fixes it, and "PostgreSQL not ready" shows the end of its log.
 - README: how to download the release bundle and check its signature and checksum before
   installing.
 - **A second factor approved after 30 seconds was rejected.** FreeRADIUS's stock
