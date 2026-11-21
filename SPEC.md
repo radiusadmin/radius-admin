@@ -1739,8 +1739,9 @@ unreachable). The portal pages that drive this follow.
   mode) and that the verified catalog has an entry with that SHA-256, `fips: true`, not withdrawn;
   otherwise "FIPS mode: the installed Duo Authentication Proxy X is not a FIPS-capable build …" or
   "… was installed before FIPS mode was turned on …", and nothing changes. The Duo page refuses
-  "On" for such a build in FIPS mode and says why (standard mode: no wording). No catalog entry is
-  FIPS-capable yet. `tools/integrations/duo-fips-check.py` (`source`, `host`, `installed`, `all`;
+  "On" for such a build in FIPS mode and says why (standard mode: no wording). FIPS-capable
+  catalog entries: duo 6.8.1 (`fips_tested`: `ubuntu-24.04-pro-fips-updates-amd64`); the Duo RADIUS
+  hops on loopback are covered by SECURITY.md exception 9. `tools/integrations/duo-fips-check.py` (`source`, `host`, `installed`, `all`;
   `--running`, `--json`) is the maintainers' lab check before `catalog.py fips` (RUNBOOK §6.9b):
   R1 kernel FIPS, R2 system OpenSSL FIPS provider active, R3 Duo's `pkgs/fips_modules/<arch>/fips.so`
   HMAC-SHA256 (OpenSSL's public fipsinstall key) equals its `module-mac`, in the source and the

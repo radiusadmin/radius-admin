@@ -43,7 +43,12 @@ release, so previews sort after it.
 - An apply that also restarts the Duo proxy may take up to about three minutes; the portal, nginx
   and gunicorn now wait long enough for it (`helper_duo_timeout`, 210 s; 240 s in front).
 - A Duo build the signed catalog marks FIPS-capable is now required in FIPS mode for turning Duo on
-  and for every apply with Duo, not only for installing. No build is marked FIPS-capable yet.
+  and for every apply with Duo, not only for installing.
+- **Duo in FIPS mode.** The signed catalog lists Duo Authentication Proxy 6.8.1 and marks it
+  FIPS-capable, checked on Ubuntu 24.04 Pro `fips-updates` (amd64): Duo runs with its FIPS mode on
+  its bundled OpenSSL FIPS Provider 3.1.2 (CMVP certificate #4985) for TLS to Duo. Its RADIUS hops
+  on this server's loopback still use RADIUS's MD5, as FreeRADIUS does; SECURITY.md records this as
+  a documented exception and lists the controls to put in place (§1.3).
 - The Duo page shows a build as checked once a later catalog lists it, and flags a withdrawn build.
 
 ### Changed

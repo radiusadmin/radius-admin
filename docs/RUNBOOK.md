@@ -919,8 +919,23 @@ below `helper_duo_timeout`.
 applied; the build must have been installed in FIPS mode, and Duo then runs with `fips_mode=true`
 and fail mode secure. A Duo installed before FIPS mode was turned on is refused at apply (validate
 says so) and the Unverified alert names the reason; install a FIPS-capable build or turn Duo off
-and apply. No catalog entry is FIPS-capable yet (see the maintainers' check below), so Duo is not
-available in FIPS mode for now; remote MFA servers are not offered in FIPS mode either.
+and apply. FIPS-capable builds: Duo 6.8.1 (checked on Ubuntu 24.04 Pro `fips-updates`, amd64).
+Remote MFA servers are not offered in FIPS mode.
+
+Duo in FIPS mode keeps RADIUS's MD5 on its two loopback hops, like FreeRADIUS itself (SECURITY.md
+§1.1 exceptions 1, 2 and 9); its TLS to Duo runs on Duo's bundled OpenSSL FIPS Provider 3.1.2
+(CMVP #4985). Before turning it on, put the controls of SECURITY.md §1.3 in place: isolated
+management network for RADIUS (IPsec between sites, RadSec where devices support it), unique
+secrets and Message-Authenticator per device, host firewall (outbound only to
+`api-*.duosecurity.com:443`), Duo factors push or passcode with lockout on, a break-glass account,
+alerts to the SIEM. After installing or updating Duo, keep the evidence for the assessor:
+
+```bash
+sudo python3 tools/integrations/duo-fips-check.py host
+sudo python3 tools/integrations/duo-fips-check.py installed --running --json duo-fips.json
+```
+
+(from the release bundle; R1–R6 must pass). Record exception 9 in the SSP.
 
 Maintainers add a build with `tools/integrations/catalog.py add duo X.Y.Z <downloaded file>
 --vendor-sha256 <value from the vendor's checksum page>` (refused unless both agree), mark it
@@ -965,8 +980,12 @@ start without it.
    `cryptography` wheel with its own OpenSSL are acceptable under rule 6 and the maintainer's
    FIPS decision for providers.
 6. Only if all of that holds: in the repository, `tools/integrations/catalog.py fips duo X.Y.Z
-   ubuntu-24.04-pro-fips-updates`, with the JSON report's summary in the pull request; the next
-   release signs it. Otherwise leave `fips: false` and note why in the release notes.
+   ubuntu-24.04-pro-fips-updates-<arch>` (one name per architecture actually checked), with the
+   JSON report's summary in the pull request; the next release signs it. Otherwise leave
+   `fips: false` and note why in the release notes. Record of decisions: Duo 6.8.1, 2026-11-20,
+   amd64: R1–R6 passed; M1 accepted (OpenSSL FIPS Provider 3.1.2 = CMVP #4985, FIPS 140-3, active
+   to 2030-03-10; Ubuntu 24.04 not a tested environment); M2 accepted (Duo's prebuilt provider and
+   `cryptography` wheel); its RADIUS MD5 on loopback is SECURITY.md exception 9.
 7. Throw the VM away (or `sudo /opt/duoauthproxy/uninstall --no-prompt` and restore
    `update_pubkey`).
 

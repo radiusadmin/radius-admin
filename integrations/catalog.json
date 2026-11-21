@@ -1,5 +1,19 @@
 {
- "entries": [],
+ "entries": [
+  {
+   "file": "duoauthproxy-6.8.1-src.tgz",
+   "fips": true,
+   "fips_tested": [
+    "ubuntu-24.04-pro-fips-updates-amd64"
+   ],
+   "provider": "duo",
+   "sha256": "73a4d7162235b743e4826cfb01648457c29b8a9e1411ff8b04e721a01b378dda",
+   "size": 45983766,
+   "url": "https://dl.duosecurity.com/duoauthproxy-6.8.1-src.tgz",
+   "version": "6.8.1",
+   "withdrawn": false
+  }
+ ],
  "format": 1,
- "serial": 1
+ "serial": 3
 }
