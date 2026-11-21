@@ -83,7 +83,7 @@ ans_defaults() {
     _ans_py fqdn "$host" || host=$RA_SERVER_NAME
     : "${ANS[server_name]:=$host}"
     if [[ -z ${ANS[admin_net]:-} ]]; then
-        net=$(ip -o -4 addr show scope global 2>/dev/null | awk '{print $4; exit}')
+        net=$(primary_ipv4_cidr)
         net=$([[ -n $net ]] && _ans_py net_of "$net" || true)
         ANS[admin_net]=${net:-$RA_ADMIN_NET}
     fi

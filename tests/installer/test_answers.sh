@@ -189,6 +189,53 @@ if grep -qx 'server_name: portal.example.net' <<<"$out" && grep -qx 'admin_net: 
     pass "interactive questions take typed answers and defaults"
 else fail "interactive: $out"; fi
 
+# --interactive --print-answers > file: stdout carries only the answers (the questions and their
+# help lines go to stderr), so the file works with --answers
+printf 'portal.example.net\n198.51.100.0/24\n198.51.100.7\n\n198.51.100.53\n\nops-admin\n\n\n\n' \
+    | "$INSTALL" --interactive --print-answers >"$W/printed.yaml" 2>"$W/printed.err"
+if grep -qx 'server_name: portal.example.net' "$W/printed.yaml" && ! grep -qiE 'question|certificate:|crypto mode' "$W/printed.yaml" \
+    && "$INSTALL" --answers "$W/printed.yaml" --print-answers >/dev/null 2>&1; then
+    pass "interactive --print-answers output is a valid answers file"
+else fail "printed answers: $(head -3 "$W/printed.yaml" | tr '\n' '|')"; fi
+
+# interactive install: the question before installing works (it was called before confirm() was
+# defined: "confirm: command not found", then "aborted", for every install without -y)
+out=$(printf 'portal.example.net\n198.51.100.0/24\n198.51.100.7\n\n198.51.100.53\n\nops-admin\n\n\n\nn\n' \
+      | "$INSTALL" --interactive --phase site 2>&1); rc=$?
+if (( rc != 0 )) && grep -q 'aborted' <<<"$out" && ! grep -q 'command not found' <<<"$out" && [[ ! -e $ETC ]]; then
+    pass "interactive install: answering n stops before anything is written"
+else fail "interactive n: rc=$rc $out"; fi
+
+# default management network and listen address: the default-route interface, never lo (WSL puts
+# a /32 DNS stub address on lo, listed first; it became the default management subnet)
+fake_ip() { # fake_ip WITH_DEFAULT_ROUTE(0/1): ip(8) output of a host like that, then the defaults
+    (
+        ip() {
+            case "$*" in
+                "-4 route show default") (( _DEF )) && echo "default via 192.0.2.1 dev eth0 proto kernel" ;;
+                "-o -4 addr show dev eth0 scope global")
+                    echo "2: eth0    inet 192.0.2.10/24 brd 192.0.2.255 scope global eth0\\       valid_lft forever" ;;
+                "-o -4 addr show scope global")
+                    echo "1: lo    inet 198.51.100.254/32 brd 198.51.100.254 scope global lo\\       valid_lft forever"
+                    echo "2: eth0    inet 192.0.2.10/24 brd 192.0.2.255 scope global eth0\\       valid_lft forever" ;;
+                *) command ip "$@" ;;
+            esac
+        }
+        _DEF=$1
+        # shellcheck source=../../deploy/lib.sh
+        . "$ROOT/deploy/lib.sh"
+        # shellcheck source=../../deploy/answers.sh
+        . "$ROOT/deploy/answers.sh"
+        declare -gA ANS=()
+        ans_defaults
+        echo "${ANS[admin_net]} ${ANS[listen_ip]}"
+    ) 2>/dev/null
+}
+d1=$(fake_ip 1); d0=$(fake_ip 0)
+if [[ $d1 == "192.0.2.0/24 192.0.2.10" && $d0 == "192.0.2.0/24 192.0.2.10" ]]; then
+    pass "default management subnet and listen address: default-route interface, never lo"
+else fail "defaults with a /32 on lo: with route '$d1', without '$d0'"; fi
+
 # site phase: site.yaml + self-signed ECDSA P-384 certificate for the server name
 good
 sed -i "s/^listen_ip: .*/listen_ip: $LOCAL_IP/" "$W/a.yaml"
@@ -206,6 +253,13 @@ else fail "self-signed certificate not as expected"; fi
 before=$(sha256sum "$c")
 "$INSTALL" --answers "$W/a.yaml" --phase site -y >/dev/null 2>&1
 [[ $(sha256sum "$c") == "$before" ]] && pass "re-running keeps the existing certificate" || fail "certificate was replaced"
+
+# interactive install answered y goes ahead (site phase only)
+out=$(printf "portal.example.net\n198.51.100.0/24\n$LOCAL_IP\n\n198.51.100.53\n\nops-admin\n\n\n\ny\n" \
+      | "$INSTALL" --interactive --phase site 2>&1); rc=$?
+if (( rc == 0 )) && grep -qx 'server_name: portal.example.net' "$ETC/site.yaml"; then
+    pass "interactive install: answering y runs the install"
+else fail "interactive y: rc=$rc $(tail -5 <<<"$out")"; fi
 
 echo
 if (( fails )); then echo "$fails FAILED"; exit 1; fi
