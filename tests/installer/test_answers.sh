@@ -189,6 +189,15 @@ if grep -qx 'server_name: portal.example.net' <<<"$out" && grep -qx 'admin_net: 
     pass "interactive questions take typed answers and defaults"
 else fail "interactive: $out"; fi
 
+# --interactive --print-answers > file: stdout carries only the answers (the questions and their
+# help lines go to stderr), so the file works with --answers
+printf 'portal.example.net\n198.51.100.0/24\n198.51.100.7\n\n198.51.100.53\n\nops-admin\n\n\n\n' \
+    | "$INSTALL" --interactive --print-answers >"$W/printed.yaml" 2>"$W/printed.err"
+if grep -qx 'server_name: portal.example.net' "$W/printed.yaml" && ! grep -qiE 'question|certificate:|crypto mode' "$W/printed.yaml" \
+    && "$INSTALL" --answers "$W/printed.yaml" --print-answers >/dev/null 2>&1; then
+    pass "interactive --print-answers output is a valid answers file"
+else fail "printed answers: $(head -3 "$W/printed.yaml" | tr '\n' '|')"; fi
+
 # interactive install: the question before installing works (it was called before confirm() was
 # defined: "confirm: command not found", then "aborted", for every install without -y)
 out=$(printf 'portal.example.net\n198.51.100.0/24\n198.51.100.7\n\n198.51.100.53\n\nops-admin\n\n\n\nn\n' \

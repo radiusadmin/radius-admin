@@ -95,6 +95,9 @@ release, so previews sort after it.
 - **The suggested management subnet could be a /32 on the loopback interface** (on WSL, its DNS
   stub address), and the portal address with it. The installer now suggests the address of the
   interface that carries the default route, and never one on `lo`.
+- `install.sh --interactive --print-answers > site.yaml` wrote the questions' help lines and
+  warnings into the file, which `--answers` then refused ("expected 'key: value'"). They now go to
+  stderr; the output is the answers only.
 - README: how to download the release bundle and check its signature and checksum before
   installing.
 - **A second factor approved after 30 seconds was rejected.** FreeRADIUS's stock
