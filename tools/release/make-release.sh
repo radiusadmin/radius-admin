@@ -18,6 +18,9 @@ die() { printf 'make-release: %s\n' "$*" >&2; exit 1; }
 CHANNEL=${1:?usage: make-release.sh CHANNEL OUTDIR [PREV_TAG]}
 OUT=${2:?usage: make-release.sh CHANNEL OUTDIR [PREV_TAG]}
 PREV=${3:-}
+# PREV comes from a tag name: only an exact release tag may reach git (no options, no shell)
+[[ -z $PREV || $PREV =~ ^v[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}(-(rc|dev)\.[0-9]{1,6})?$ ]] \
+    || die "PREV_TAG is not a release tag (vX.Y.Z, vX.Y.Z-rc.N or vX.Y.Z-dev.N)"
 PINNED=$REPO/deploy/keys/update-signing.pem
 [[ -n ${UPDATE_SIGNING_KEY:-} ]] || die "UPDATE_SIGNING_KEY is empty"
 [[ -s $PINNED ]] || die "$PINNED is missing: commit the public key the servers pin first"

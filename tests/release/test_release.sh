@@ -27,6 +27,33 @@ echo 1.2 > VERSION; g commit -qam bad
 "$V" main >/dev/null 2>&1 && fail "accepted VERSION 1.2" || pass "VERSION must be X.Y.Z"
 cd "$ROOT" || exit 2
 
+# ------------------------------------------------------------------ prev-tag.sh
+P=$ROOT/tools/release/prev-tag.sh
+mkdir "$W/p" && cd "$W/p" && g init -q -b dev || exit 2
+echo 0.3.0 > VERSION; g add VERSION; g commit -qm v1
+for t in v0.1.0 v0.2.0 v0.2.0-rc.3 v0.2.0-rc.10 v0.3.0-dev.1 v0.3.0-dev.2 \
+         'v9.9.9-dev.1;id' 'v9.9.9-rc.1$(id)' 'v9.9.9`id`' v9.9.9-dev.1x v09999.0.0; do
+    g tag "$t" || fail "git refused test tag $t"
+done
+[[ $("$P" dev 0.3.0-dev.3) == v0.3.0-dev.2 && $("$P" dev 0.3.0-dev.2) == v0.3.0-dev.1 ]] \
+    && pass "prev-tag: newest other dev tag; a crafted tag name that sorts higher is skipped" \
+    || fail "prev-tag dev: $("$P" dev 0.3.0-dev.3)"
+[[ $("$P" testing 0.2.0-rc.11) == v0.2.0-rc.10 && $("$P" main 0.3.0) == v0.2.0 ]] \
+    && pass "prev-tag: testing sorts by version, main ignores previews and crafted tags" \
+    || fail "prev-tag testing/main: $("$P" testing 0.2.0-rc.11) $("$P" main 0.3.0)"
+(cd "$W/p" && g tag -d v0.3.0-dev.1 v0.3.0-dev.2 >/dev/null)
+out=$("$P" dev 0.3.0-dev.3) && [[ -z $out ]] \
+    && pass "prev-tag: only crafted dev tags left means no previous tag" || fail "prev-tag empty: $out"
+bad=0
+for v in '0.3.0-dev.3;id' $'0.3.0-dev.3\nx' $'0.3.0\n' '0.3.0-rc.1' ' 0.3.0'; do
+    "$P" main "$v" >/dev/null 2>&1 && { bad=1; echo "accepted: ${v@Q}"; }
+done
+"$P" feature/x 0.3.0 >/dev/null 2>&1 && bad=1
+"$P" dev '0.3.0-dev.3$(id)' >/dev/null 2>&1 && bad=1
+(( bad == 0 )) && pass "prev-tag: refuses invalid versions (shell characters, newlines) and channels" \
+    || fail "prev-tag accepted an invalid version or channel"
+cd "$ROOT" || exit 2
+
 # ------------------------------------------------------------------ release-notes.py
 N=$ROOT/tools/release/release-notes.py
 cat > "$W/CHANGELOG.md" <<'EOF'
@@ -110,6 +137,12 @@ out=$(cd "$R" && UPDATE_SIGNING_KEY=$(cat "$W/p256.pem") "$MR" dev "$W/out5" 2>&
 out=$(cd "$R" && UPDATE_SIGNING_KEY=$(cat "$W/key.pem") "$MR" dev "$W/out7" 2>&1)
 [[ $? -ne 0 ]] && grep -q 'catalog' <<<"$out" && [[ ! -e $W/out7/manifest.json ]] \
     && pass "an invalid integrations catalog stops the release" || fail "bad catalog: $out"
+out=$(cd "$R" && UPDATE_SIGNING_KEY=$(cat "$W/key.pem") "$MR" dev "$W/out8" 'v0.0.1;touch x' 2>&1)
+[[ $? -ne 0 ]] && grep -q 'not a release tag' <<<"$out" && [[ ! -e $W/out8/manifest.json && ! -e $R/x ]] \
+    && pass "a PREV_TAG that is not an exact release tag is refused" || fail "crafted PREV_TAG: $out"
+out=$(cd "$R" && UPDATE_SIGNING_KEY=$(cat "$W/key.pem") "$MR" dev "$W/out9" $'v0.0.1\n' 2>&1)
+[[ $? -ne 0 ]] && grep -q 'not a release tag' <<<"$out" && pass "a PREV_TAG with a trailing newline is refused" \
+    || fail "PREV_TAG newline: $out"
 out=$(cd "$R" && UPDATE_SIGNING_KEY="" "$MR" dev "$W/out6" 2>&1)
 [[ $? -ne 0 ]] && grep -q 'empty' <<<"$out" && pass "no key, no release" || fail "empty key: $out"
 

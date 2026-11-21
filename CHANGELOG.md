@@ -70,6 +70,10 @@ release, so previews sort after it.
   for standard mode); it is refused unless the host's kernel runs in FIPS mode. The choice is
   written as `require_fips` on the first install and never changed by later runs or updates.
   Preflight's FIPS checks block only in FIPS mode (`preflight.sh --fips-mode on|off`).
+- The release workflow no longer puts tag-derived values into its scripts: the version and the
+  previous release tag reach the signing job only as environment variables, are checked against
+  exact patterns in both jobs, and a tag whose name is not an exact release tag is ignored
+  (`tools/release/prev-tag.sh`). `make-release.sh` refuses such a previous tag too.
 
 ### Changed
 - **Licence: from the GNU AGPL to the Business Source License 1.1 (source available).**

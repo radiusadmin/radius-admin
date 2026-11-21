@@ -63,8 +63,18 @@ jobs:
           fi
       - name: Version
         id: v
+        # version and prev become job outputs that the signing job uses; they are checked here
+        # against exact patterns (tag names are chosen by whoever pushes a tag), and the signing
+        # job reads them only through env, never as ${{ }} inside a script.
         run: |
+          case $CHANNEL in
+            main|testing|dev) ;;
+            *) echo "::error::no release channel for this branch"; exit 1 ;;
+          esac
           ver=$(tools/release/build-version.sh "$CHANNEL" HEAD)
+          if ! [[ $ver =~ ^[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}(-(rc|dev)\.[0-9]{1,6})?$ ]]; then
+            echo "::error::build-version.sh printed an invalid version"; exit 1
+          fi
           echo "version=$ver" >> "$GITHUB_OUTPUT"
           if git rev-parse -q --verify "refs/tags/v$ver" >/dev/null; then
             echo "exists=true" >> "$GITHUB_OUTPUT"
@@ -80,11 +90,11 @@ jobs:
           elif [ "$CHANNEL" = main ] && ! grep -Eq "^## $(printf %s "$ver" | sed 's/\./\\./g')( |$)" CHANGELOG.md; then
             echo "::warning title=Empty release notes::CHANGELOG.md has no \"## $ver\" section, so v$ver is published without notes. Rename \"## Unreleased\" to \"## $ver — <date>\" before merging to main."
           fi
-          case $CHANNEL in
-            main) prev=$(git tag -l 'v*' --sort=-v:refname | grep -v -- - | grep -vx "v$ver" | head -n1 || true) ;;
-            testing) prev=$(git tag -l 'v*-rc.*' --sort=-v:refname | grep -vx "v$ver" | head -n1 || true) ;;
-            dev) prev=$(git tag -l 'v*-dev.*' --sort=-v:refname | grep -vx "v$ver" | head -n1 || true) ;;
-          esac
+          # only exact release tags of this channel (prev-tag.sh skips any other tag name)
+          prev=$(tools/release/prev-tag.sh "$CHANNEL" "$ver")
+          if [ -n "$prev" ] && ! [[ $prev =~ ^v[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}(-(rc|dev)\.[0-9]{1,6})?$ ]]; then
+            echo "::error::prev-tag.sh printed an invalid tag"; exit 1
+          fi
           echo "prev=$prev" >> "$GITHUB_OUTPUT"
           echo "Building $ver for $CHANNEL (previous: ${prev:-none})"
 
@@ -102,11 +112,21 @@ jobs:
       CHANNEL: ${{ github.event.workflow_run.head_branch || github.ref_name }}
       SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
       GH_TOKEN: ${{ github.token }}
+      # outputs of the check job: used in scripts only as "$VERSION" / "$PREV"
+      VERSION: ${{ needs.check.outputs.version }}
+      PREV: ${{ needs.check.outputs.prev }}
     steps:
       - uses: actions/checkout@v7
         with:
           ref: ${{ env.SHA }}
           fetch-depth: 0
+      - name: Release names valid
+        run: |
+          re='^[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}(-(rc|dev)\.[0-9]{1,6})?$'
+          case $CHANNEL in main|testing|dev) ;; *) echo "::error::invalid channel"; exit 1 ;; esac
+          [[ $VERSION =~ $re ]] || { echo "::error::invalid version from the check job"; exit 1; }
+          [[ -z $PREV || ${PREV#v} =~ $re && $PREV == v* ]] \
+            || { echo "::error::invalid previous tag from the check job"; exit 1; }
       - name: Signing key present
         id: key
         env:
@@ -130,11 +150,11 @@ jobs:
         if: steps.key.outputs.ok == 'true'
         env:
           UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
-        run: tools/release/make-release.sh "$CHANNEL" "$RUNNER_TEMP/release" "${{ needs.check.outputs.prev }}"
+        run: tools/release/make-release.sh "$CHANNEL" "$RUNNER_TEMP/release" "$PREV"
       - name: Publish
         if: steps.key.outputs.ok == 'true'
         run: |
-          v=${{ needs.check.outputs.version }}
+          v=$VERSION
           OUT=$RUNNER_TEMP/release
           flags=(--latest)
           if [ "$CHANNEL" != main ]; then flags=(--prerelease --latest=false); fi
