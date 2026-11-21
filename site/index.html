@@ -128,6 +128,7 @@
           <li>RadSec listener and per-client transport</li>
           <li>Custom unlang policy</li>
           <li>Device profiles and the default profile</li>
+          <li>Certificates: 802.1X server, client CA, OCSP and the portal's own</li>
         </ul>
         <p class="fine">You review the difference, validate, then apply. Applying restarts FreeRADIUS through the safe-apply sequence above.</p>
       </div>
@@ -334,6 +335,7 @@
           <li>Device administrator logins for switches, access points and firewalls: local accounts, PBKDF2-hashed, or members of chosen directory groups with their directory password over LDAPS.</li>
           <li>A second factor for device administrator logins: the Duo Authentication Proxy, installed and configured on the server from the console, or a remote RADIUS MFA server for directory accounts (for example a Network Policy Server with the Entra multifactor extension, privacyIDEA or an Okta RADIUS agent). Rules per account kind for all or selected clients, break-glass exemptions, and logins that fail closed. 802.1X never asks for a second factor.</li>
           <li>Custom unlang policy for administrators, checked before it is installed.</li>
+          <li>Certificates in the console: the 802.1X server certificate, the CA that issues client certificates, OCSP for EAP-TLS and the portal's HTTPS certificate. Upload them (PEM or PKCS#12), or make the key and request on the server and upload what your CA issues. They are installed with Apply and put back if FreeRADIUS or the portal does not come up with them.</li>
         </ul>
       </div>
       <div>
@@ -432,7 +434,7 @@
     <div class="split">
       <div class="note">
         <h3>FIPS mode is optional</h3>
-        <p>The cryptography is the same in both modes: SHA-2, AES, PBKDF2-HMAC-SHA256, ECDSA and TLS 1.2 or later. One FreeRADIUS build works in standard and FIPS mode. With Ubuntu Pro FIPS and FIPS mode on, the portal refuses to start unless the kernel and OpenSSL are in FIPS mode.</p>
+        <p>The cryptography is the same in both modes: SHA-2, AES, PBKDF2-HMAC-SHA256, ECDSA and TLS 1.2 or later. One FreeRADIUS build works in standard and FIPS mode. Standard mode is the default; FIPS mode is chosen at install time and refused on a host whose kernel is not in FIPS mode. With Ubuntu Pro FIPS and FIPS mode on, the portal refuses to start unless the kernel and OpenSSL are in FIPS mode.</p>
       </div>
       <div class="note">
         <h3>What it does not fix</h3>
@@ -458,7 +460,7 @@
           <li><strong>Ubuntu 24.04 LTS.</strong> 2 vCPU, 4 GB RAM and 20 GB disk for a few hundred switches. Debian 12 is planned.</li>
           <li><strong>FreeRADIUS 3.2.10 is included.</strong> The release bundle carries a package built from the signed upstream release. The installer never overwrites an existing FreeRADIUS or <code>/etc/freeradius</code>.</li>
           <li><strong>Distribution packages only:</strong> PostgreSQL 16, nginx and Python 3.12 with its <code>python3-*</code> packages.</li>
-          <li><strong>For EAP-TLS:</strong> a CA that issues client certificates, and a RADIUS server certificate.</li>
+          <li><strong>For EAP-TLS:</strong> a CA that issues client certificates. The RADIUS server certificate can be uploaded or requested from the server; a new server starts with a self-signed one for you to replace.</li>
           <li><strong>Optional:</strong> Ubuntu Pro FIPS for FIPS mode.</li>
         </ul>
         <p class="fine"><a href="https://github.com/radiusadmin/radius-admin/blob/main/docs/RUNBOOK.md#12-the-bundled-freeradius-package">About the bundled FreeRADIUS package</a></p>
@@ -472,7 +474,7 @@
         </li>
         <li>
           <h3>Install</h3>
-          <p>Run the installer with no options and answer the questions: server name, management subnet, portal address, DNS resolvers, portal certificate and the first administrator.</p>
+          <p>Run the installer with no options and answer the questions: server name, management subnet, portal address, DNS resolvers, portal certificate, the first administrator, the crypto mode (standard unless you choose FIPS mode), the 802.1X server certificate (your files, or self-signed to replace later) and an optional OCSP responder.</p>
           <pre class="cmd" tabindex="0"><code>sudo ./deploy/install.sh</code></pre>
           <details>
             <summary>Unattended install with an answers file</summary>
@@ -483,7 +485,8 @@ switch_nets: "192.0.2.0/24 198.51.100.0/24"
 listen_ip: 192.0.2.10
 resolver: "192.0.2.53"
 tls: self-signed
-admin_username: netadmin</code></pre>
+admin_username: netadmin
+eap_tls: self-signed</code></pre>
             <pre class="cmd" tabindex="0"><code>sudo ./deploy/install.sh --answers site.yaml --print-answers   # check only
 sudo ./deploy/install.sh --answers site.yaml</code></pre>
             <p>The installer keeps your answers in <code>/etc/radius-admin/site.yaml</code> for later runs.</p>
@@ -495,7 +498,7 @@ sudo ./deploy/install.sh --answers site.yaml</code></pre>
         </li>
         <li>
           <h3>Follow the setup checklist</h3>
-          <p>Add RADIUS clients, create access rules, set the device admin subnet and apply.</p>
+          <p>Add RADIUS clients, create access rules, set the device admin subnet, replace the self-signed certificates on the Certificates page and apply.</p>
         </li>
       </ol>
     </div>
@@ -512,8 +515,7 @@ sudo ./deploy/install.sh --answers site.yaml</code></pre>
     <ul class="limits">
       <li><strong>One distribution.</strong> The bundled FreeRADIUS package is built for Ubuntu 24.04 on amd64. Debian 12 follows.</li>
       <li><strong>One tested switch family.</strong> Cisco Catalyst 1200/1300 is what the project is tested against today. The generic RFC 3580 profile is marked unverified until it has run against real hardware; other devices need a custom profile.</li>
-      <li><strong>Certificates are yours to place.</strong> The installer expects the FreeRADIUS certificates under <code>/etc/freeradius/certs/site/</code>. Generating the whole FreeRADIUS configuration is the next phase.</li>
-      <li><strong>Client-certificate MFA needs your PKI.</strong> The nginx phase expects the site CA bundle and an OCSP responder.</li>
+      <li><strong>The directory is set up by hand.</strong> A new server starts without a directory (EAP-TLS and directory accounts are rejected until it is configured in <code>mods-available/ldap</code>). A console step for the directory comes with the generated FreeRADIUS configuration, the next phase.</li>
     </ul>
     <p>Found something? <a href="https://github.com/radiusadmin/radius-admin/issues">Report it on GitHub</a>.</p>
   </div>
