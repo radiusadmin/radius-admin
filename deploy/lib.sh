@@ -19,6 +19,10 @@ RA_PYTHON=${RA_PYTHON:-/usr/bin/python3}
 # 1.24.0-2ubuntu7.20 (USN-9159-1). Raise this when a later nginx advisory affects the site:
 # preflight then warns and the installer's nginx-update phase (and update.sh) upgrades nginx.
 RA_NGINX_MIN_VERSION=${RA_NGINX_MIN_VERSION:-1.24.0-2ubuntu7.20}
+# FreeRADIUS cuts every home server's response_window down to max_request_time (radiusd.conf,
+# stock 30 s). The second-factor providers wait up to 60 s for the person (SPEC section 29), so
+# the freeradius phase raises max_request_time to at least this; a higher live value is kept.
+RA_FR_MAX_REQUEST_TIME=${RA_FR_MAX_REQUEST_TIME:-90}
 
 if [[ -t 1 ]]; then
     C_RED=$'\e[31m'; C_GRN=$'\e[32m'; C_YEL=$'\e[33m'; C_BLD=$'\e[1m'; C_OFF=$'\e[0m'
@@ -29,6 +33,10 @@ WARNINGS=0
 FAILURES=0
 
 say()   { printf '%s\n' "$*"; }
+fr_max_request_time() { # fr_max_request_time RADIUSD_CONF: its top-level max_request_time (empty if unset)
+    sed -nE 's/^max_request_time[[:space:]]*=[[:space:]]*([0-9]+)[[:space:]]*(#.*)?$/\1/p' "$1" 2>/dev/null \
+        | tail -n1 || true
+}
 hdr()   { printf '\n%s== %s ==%s\n' "$C_BLD" "$*" "$C_OFF"; }
 ok()    { printf '  %s[ OK ]%s %s\n' "$C_GRN" "$C_OFF" "$*"; }
 info()  { printf '  [INFO] %s\n' "$*"; }

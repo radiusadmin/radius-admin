@@ -238,7 +238,9 @@ What it does, in order:
    them root:freerad 0640; also leaves them in the app's staging dir.
 4. Removes the symlinks listed in `freeradius/modules-to-disable.txt` (including
    `exec`: nothing in the new configuration runs external programs) and
-   `sites-enabled/inner-tunnel`.
+   `sites-enabled/inner-tunnel`. Raises `max_request_time` in `radiusd.conf` to 90 s when it is
+   lower (stock: 30 s; a higher value is kept): FreeRADIUS cuts every home server's wait to it,
+   and second-factor providers wait up to 60 s for the person (§6.9b).
 5. `radiusd -XC` (run as root, like the service — radiusd drops to `freerad` itself). On failure the tarball is restored at once
    (the running daemon was never touched).
 6. With `--restart-freeradius`: restart, wait ≤ 15 s for active + UDP 1812, otherwise
@@ -917,6 +919,13 @@ provider the rule named at that time (rebuilt from the audit log of rule changes
 privileged-access report shows per account whether a second factor is needed, by which provider
 and on which clients, the exemptions, and warns when no local account is exempt. The setup
 checklist has an optional step "Second factor for device admins". Alerts: §6.5.
+
+**How long FreeRADIUS waits.** The Duo provider waits 60 s for the person, a remote server as
+long as its setting (5–60 s). FreeRADIUS cuts any such wait to `max_request_time` in
+`radiusd.conf` (stock 30 s; radiusd then logs `Ignoring "response_window = 60.000000", forcing to
+"response_window = 30.000000"` at start), so the freeradius phase raises it to 90 s and preflight
+warns when it is lower. Run `--phase freeradius --restart-freeradius` after upgrading to this
+release.
 
 **Applying with Duo takes longer.** An apply that changes Duo's configuration restarts the Duo
 proxy and then FreeRADIUS; in the worst case (both fail and are restored) the helper needs about

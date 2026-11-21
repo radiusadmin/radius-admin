@@ -579,6 +579,26 @@ phase_migrate() {
     ok "migration finished"
 }
 
+raise_max_request_time() { # raise_max_request_time RADIUSD_CONF : at least RA_FR_MAX_REQUEST_TIME
+    # FreeRADIUS cuts each home server's response_window to max_request_time; the Duo realm and
+    # remote MFA servers wait up to 60 s (SPEC section 29). A higher live value is kept.
+    local f=$1 cur
+    if [[ ! -f $f ]]; then warn "$f not found: max_request_time not checked"; return 0; fi
+    cur=$(fr_max_request_time "$f")
+    if [[ -n $cur ]] && (( cur >= RA_FR_MAX_REQUEST_TIME )); then
+        info "max_request_time = $cur kept (at least $RA_FR_MAX_REQUEST_TIME)"
+        return 0
+    fi
+    if [[ -n $cur ]]; then
+        sed -i -E "s/^max_request_time[[:space:]]*=[[:space:]]*[0-9]+/max_request_time = $RA_FR_MAX_REQUEST_TIME/" "$f"
+    else
+        printf '\n# radius-admin: second-factor providers wait up to 60 s (SPEC section 29)\nmax_request_time = %s\n' \
+            "$RA_FR_MAX_REQUEST_TIME" >> "$f"
+    fi
+    [[ $(fr_max_request_time "$f") == "$RA_FR_MAX_REQUEST_TIME" ]] || die "could not set max_request_time in $f"
+    ok "max_request_time ${cur:-unset} -> $RA_FR_MAX_REQUEST_TIME in radiusd.conf (second-factor waits of up to 60 s)"
+}
+
 carry_over_secrets() { # carry_over_secrets STAGED_DIR : copy live secrets over 'REDACTED' placeholders
     python3 - "$1" "$RA_RADDB" <<'PY'
 import os, re, sys
@@ -1072,6 +1092,7 @@ fr_install_staged() {
         || ln -s ../sites-available/radius-admin-mfa-primary "$RA_RADDB/sites-enabled/radius-admin-mfa-primary"
     [[ -L $RA_RADDB/mods-enabled/mschap ]] || ln -s ../mods-available/mschap "$RA_RADDB/mods-enabled/mschap"
     if [[ -d $RA_RADDB/policy.d ]]; then chmod o-w "$RA_RADDB/policy.d"; fi
+    raise_max_request_time "$RA_RADDB/radiusd.conf"
 }
 
 phase_freeradius() {

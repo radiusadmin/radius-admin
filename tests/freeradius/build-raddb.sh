@@ -74,6 +74,12 @@ sed -i "s|/etc/freeradius/certs/site/|$R/certs/site/|g" "$R/radius-admin-clients
 # --- run as the unprivileged test user mapped to radius_fr
 sed -i 's/^#\tuser = radius$/\tuser = freerad/; s/^#\tgroup = radius$/\tgroup = freerad/' "$R/radiusd.conf"
 grep -q '^	user = freerad' "$R/radiusd.conf"
+# --- max_request_time as the installer's freeradius phase sets it (same function)
+# shellcheck source=../../deploy/lib.sh
+. "$ROOT/deploy/lib.sh"
+eval "$(sed -n '/^raise_max_request_time() {/,/^}/p' "$ROOT/deploy/install.sh")"
+die() { echo "ERROR: $*" >&2; exit 1; }
+raise_max_request_time "$R/radiusd.conf" >/dev/null
 mkdir -p "$PREFIX/var/log/radius" "$PREFIX/var/run/radiusd"
 chown -R freerad:freerad "$PREFIX/var/log/radius" "$PREFIX/var/run/radiusd"
 chown -R root:freerad "$R"; chmod -R g+rX,o-rwx "$R"

@@ -541,6 +541,12 @@ def mfa_cases(prefix):
     set_mfa_decisions({"t-admin1": "slow"})
     case("Duo: the device retransmits while the user answers -> one prompt, Accept", "t-admin1", ADMIN_PW,
          "accept", "pap-admin+mfa", prompts=1, timeout=2, retries=4)
+    # FreeRADIUS clamps a home server's response_window to max_request_time (stock 30 s): the
+    # installer raises it so that the Duo realm's 60 s window holds (a person approving after
+    # 30 s was rejected with "the second-factor provider did not answer")
+    set_mfa_decisions({"t-admin1": "slow40"})
+    case("Duo: the person approves after 40 s -> Accept (max_request_time above the 60 s window)",
+         "t-admin1", ADMIN_PW, "accept", "pap-admin+mfa", prompts=1, timeout=55, retries=1)
     set_mfa_decisions({})
     case("Duo: not in group net-admins -> Reject, no prompt", "t-notgroup", ADMIN_PW, "reject",
          "pap-admin+mfa", "refused in the second-factor chain", prompts=0)
@@ -1432,6 +1438,9 @@ def main():
         record("radiusd -XC", "Configuration appears to be OK" in r.stdout + r.stderr, (r.stdout + r.stderr)[-800:])
         logname = os.path.join(bench, "radiusd-base.log")
         rad = start_radiusd(a.prefix, raddb, logname)
+        with open(logname) as fh:
+            forced = [ln.strip() for ln in fh if 'forcing to "response_window' in ln]
+        record("no home server's response_window is cut by max_request_time", not forced, " | ".join(forced))
         for priv15 in (False, True):
             set_priv15(priv15)  # live setting, no restart
             pap_cases(a.prefix, priv15)
