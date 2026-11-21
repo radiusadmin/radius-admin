@@ -1,4 +1,4 @@
-"""Settings -> Licence (SPEC section 30): signed licence files, the declared case, reminders.
+"""Settings -> Licence (SPEC section 31): signed licence files, the declared case, reminders.
 Nothing here may lock a feature; the tests check that too."""
 import base64
 import datetime

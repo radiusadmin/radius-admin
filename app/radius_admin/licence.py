@@ -1,4 +1,4 @@
-"""Licence declaration and signed licence files (SPEC section 30).
+"""Licence declaration and signed licence files (SPEC section 31).
 
 Nothing here locks a feature, makes anything read-only, touches RADIUS or contacts a server.
 The admin records which case applies (free use, commercial trial, commercial licence or

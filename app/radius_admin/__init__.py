@@ -105,7 +105,7 @@ def create_app(config_path=None, overrides=None):
         security.load_session()
         if request.method == "POST" and request.endpoint not in CSRF_EXEMPT:
             security.check_csrf()
-        # required first setup step (SPEC section 30): admins answer the licence question first
+        # required first setup step (SPEC section 31): admins answer the licence question first
         from . import licence
         if licence.prompt_redirect_needed(request.endpoint, request.method, g.get("user"), g.get("session")):
             return redirect(url_for("licence.index"))

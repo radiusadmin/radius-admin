@@ -345,7 +345,7 @@ def clean_db(superconn):
                     " ('admin_priv15','false'), ('custom_policy',''),"
                     " ('banner_text','This system is for authorized use only. Testing banner text.'),"
                     # the licence question is answered, so admins are not sent to the prompt
-                    # (SPEC section 30; tests/test_licence.py clears it)
+                    # (SPEC section 31; tests/test_licence.py clears it)
                     " ('licence_case','free')")
     yield superconn
 

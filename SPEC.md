@@ -1848,7 +1848,7 @@ The installer does not change portal-managed files: `freeradius` carries over th
 certificate paths and OCSP (section 14) and never writes `certs/site`; `site` keeps an existing
 portal certificate except with `tls: existing`, which installs the files the answers name.
 
-## 30. Change (2026-11-20): licence notice, Licence page and signed licence files
+## 31. Change (2026-11-20): licence notice, Licence page and signed licence files
 
 radius-admin is source available under the Business Source License 1.1 (LICENSE, LICENSING.md).
 Enforcement is legal, not technical: nothing in this section may lock or limit a feature, make

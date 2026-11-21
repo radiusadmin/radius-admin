@@ -1585,7 +1585,7 @@ Troubleshooting: "the private key does not belong to the certificate" (wrong key
 issued certificate: the CA signed another request); "does not name …" (add the name as a DNS
 subject alternative name); "key type … is not allowed" (re-issue with RSA 3072+ or ECDSA).
 
-### 13.4 Licence
+### 13.6 Licence
 
 radius-admin is source available under the Business Source License 1.1; see LICENSING.md. Nothing
 is locked whatever you record.

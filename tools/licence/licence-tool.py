@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Issue and keep track of radius-admin licence files (maintainer tool, SPEC section 30).
+"""Issue and keep track of radius-admin licence files (maintainer tool, SPEC section 31).
 
 Runs on the maintainer's machine only. Needs python3-cryptography. Nothing here talks to the
 network except `serve`, which listens on 127.0.0.1 only.

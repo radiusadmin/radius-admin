@@ -670,7 +670,7 @@ exception 8).
   the portal does not reload and serve the new certificate. A wrong portal certificate therefore
   cannot lock admins out; the previous one is back within the same apply.
 
-## Licence page and licence files (SPEC section 30)
+## Licence page and licence files (SPEC section 31)
 
 - **No technical enforcement.** The licence status never changes what the portal or FreeRADIUS
   does; an expired or missing licence changes wording on the Licence page, an admin-only dashboard

@@ -1,4 +1,4 @@
-"""Admin-only: Settings -> Licence (SPEC section 30). Records the licence case and an optional
+"""Admin-only: Settings -> Licence (SPEC section 31). Records the licence case and an optional
 signed licence file. Never locks anything and never contacts a server."""
 from flask import Blueprint, g, redirect, render_template, request, url_for
 
