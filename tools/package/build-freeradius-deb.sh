@@ -25,7 +25,7 @@ die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 [[ ${EUID:-$(id -u)} -eq 0 ]] || die "run as root (the package tree must be owned by root)"
 
 BUILD_DEPS=(build-essential pkg-config dpkg-dev binutils libtalloc-dev libssl-dev libpq-dev
-            libldap-dev curl gnupg ca-certificates file)
+            libldap-dev curl gnupg ca-certificates file python3-apt)
 missing=()
 for p in "${BUILD_DEPS[@]}"; do
     dpkg-query -W -f '${Status}' "$p" 2>/dev/null | grep -q 'install ok installed' || missing+=("$p")
