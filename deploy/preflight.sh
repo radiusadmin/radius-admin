@@ -2,22 +2,28 @@
 # radius-admin preflight: READ-ONLY report of everything the installer depends on.
 # Changes nothing. Exit status: 0 = no blocking problems, 1 = blocking problems found.
 #
-#   sudo ./deploy/preflight.sh [--sqlite PATH] [--admin-net CIDR]
+#   sudo ./deploy/preflight.sh [--sqlite PATH] [--admin-net CIDR] [--fips-mode on|off]
+#   --fips-mode: off = standard mode (default: the installed require_fips, else off); on = the
+#   FIPS checks below are blocking.
 set -euo pipefail
 umask 077
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # shellcheck source=lib.sh
 . "$HERE/lib.sh"
 
+FIPS_MODE=""
 while [[ $# -gt 0 ]]; do
     case $1 in
         --sqlite) RA_SQLITE_DB=$2; shift 2 ;;
         --admin-net) RA_ADMIN_NET=$2; shift 2 ;;
-        -h|--help) sed -n '2,6p' "$0"; exit 0 ;;
+        --fips-mode) FIPS_MODE=$2; shift 2 ;;
+        -h|--help) sed -n '2,8p' "$0"; exit 0 ;;
         *) die "unknown option $1" ;;
     esac
 done
 require_root
+[[ -n $FIPS_MODE ]] || FIPS_MODE=$(live_fips || echo off)
+[[ $FIPS_MODE == on || $FIPS_MODE == off ]] || die "--fips-mode must be on or off"
 
 hdr "System"
 if [[ -r /etc/os-release ]]; then
@@ -29,27 +35,33 @@ info "kernel $(uname -r)"
 PYV=$(python3 -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null || echo none)
 if [[ $PYV == 3.12 ]]; then ok "python3 $PYV"; else warn "python3 is $PYV (target 3.12)"; fi
 
-hdr "FIPS"
-FIPS=$(cat /proc/sys/crypto/fips_enabled 2>/dev/null || echo 0)
-if [[ $FIPS == 1 ]]; then ok "kernel FIPS mode on (/proc/sys/crypto/fips_enabled = 1)"; else bad "kernel FIPS mode OFF (/proc/sys/crypto/fips_enabled = $FIPS)"; fi
-info "$(openssl version 2>/dev/null || echo 'openssl: not found')"
-if openssl list -providers 2>/dev/null | grep -qi fips; then ok "OpenSSL FIPS provider loaded"; else bad "OpenSSL FIPS provider not active"; fi
-if python3 -c 'import _hashlib,sys; sys.exit(0 if _hashlib.get_fips_mode()==1 else 1)' 2>/dev/null; then
-    ok "Python hashlib reports FIPS mode"
+if [[ $FIPS_MODE == off ]]; then
+    hdr "Crypto mode"
+    ok "standard mode (require_fips = false)"
+    info "$(openssl version 2>/dev/null || echo 'openssl: not found')"
 else
-    bad "Python _hashlib.get_fips_mode() != 1 (app refuses to start with require_fips=true)"
-fi
-if command -v pro >/dev/null 2>&1; then
-    PRO=$(pro status 2>/dev/null || true)
-    if grep -Eq '^fips-updates +yes +enabled' <<<"$PRO"; then
-        warn "Ubuntu Pro stream is fips-updates: packages carry security fixes that are NOT (yet) part of the CMVP-validated module versions. For strict FIPS 140 validated status use the 'fips' stream (see docs/SECURITY.md)."
-    elif grep -Eq '^fips +yes +enabled' <<<"$PRO"; then
-        ok "Ubuntu Pro stream: fips (validated module versions)"
+    hdr "FIPS"
+    FIPS=$(cat "$RA_FIPS_ENABLED_FILE" 2>/dev/null || echo 0)
+    if [[ $FIPS == 1 ]]; then ok "kernel FIPS mode on (/proc/sys/crypto/fips_enabled = 1)"; else bad "kernel FIPS mode OFF (/proc/sys/crypto/fips_enabled = $FIPS)"; fi
+    info "$(openssl version 2>/dev/null || echo 'openssl: not found')"
+    if openssl list -providers 2>/dev/null | grep -qi fips; then ok "OpenSSL FIPS provider loaded"; else bad "OpenSSL FIPS provider not active"; fi
+    if python3 -c 'import _hashlib,sys; sys.exit(0 if _hashlib.get_fips_mode()==1 else 1)' 2>/dev/null; then
+        ok "Python hashlib reports FIPS mode"
     else
-        warn "neither fips nor fips-updates shows as enabled in 'pro status'"
+        bad "Python _hashlib.get_fips_mode() != 1 (app refuses to start with require_fips=true)"
     fi
-else
-    warn "'pro' command not found; cannot determine FIPS stream"
+    if command -v pro >/dev/null 2>&1; then
+        PRO=$(pro status 2>/dev/null || true)
+        if grep -Eq '^fips-updates +yes +enabled' <<<"$PRO"; then
+            warn "Ubuntu Pro stream is fips-updates: packages carry security fixes that are NOT (yet) part of the CMVP-validated module versions. For strict FIPS 140 validated status use the 'fips' stream (see docs/SECURITY.md)."
+        elif grep -Eq '^fips +yes +enabled' <<<"$PRO"; then
+            ok "Ubuntu Pro stream: fips (validated module versions)"
+        else
+            warn "neither fips nor fips-updates shows as enabled in 'pro status'"
+        fi
+    else
+        warn "'pro' command not found; cannot determine FIPS stream"
+    fi
 fi
 
 hdr "FreeRADIUS"
@@ -75,7 +87,7 @@ else
         for f in "$(dirname "$(dirname "$RADIUSD")")"/src/freeradius*/config.log /usr/local/src/freeradius*/config.log; do
             [[ ! -r $f ]] || info "configure flags ($f): $(sed -n 's/^  \$ \(.*configure.*\)/\1/p' "$f" | head -n1)"
         done
-        if strings "$RADIUSD" 2>/dev/null | grep -qi 'fips'; then info "radiusd binary references FIPS (built with FIPS workaround support)"; fi
+        if [[ $FIPS_MODE == on ]] && strings "$RADIUSD" 2>/dev/null | grep -qi 'fips'; then info "radiusd binary references FIPS (built with FIPS workaround support)"; fi
         LIBDIR=$(detect_fr_libdir "$RADIUSD" || true)
         if [[ -n $LIBDIR ]]; then
             info "module dir: $LIBDIR"
@@ -94,7 +106,7 @@ else
                 LDAPLIB=$(ldd "$LIBDIR/rlm_ldap.so" 2>/dev/null | awk '/libldap/ {print $3}' | head -n1)
                 TLSLIB=$( { ldd "$LIBDIR/rlm_ldap.so"; if [[ -n $LDAPLIB ]]; then ldd "$LDAPLIB"; fi; } 2>/dev/null \
                     | grep -oE 'lib(gnutls|ssl|crypto)\.so[.0-9]*' | sort -u | tr '\n' ' ')
-                if grep -q gnutls <<<"$TLSLIB"; then
+                if [[ $FIPS_MODE == on ]] && grep -q gnutls <<<"$TLSLIB"; then
                     warn "rlm_ldap -> ${LDAPLIB:-libldap} uses GnuTLS ($TLSLIB): LDAPS to AD is NOT protected by the OpenSSL FIPS provider and cipher_list does not apply. Restrict the DC (Schannel) to TLS1.2+/AES-GCM and verify whether this GnuTLS is a FIPS-validated module in your Ubuntu Pro stream (docs/SECURITY.md)."
                 else
                     info "rlm_ldap TLS libraries: ${TLSLIB:-unknown} (libldap ${LDAPLIB:-not found})"

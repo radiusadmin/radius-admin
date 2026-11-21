@@ -109,7 +109,7 @@ radius-admin/
 Config file `/etc/radius-admin/radius-admin.conf` (INI):
 ```
 [app]
-require_fips = true
+require_fips = false
 db_dsn = dbname=radius host=/var/run/postgresql user=radius_admin
 key_file = /etc/radius-admin/keys/data.key
 helper_socket = /run/radius-admin-helper.sock
@@ -414,7 +414,9 @@ backticks. Helper logs every action to syslog (ident `radius-admin-helper`).
 - Forbidden: md5, sha1 (except inside HMAC for TOTP), bcrypt, scrypt, argon2, DES/3DES,
   RC4, non-OpenSSL crypto libs, pip wheels.
 - App refuses to start when `require_fips = true` unless
-  `/proc/sys/crypto/fips_enabled == 1` AND `_hashlib.get_fips_mode() == 1`.
+  `/proc/sys/crypto/fips_enabled == 1` AND `_hashlib.get_fips_mode() == 1`. `require_fips` is
+  chosen at the first install (standard mode by default, see **Installer answers**); a missing key
+  still means `true` (config.py default), so the shipped example always sets it.
 - TLS (nginx, eap, ldap) cipher list for TLS 1.2:
   `ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384:DHE-RSA-AES128-GCM-SHA256`
   TLS 1.3 (nginx only): TLS_AES_256_GCM_SHA384:TLS_AES_128_GCM_SHA256. Curves
@@ -705,10 +707,19 @@ CSV columns (header row required, exact names, any order tolerated by name):
   (section 29.4), SSO, RadSec, monitoring, alert e-mail; skippable). Dashboard strip until finished. Audited `setup.skip|restore|finish|reopen`.
 - **Installer answers** (`deploy/answers.sh`): `install.sh` with no options on a terminal, or
   `--interactive`, asks server name, management subnet, listen address, switch networks, resolvers, portal
-  certificate (self-signed ECDSA P-384 / CSR / existing) and the first admin; `--answers FILE`
+  certificate (self-signed ECDSA P-384 / CSR / existing), the first admin and the crypto mode
+  (`fips: off|on`, default `off`; `--standard-mode`/`--fips` override it); `--answers FILE`
   takes the same unattended; `--print-answers` validates and prints only. New phase `site` writes
   `/etc/radius-admin/site.yaml` (root 0640) and the certificate; `bootstrap` creates the first
   admin. With a CSR the run stops until the issued certificate is installed.
+- **Crypto mode at install** (`fips`): the first install writes `require_fips = true|false` into
+  `radius-admin.conf` (`render_app_conf`). FIPS mode is refused (the run stops before any phase)
+  unless `/proc/sys/crypto/fips_enabled` is 1. When `radius-admin.conf` exists its `require_fips`
+  wins over options and answers (warning when they differ) and is never rewritten (rule 10);
+  `site.yaml` records the mode in use; `--print-settings` prints `fips: on|off (source)`.
+  `preflight.sh --fips-mode on|off` (install.sh passes the mode; default the installed value, else
+  off): the kernel/OpenSSL/Python FIPS checks block only in FIPS mode; standard mode prints one
+  line and skips the FIPS-only notes (radiusd FIPS strings, GnuTLS LDAPS warning).
 - **Portal settings without answers** (`update.sh`, which runs `install.sh --phase … -y`, or a
   phase run by hand): `server_name`, `admin_net`, `listen_ip` and `resolver` come from
   `/etc/radius-admin/site.yaml` (read with `ans_load`), else from the installed nginx site

@@ -50,6 +50,12 @@ release, so previews sort after it.
   on this server's loopback still use RADIUS's MD5, as FreeRADIUS does; SECURITY.md records this as
   a documented exception and lists the controls to put in place (§1.3).
 - The Duo page shows a build as checked once a later catalog lists it, and flags a withdrawn build.
+- **Standard mode is the installer's default; FIPS mode is an explicit choice.** A fresh install
+  on a host without FIPS no longer stops in preflight. Choose FIPS mode with the answers key
+  `fips: on`, the new interactive question or `install.sh --fips` (`--standard-mode` / `fips: off`
+  for standard mode); it is refused unless the host's kernel runs in FIPS mode. The choice is
+  written as `require_fips` on the first install and never changed by later runs or updates.
+  Preflight's FIPS checks block only in FIPS mode (`preflight.sh --fips-mode on|off`).
 
 ### Changed
 - **Licence: from the GNU AGPL to the Business Source License 1.1 (source available).**

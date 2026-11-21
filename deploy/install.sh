@@ -31,7 +31,8 @@
 # Run with no options on a terminal to be asked the set-up questions.
 #
 # Options:
-#   -i, --interactive       ask the set-up questions (server name, subnet, certificate, first admin)
+#   -i, --interactive       ask the set-up questions (server name, subnet, certificate, first admin,
+#                           crypto mode)
 #   --answers FILE          take the answers from FILE (format: deploy/answers.sh; site.yaml works)
 #   --print-answers         with --answers/--interactive: check and print the answers, install nothing
 #   --print-settings        print the portal settings this run would use and where each comes from
@@ -49,6 +50,10 @@
 #                           nginx site, else the firewall table (an update keeps them that way).
 #   --switch-nets "CIDR …"  networks the monitor may reach for SNMP and CoA (default: kept
 #                           from the installed monitor unit, else site.yaml, else the admin net)
+#   --standard-mode         first install in standard mode (the default; answers "fips: off")
+#   --fips                  first install in FIPS mode (answers "fips: on"): refused unless this
+#                           host's kernel runs in FIPS mode. Both override the answers; neither
+#                           changes an installed server, which keeps its require_fips setting.
 #   --sqlite PATH           default /var/lib/freeradius/sqlite/freeradius.db
 #   --skip-preflight        do not abort on preflight failures (not recommended)
 #   -y, --yes               do not ask for confirmation
@@ -74,6 +79,8 @@ LISTEN_IP=""
 RESOLVER=""
 SWITCH_NETS=""
 OPT_LISTEN_IP="" OPT_ADMIN_NET="" OPT_SERVER_NAME="" OPT_RESOLVER=""
+OPT_FIPS=""
+FIPS_MODE=off
 SKIP_PREFLIGHT=0
 ASSUME_YES=0
 INTERACTIVE=0
@@ -109,6 +116,10 @@ while [[ $# -gt 0 ]]; do
         --switch-nets) SWITCH_NETS=$2; shift 2 ;;
         --server-name) OPT_SERVER_NAME=$2; shift 2 ;;
         --resolver) OPT_RESOLVER=$2; shift 2 ;;
+        --standard-mode|--fips)
+            m=off; [[ $1 == --fips ]] && m=on
+            [[ -z $OPT_FIPS || $OPT_FIPS == "$m" ]] || die "--fips and --standard-mode exclude each other"
+            OPT_FIPS=$m; shift ;;
         --sqlite) RA_SQLITE_DB=$2; shift 2 ;;
         --skip-preflight) SKIP_PREFLIGHT=1; shift ;;
         -y|--yes) ASSUME_YES=1; shift ;;
@@ -136,9 +147,31 @@ live_pick() { # live_pick VAR KEY OPTION: OPTION, else this host's value (rule 1
     printf -v "$var" '%s' "$v"
 }
 
+# resolve_fips CHOICE CHOICE_SOURCE: FIPS_MODE and SETTING_SRC[fips]. The installed
+# radius-admin.conf wins (rule 10: an update never changes a live require_fips); otherwise the
+# choice (option, answers), else standard mode. FIPS mode needs a kernel in FIPS mode.
+resolve_fips() {
+    local choice=$1 src=$2 live
+    if live=$(live_fips); then
+        FIPS_MODE=$live; SETTING_SRC[fips]=$RA_APP_CONF
+        if [[ -n $choice && $choice != "$live" ]]; then
+            warn "fips: $choice ($src) ignored: this server is installed with fips: $live (require_fips in $RA_APP_CONF), which an install or update never changes"
+        fi
+        return 0
+    fi
+    [[ ! -e $RA_APP_CONF ]] || die "cannot read require_fips in $RA_APP_CONF (expected true or false in [app])"
+    FIPS_MODE=${choice:-off}; SETTING_SRC[fips]=${choice:+$src}; : "${SETTING_SRC[fips]:=default}"
+    if [[ $FIPS_MODE == on ]] && ! kernel_fips; then
+        die "FIPS mode was chosen (${SETTING_SRC[fips]}) but this host's kernel is not in FIPS mode ($RA_FIPS_ENABLED_FILE = $(cat "$RA_FIPS_ENABLED_FILE" 2>/dev/null || echo missing)). Enable FIPS on the host first (Ubuntu Pro: pro enable fips-updates, then reboot; see docs/SECURITY.md), or install in standard mode (fips: off, --standard-mode)."
+    fi
+}
+
 if (( INTERACTIVE )) || [[ -n $ANSWERS ]]; then
     USE_ANSWERS=1
     if [[ -n $ANSWERS ]]; then ans_load "$ANSWERS"; fi
+    fips_src=answers
+    [[ -n $OPT_FIPS ]] && ANS[fips]=$OPT_FIPS && fips_src=option
+    fips_choice=${ANS[fips]:-}
     for k in server_name admin_net listen_ip resolver; do [[ -n ${ANS[$k]:-} ]] && SETTING_SRC[$k]=answers; done
     [[ -n $OPT_SERVER_NAME ]] && ANS[server_name]=$OPT_SERVER_NAME && SETTING_SRC[server_name]=option
     [[ -n $OPT_ADMIN_NET ]] && ANS[admin_net]=$OPT_ADMIN_NET && SETTING_SRC[admin_net]=option
@@ -146,8 +179,10 @@ if (( INTERACTIVE )) || [[ -n $ANSWERS ]]; then
     [[ -n $OPT_RESOLVER ]] && ANS[resolver]=$OPT_RESOLVER && SETTING_SRC[resolver]=option
     if [[ -n $SWITCH_NETS ]]; then ANS[switch_nets]=$SWITCH_NETS; fi
     ans_defaults
-    if (( INTERACTIVE )); then ans_interactive; fi
+    if (( INTERACTIVE )); then ans_interactive; fips_choice=${ANS[fips]}; fi
     ans_validate
+    resolve_fips "$fips_choice" "$fips_src"
+    ANS[fips]=$FIPS_MODE   # site.yaml records the mode the server runs
     for k in server_name admin_net listen_ip resolver; do : "${SETTING_SRC[$k]:=answers}"; done
     RA_SERVER_NAME=${ANS[server_name]}; RA_ADMIN_NET=${ANS[admin_net]}
     LISTEN_IP=${ANS[listen_ip]}; RESOLVER=${ANS[resolver]}; SWITCH_NETS=${ANS[switch_nets]}
@@ -173,15 +208,17 @@ else
     [[ -z $LISTEN_IP ]] || _ans_py ip "$LISTEN_IP" \
         || die "listen address '$LISTEN_IP' (${SETTING_SRC[listen_ip]}) is not an IP address"
     for r in $RESOLVER; do _ans_py ip "$r" || die "resolver '$r' (${SETTING_SRC[resolver]}) is not an IP address"; done
+    resolve_fips "$OPT_FIPS" option
 fi
 live_pick RA_OCSP_URL ocsp_url "$OPT_OCSP_URL"
 _ans_py url "$RA_OCSP_URL" || die "OCSP responder '$RA_OCSP_URL' (${SETTING_SRC[ocsp_url]}) is not an http(s) URL"
 if [[ ${SETTING_SRC[ocsp_url]} != default ]]; then RA_OCSP_HOST=$(sed -E 's#^[a-z]+://([^/:]+).*#\1#' <<<"$RA_OCSP_URL"); fi
 
 if (( PRINT_SETTINGS )); then
-    for k in server_name admin_net listen_ip resolver ocsp_url; do
+    for k in server_name admin_net listen_ip resolver ocsp_url fips; do
         case $k in
             server_name) v=$RA_SERVER_NAME ;; admin_net) v=$RA_ADMIN_NET ;; ocsp_url) v=$RA_OCSP_URL ;;
+            fips) v=$FIPS_MODE ;;
             listen_ip) v=${LISTEN_IP:-$(detect_vlan_ip "$RA_ADMIN_NET" || true)} ;;
             resolver) v=${RESOLVER:-$(detect_resolvers || true)} ;;
         esac
@@ -261,7 +298,7 @@ app_env() { # run a command as radius-admin with the app environment
 
 phase_preflight() {
     hdr "Phase preflight (read-only)"
-    if ! "$HERE/preflight.sh" --sqlite "$RA_SQLITE_DB" --admin-net "$RA_ADMIN_NET"; then
+    if ! "$HERE/preflight.sh" --sqlite "$RA_SQLITE_DB" --admin-net "$RA_ADMIN_NET" --fips-mode "$FIPS_MODE"; then
         if (( SKIP_PREFLIGHT )); then
             warn "preflight reported blocking failures; continuing because of --skip-preflight"
         else
@@ -841,10 +878,14 @@ install_app_code() {
 
 install_app_config() {
     if [[ ! -e $ETC/radius-admin.conf ]]; then
-        install -o root -g radius-admin -m 0640 "$HERE/etc/radius-admin.conf.example" "$ETC/radius-admin.conf"
-        sed -i "s|^# server_name = .*|server_name = $RA_SERVER_NAME|" "$ETC/radius-admin.conf"
-        info "created $ETC/radius-admin.conf"
+        local tmp; tmp=$(mktemp)
+        render_app_conf "$HERE/etc/radius-admin.conf.example" "$tmp" "$RA_SERVER_NAME" "$FIPS_MODE" \
+            || { rm -f "$tmp"; die "could not render $ETC/radius-admin.conf"; }
+        install -o root -g radius-admin -m 0640 "$tmp" "$ETC/radius-admin.conf"
+        rm -f "$tmp"
+        if [[ $FIPS_MODE == on ]]; then info "created $ETC/radius-admin.conf (FIPS mode)"; else info "created $ETC/radius-admin.conf"; fi
     else
+        # an update keeps every live setting, require_fips included (rule 10)
         chown root:radius-admin "$ETC/radius-admin.conf"; chmod 0640 "$ETC/radius-admin.conf"
     fi
 }
@@ -1295,9 +1336,11 @@ phase_bootstrap() {
   banner, sign in, change the password and enrol TOTP (or a client certificate).
 
   Other checks:
-    sudo -u radius-admin env RADIUS_ADMIN_CONFIG=$ETC/radius-admin.conf PYTHONPATH=$OPT/app python3 -m radius_admin.cli check-fips
-    sudo -u radius-admin env RADIUS_ADMIN_CONFIG=$ETC/radius-admin.conf PYTHONPATH=$OPT/app python3 -m radius_admin.cli verify-audit
 EOF
+    if [[ $FIPS_MODE == on ]]; then
+        say "    sudo -u radius-admin env RADIUS_ADMIN_CONFIG=$ETC/radius-admin.conf PYTHONPATH=$OPT/app python3 -m radius_admin.cli check-fips"
+    fi
+    say "    sudo -u radius-admin env RADIUS_ADMIN_CONFIG=$ETC/radius-admin.conf PYTHONPATH=$OPT/app python3 -m radius_admin.cli verify-audit"
 }
 
 # ------------------------------------------------------------------------------ main
