@@ -392,6 +392,8 @@ Actions:
   empty `text` and a message (section 23).
 - `integration_status`, `integration_catalog`, `integration_preflight`, `integration_fetch`,
   `integration_install`, `integration_log`: second-factor provider installs, section 29.1.
+- `cert_status`, and the staged `certificates` file in `validate`/`apply`/`rollback`: certificates
+  managed in the portal, section 30.
 Staging path is fixed in helper.conf, never taken from the request. Helper safety
 checks: files ≤ 1 MiB, UTF-8, no NUL; clients file must consist only of `client <name> {`
 blocks containing whitelisted keys (ipaddr, ipv4addr, ipv6addr, secret, shortname,
@@ -1777,3 +1779,63 @@ unreachable). The portal pages that drive this follow.
   `failmode=secure`, listening, log "FIPS mode is enabled"; M1 (CMVP certificate of the provider
   version) and M2 (prebuilt provider, `cryptography` wheel with its own OpenSSL) are decided by the
   maintainer. Exit 0 only when every required check that ran passed.
+
+## 30. Change (2026-11-20): certificates managed in the portal
+
+Page **Certificates** (`/certificates/`, Network access; every role sees it, changes need admin +
+step-up, each one audited `certificate.upload|csr|issued|forget|ocsp`, never with key material):
+
+- **802.1X server certificate** (`eap_server`): FreeRADIUS's `certs/site/radius.pem` + `radius.key`
+  (EAP-TLS/TTLS/PEAP and RadSec).
+- **Client certificate CA** (`client_ca`): `certs/site/ca.pem`, and the portal's
+  `/etc/radius-admin/tls/client-ca.pem` (client-certificate sign-in) when the portal site exists.
+- **OCSP for EAP-TLS** (settings `eap_ocsp` = `keep` (default: leave `mods-available/eap` as
+  installed) | `off` | `on`, `eap_ocsp_url`): `enable` and `url` of `ocsp { }` in
+  `tls-config tls-common`.
+- **Portal HTTPS certificate** (`portal_server`): `/etc/radius-admin/tls/server.crt` + `server.key`;
+  its subject alternative names must include the portal site's `server_name`.
+
+Server certificates come from an upload (PEM certificate, optional chain file, PEM key with an
+optional password, or PKCS#12) or from a key and CSR made in the app (`python3-cryptography`:
+ECDSA P-384 (default) / P-256, RSA 3072 / 4096; CN + DNS SANs, EKU serverAuth); the issued
+certificate is uploaded later and must match the CSR's key. Checks (app and helper alike):
+PEM certificates only, leaf first, not a CA, not expired, key RSA ≥ 3072 or ECDSA P-256/P-384
+(SPEC section 7), signature hash SHA-256/384/512, EKU absent or serverAuth, key matches, further
+certificates are CAs; CA bundle: CA certificates only, none expired.
+
+**Storage** `ui.tls_cert` (`sql/102-certificates.sql`): one row per kind the portal manages (no row:
+the installed files stay as they are); `key_enc` / `csr_key_enc` = AES-256-GCM with the data key,
+AAD `radius-admin:tls_cert:<kind>:key|csr_key`. "Stop managing it here" deletes the row; the
+installed files stay.
+
+**Apply.** `render_provider_files` adds the staged file `certificates` (0600) when anything is
+managed: JSON `{"format": 1, "eap_server": {"cert", "key"}, "client_ca": "<PEM>", "eap_ocsp":
+{"enable": bool, "url": str}, "portal_server": {"cert", "key"}}`, each section optional. It is part of
+`providers_sha256` (pending state), of the applied copies and their history like the Duo file; the
+Apply page diffs a summary (subjects, issuers, expiry, key type, certificate and key fingerprints,
+never keys). An apply that changes it uses `helper_duo_timeout`.
+
+**Helper** (section 6): `validate`/`apply` read the optional staged `certificates`
+(`check_certificates`: the same checks with `openssl`, JSON keys and types exact, the portal
+certificate only while `portal_site` exists, its SAN against that site's `server_name`) and turn it
+into the files that differ from what is installed: `eap_cert`, `eap_key`, `eap_ca`, `eap_conf`
+(the live `mods-available/eap` with OCSP set), `portal_cert`, `portal_key`, `portal_ca`. The
+validation copy gets the candidate `certs/site` files, and the absolute `<raddb>/certs/site/` paths
+in its `mods-available/eap` and clients file point at the copy (always, so `radiusd -XC` reads the
+copy's certificates). `apply`: the backup also holds the certificate files the apply replaces
+(`meta.json` `certs`, absent file = removed on restore); FreeRADIUS files installed root:freerad
+0640 (`eap_conf` keeps its owner and mode), restart; then the portal files (server.crt 0644,
+server.key 0600, client-ca.pem 0644, root), `nginx -t -q -e stderr`, `systemctl reload
+<portal_service>`, wait ≤ 15 s for the portal to listen and, with `portal_verify_tls` (default true),
+for `openssl s_client` to see the new certificate's SHA-256. Any failure restores every file this
+apply changed (FreeRADIUS restarted, nginx reloaded) and answers `rolled_back`. `rollback` puts back
+the certificate files its backup holds. Answers carry `certificates_sha256` and
+`certificates_changed` (file names). New read-only action `cert_status` → `{eap_server, client_ca,
+portal_server: [ {subject, issuer, not_before, not_after, sha256, san, key, ca, expired} ] | null,
+eap_ocsp: {enable, url} | null, portal_configured, portal_server_name}` (no key material).
+helper.conf: `portal_tls_dir` (`/etc/radius-admin/tls`), `nginx` (`/usr/sbin/nginx`),
+`portal_verify_tls` (`true`). The helper unit may write `/etc/radius-admin/tls`.
+
+The installer does not change portal-managed files: `freeradius` carries over the live EAP
+certificate paths and OCSP (section 14) and never writes `certs/site`; `site` keeps an existing
+portal certificate except with `tls: existing`, which installs the files the answers name.

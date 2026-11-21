@@ -8,6 +8,12 @@ release, so previews sort after it.
 ## Unreleased
 
 ### Added
+- **Certificates in the console.** A new Certificates page manages the 802.1X server certificate,
+  the CA for client certificates, OCSP for EAP-TLS and the portal's HTTPS certificate. Upload a
+  certificate and key (PEM or PKCS#12), or make the key and request on the server and upload what
+  your CA issues. Keys are stored encrypted. Changes are installed with Apply: the helper checks
+  them again, restarts FreeRADIUS, tests and reloads the portal, and puts everything back if either
+  does not come up with them. RUNBOOK §13.5.
 - **A second factor for device admin logins (Integrations).** A new Integrations page sets which
   device admin logins must be approved with a second factor: local or directory accounts, on all
   clients or selected ones, with exempt break-glass accounts. First provider: a remote RADIUS MFA

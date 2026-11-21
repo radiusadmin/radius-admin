@@ -20,7 +20,7 @@ SETTING_KEYS = ("admin_subnet", "admin_priv15", "custom_policy", "banner_text", 
                 "update_channel", "update_mode", "update_window_day", "update_window_hour",
                 "update_check_requested", "display_timezone", "dot1x_ttls",
                 "dot1x_ttls_directory", "dot1x_peap", "dot1x_peap_directory", "default_vendor_profile",
-                "admin_directory", "admin_directory_groups")
+                "admin_directory", "admin_directory_groups", "eap_ocsp", "eap_ocsp_url")
 RADSEC_KEYS = ("enabled", "listen", "port", "max_connections", "idle_timeout", "ocsp", "ocsp_url")
 SAML_KEYS = ("enabled", "idp_metadata", "entity_id", "group_attribute", "name_attribute", "local_login")
 DEFAULT_BANNER = ("This system is for authorized use only. Activity on this system is "
@@ -88,6 +88,9 @@ def get_settings(conn=None):
                    "requested": raw.get("update_check_requested", "")},
         # IANA zone for times shown in the console (display_zone() validates)
         "display_timezone": raw.get("display_timezone") or "UTC",
+        # OCSP for EAP-TLS managed in the portal (SPEC section 30): keep | off | on, and the responder
+        "eap_ocsp": raw.get("eap_ocsp") or "keep",
+        "eap_ocsp_url": raw.get("eap_ocsp_url", ""),
     }
 
 
@@ -216,18 +219,33 @@ def _require_fips():
         return False
 
 
-PROVIDER_FILES = ("provider-duo",)
+PROVIDER_FILES = ("provider-duo", "certificates")
+
+
+def _datakey(datakey):
+    if datakey is not None:
+        return datakey
+    return current_app.config["RA_DATA_KEY"]
 
 
 def render_provider_files(conn=None, datakey=None):
-    """{staged name: text} for the providers installed on this server (SPEC section 29.2): the
-    Duo Authentication Proxy's configuration while a Duo provider is enabled."""
-    from . import integrations
+    """{staged name: text} of the files an apply installs besides policy and clients: the Duo
+    Authentication Proxy's configuration while a Duo provider is enabled (SPEC section 29.2) and
+    the certificates the portal manages (SPEC section 30)."""
+    from . import certs, integrations
     u = unlang()
     out = {}
     for p in integrations.render_inputs(conn, datakey):
         if p["type"] == "duo":
             out["provider-duo"] = u.render_duo_config(p, fips=_require_fips())
+    try:
+        dk = _datakey(datakey)
+    except (RuntimeError, KeyError):   # no app context and no key (command line render)
+        dk = None
+    if dk is not None:
+        bundle = certs.render_bundle(conn, dk, get_settings(conn))
+        if bundle:
+            out["certificates"] = bundle
     return out
 
 

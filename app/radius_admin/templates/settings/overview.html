@@ -9,6 +9,8 @@
     <ul class="settings-links">
       <li><a href="{{ url_for('settings.index') }}">General settings</a>
         <p class="small muted">Device admin logins (management subnet, privilege, directory accounts), 802.1X with a username and password.</p></li>
+      <li><a href="{{ url_for('certificates.index') }}">Certificates</a>
+        <p class="small muted">The 802.1X server certificate, the CA for client certificates, OCSP for EAP-TLS and the portal's HTTPS certificate.</p></li>
     </ul>
   </section>
   <section class="panel" aria-labelledby="sg-console">

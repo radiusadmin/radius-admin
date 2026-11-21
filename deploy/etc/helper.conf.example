@@ -27,6 +27,11 @@ radius_port = 1812
 # portal_service = nginx.service
 # portal_site = /etc/nginx/sites-enabled/radius-admin
 # portal_port = 443
+# certificates managed in the portal (SPEC section 30): the portal's TLS files, nginx for nginx -t,
+# and whether the reloaded portal must be seen serving the new certificate
+# portal_tls_dir = /etc/radius-admin/tls
+# nginx = /usr/sbin/nginx
+# portal_verify_tls = true
 
 # updates (SPEC section 16): downloads by the update check service (owned by update_owner),
 # the pinned public key their signed manifests must verify with, and the installed build
