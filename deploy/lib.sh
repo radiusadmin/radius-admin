@@ -183,6 +183,19 @@ render_app_conf() {
     grep -qx "require_fips = $v" "$2"
 }
 
+# render_nginx_site TEMPLATE DST LISTEN_IP SERVER_NAME ADMIN_NET RESOLVER OCSP_URL|"": the portal
+# site; without an OCSP responder the ssl_ocsp lines are left out (no revocation check)
+render_nginx_site() {
+    local tmpl=$1 dst=$2 ip=$3 name=$4 net=$5 res=$6 ocsp=$7
+    if [[ -n $ocsp ]]; then
+        sed -e "s#@OCSP_URL@#$ocsp#g" "$tmpl"
+    else
+        sed -e 's|^\([[:space:]]*\)ssl_ocsp leaf;.*|\1# no OCSP responder configured: client certificates are not checked for revocation|' \
+            -e '/^[[:space:]]*ssl_ocsp/d' "$tmpl"
+    fi | sed -e "s#@LISTEN_IP@#$ip#g" -e "s#@SERVER_NAME@#$name#g" -e "s#@ADMIN_NET@#$net#g" \
+        -e "s#@RESOLVER@#$res#g" > "$dst"
+}
+
 # DNS servers usable by nginx `resolver` (IPv4, real upstreams preferred over the stub).
 detect_resolvers() {
     local r=""

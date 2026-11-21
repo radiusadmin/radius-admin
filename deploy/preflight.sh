@@ -2,9 +2,10 @@
 # radius-admin preflight: READ-ONLY report of everything the installer depends on.
 # Changes nothing. Exit status: 0 = no blocking problems, 1 = blocking problems found.
 #
-#   sudo ./deploy/preflight.sh [--sqlite PATH] [--admin-net CIDR] [--fips-mode on|off]
+#   sudo ./deploy/preflight.sh [--sqlite PATH] [--admin-net CIDR] [--fips-mode on|off] [--ocsp-url URL]
 #   --fips-mode: off = standard mode (default: the installed require_fips, else off); on = the
-#   FIPS checks below are blocking.
+#   FIPS checks below are blocking. --ocsp-url: the OCSP responder for client certificates
+#   ("" = none; default: the one in the installed nginx site, else none).
 set -euo pipefail
 umask 077
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -12,18 +13,21 @@ HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 . "$HERE/lib.sh"
 
 FIPS_MODE=""
+OCSP_URL=-
 while [[ $# -gt 0 ]]; do
     case $1 in
         --sqlite) RA_SQLITE_DB=$2; shift 2 ;;
         --admin-net) RA_ADMIN_NET=$2; shift 2 ;;
         --fips-mode) FIPS_MODE=$2; shift 2 ;;
-        -h|--help) sed -n '2,8p' "$0"; exit 0 ;;
+        --ocsp-url) OCSP_URL=$2; shift 2 ;;
+        -h|--help) sed -n '2,10p' "$0"; exit 0 ;;
         *) die "unknown option $1" ;;
     esac
 done
 require_root
 [[ -n $FIPS_MODE ]] || FIPS_MODE=$(live_fips || echo off)
 [[ $FIPS_MODE == on || $FIPS_MODE == off ]] || die "--fips-mode must be on or off"
+[[ $OCSP_URL != - ]] || OCSP_URL=$(live_nginx ocsp_url || true)
 
 hdr "System"
 if [[ -r /etc/os-release ]]; then
@@ -158,6 +162,8 @@ if [[ -d $RA_RADDB ]]; then
     fi
     if [[ -r $CERTS/site/ca.pem ]]; then
         ok "site CA bundle $CERTS/site/ca.pem ($(grep -c 'BEGIN CERTIFICATE' "$CERTS/site/ca.pem") certs)"
+    elif [[ ! -e $RA_RADDB/policy.d/radius-admin && ! -e $RA_SQLITE_DB ]]; then
+        info "$CERTS/site/ca.pem not there yet: on this new server the freeradius phase installs the EAP certificates from the answers (eap_tls: existing) or makes self-signed ones"
     else
         bad "$CERTS/site/ca.pem missing (needed for EAP-TLS and nginx client-cert CA)"
     fi
@@ -205,7 +211,12 @@ info "host firewall in use: $FW"
 [[ $FW != none ]] || warn "no active host firewall detected; installer adds an nftables table restricting 443 only"
 RES=$(detect_resolvers || true)
 if [[ -n $RES ]]; then ok "DNS resolvers for nginx OCSP: $RES"; else warn "no DNS resolver found (pass --resolver to install.sh)"; fi
-if getent hosts "$RA_OCSP_HOST" >/dev/null; then ok "$RA_OCSP_HOST resolves ($(getent hosts "$RA_OCSP_HOST" | awk '{print $1}' | head -n1))"; else bad "$RA_OCSP_HOST does not resolve: nginx refuses to start with ssl_ocsp_responder pointing at an unresolvable host"; fi
+if [[ -z $OCSP_URL ]]; then
+    info "no OCSP responder configured: client certificates are not checked for revocation"
+else
+    OCSP_HOST=$(sed -E 's#^[a-z]+://([^/:]+).*#\1#' <<<"$OCSP_URL")
+    if getent hosts "$OCSP_HOST" >/dev/null; then ok "OCSP responder $OCSP_HOST resolves ($(getent hosts "$OCSP_HOST" | awk '{print $1}' | head -n1))"; else bad "OCSP responder $OCSP_HOST does not resolve: nginx refuses to start with ssl_ocsp_responder pointing at an unresolvable host"; fi
+fi
 if getent hosts "$RA_SERVER_NAME" >/dev/null; then info "$RA_SERVER_NAME -> $(getent hosts "$RA_SERVER_NAME" | awk '{print $1}' | head -n1)"; else warn "$RA_SERVER_NAME does not resolve on this host (DNS record needed for admins)"; fi
 
 hdr "Existing components"

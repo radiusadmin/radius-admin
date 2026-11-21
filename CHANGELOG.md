@@ -50,6 +50,14 @@ release, so previews sort after it.
   on this server's loopback still use RADIUS's MD5, as FreeRADIUS does; SECURITY.md records this as
   a documented exception and lists the controls to put in place (§1.3).
 - The Duo page shows a build as checked once a later catalog lists it, and flags a withdrawn build.
+- **A new server installs from the release bundle.** On a server where FreeRADIUS was never set
+  up by radius-admin and there is nothing to migrate, the installer now brings up a working,
+  default-deny FreeRADIUS and the portal: no access rules needed yet, no directory yet (EAP-TLS and
+  directory accounts are rejected until it is configured), the EAP certificates you give it
+  (answers `eap_tls: existing`) or self-signed ones to replace, a new localhost secret instead of
+  the stock one, and OCSP only when you name a responder (answers `ocsp_url`). The portal no
+  longer needs an OCSP responder either. Fixes the stock `testing123` localhost secret being kept
+  on such a server. RUNBOOK §13.4.
 - **Standard mode is the installer's default; FIPS mode is an explicit choice.** A fresh install
   on a host without FIPS no longer stops in preflight. Choose FIPS mode with the answers key
   `fips: on`, the new interactive question or `install.sh --fips` (`--standard-mode` / `fips: off`

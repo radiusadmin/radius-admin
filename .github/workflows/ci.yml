@@ -164,6 +164,10 @@ jobs:
           cd "$REPO"
           sudo -E python3 tests/freeradius/run-tests.py --prefix /opt/fr-3.2.10 --bench /var/tmp/ra-bench \
               --eapol-test /opt/ci-src/eapol_test | tee "$LOGS/bench.log"
+      - name: New-server install (FreeRADIUS from scratch)
+        run: |
+          cd "$REPO"
+          sudo bash tests/installer/test_blank_server.sh /opt/fr-3.2.10 | tee "$LOGS/blank-server.log"
       - name: Migration test
         run: |
           cd "$REPO"
@@ -174,7 +178,7 @@ jobs:
         id: counts
         if: always()
         run: |
-          tools/ci/test-counts.py "$LOGS/app.log" "$LOGS/bench.log" "$LOGS/migration.log" | tee -a "$GITHUB_OUTPUT"
+          tools/ci/test-counts.py "$LOGS/app.log" "$LOGS/bench.log" "$LOGS/blank-server.log" "$LOGS/migration.log" | tee -a "$GITHUB_OUTPUT"
           tools/ci/test-counts.py "$LOGS/bench.log" | sed 's/^/bench_/' | tee -a "$GITHUB_OUTPUT"
       - name: Collect logs
         if: failure()

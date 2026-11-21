@@ -44,6 +44,8 @@ reset
 out=$(settings)
 has 'admin_net: 192.0.2.0/24 (default)' "$out" \
     && pass "nothing installed: the example default, marked as such" || fail "no live settings: $out"
+has 'ocsp_url: none (default)' "$out" \
+    && pass "nothing installed: no OCSP responder (not the example one)" || fail "ocsp default: $out"
 
 nginx_site 198.51.100.7 portal.example.net 198.51.100.0/24 "198.51.100.53 198.51.100.54" http://ocsp.example.net/ocsp
 out=$(settings)
