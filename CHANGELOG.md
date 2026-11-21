@@ -89,6 +89,22 @@ release, so previews sort after it.
   (`tools/release/prev-tag.sh`). `make-release.sh` refuses such a previous tag too.
 
 ### Fixed
+- **The bundled FreeRADIUS package did not install on a stock Ubuntu 24.04 server** (0.2.4 and
+  0.2.5 too): built on a CI runner that carries apt.postgresql.org, it required
+  `libpq5 (>= 18.7-1.pgdg24.04+2)`, and every other library at the runner's exact version. The
+  package now takes minimum versions from `dpkg-shlibdeps`, the build refuses a dependency the
+  distribution archive cannot meet, and CI builds against the distribution's libpq.
+- **An interactive install stopped at "Install with these settings?"** with
+  `confirm: command not found` and "aborted": every `install.sh` run without `-y` or an answers
+  file failed there (since the first release). It now asks and goes ahead on `y`.
+- **The suggested management subnet could be a /32 on the loopback interface** (on WSL, its DNS
+  stub address), and the portal address with it. The installer now suggests the address of the
+  interface that carries the default route, and never one on `lo`.
+- `install.sh --interactive --print-answers > site.yaml` wrote the questions' help lines and
+  warnings into the file, which `--answers` then refused ("expected 'key: value'"). They now go to
+  stderr; the output is the answers only.
+- README: how to download the release bundle and check its signature and checksum before
+  installing.
 - **A second factor approved after 30 seconds was rejected.** FreeRADIUS's stock
   `max_request_time` (30 s) cut the Duo proxy's and remote MFA servers' wait of up to 60 s, so a
   person who approved later got "the second-factor provider did not answer". The freeradius phase

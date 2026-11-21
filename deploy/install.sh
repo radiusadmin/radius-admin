@@ -73,6 +73,14 @@ OPT_OCSP_URL=${RA_OCSP_URL:-}   # set in the environment: wins over the installe
 # shellcheck source=answers.sh
 . "$HERE/answers.sh"
 
+# yes/no question (-y answers yes). Defined before the answers block below, which asks it.
+confirm() {
+    (( ASSUME_YES )) && return 0
+    local a
+    read -r -p "$1 [y/N] " a || true
+    [[ $a == y || $a == Y || $a == yes ]]
+}
+
 ALL_PHASES=(preflight packages nginx-update fr-package users postgres migrate freeradius app site nginx firewall bootstrap)
 PHASES=()
 FROM=""
@@ -183,9 +191,10 @@ if (( INTERACTIVE )) || [[ -n $ANSWERS ]]; then
     [[ -n $OPT_RESOLVER ]] && ANS[resolver]=$OPT_RESOLVER && SETTING_SRC[resolver]=option
     if [[ -n $SWITCH_NETS ]]; then ANS[switch_nets]=$SWITCH_NETS; fi
     ans_defaults
-    if (( INTERACTIVE )); then ans_interactive; fips_choice=${ANS[fips]}; fi
-    ans_validate
-    resolve_fips "$fips_choice" "$fips_src"
+    # questions, help lines, warnings: stderr. stdout carries only answers (--print-answers > file)
+    if (( INTERACTIVE )); then ans_interactive >&2; fips_choice=${ANS[fips]}; fi
+    ans_validate >&2
+    resolve_fips "$fips_choice" "$fips_src" >&2
     ANS[fips]=$FIPS_MODE   # site.yaml records the mode the server runs
     for k in server_name admin_net listen_ip resolver; do : "${SETTING_SRC[$k]:=answers}"; done
     RA_SERVER_NAME=${ANS[server_name]}; RA_ADMIN_NET=${ANS[admin_net]}
@@ -250,13 +259,6 @@ fi
 if [[ ${#PHASES[@]} -eq 0 ]]; then PHASES=("${ALL_PHASES[@]}"); fi
 for p in "${PHASES[@]}"; do valid_phase "$p" || die "unknown phase '$p' (valid: ${ALL_PHASES[*]})"; done
 want() { local p; for p in "${PHASES[@]}"; do [[ $p == "$1" ]] && return 0; done; return 1; }
-
-confirm() {
-    (( ASSUME_YES )) && return 0
-    local a
-    read -r -p "$1 [y/N] " a || true
-    [[ $a == y || $a == Y || $a == yes ]]
-}
 
 # install FILE with owner/mode only if content differs (prints what changed)
 put() { # put SRC DST OWNER:GROUP MODE

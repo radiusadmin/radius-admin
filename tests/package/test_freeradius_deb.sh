@@ -42,6 +42,11 @@ dep=$(field Depends)
 missing=""
 for d in libpq5 libssl3 libtalloc2 libldap; do grep -q "$d" <<<"$dep" || missing+=" $d"; done
 [[ -z $missing ]] && pass "depends on the distribution libraries" || fail "Depends lacks$missing: $dep"
+# installable on a stock server: every versioned dependency is in the distribution archive (CI
+# runners carry apt.postgresql.org; a "libpq5 (>= 18.7-1.pgdg...)" package did not install on Ubuntu)
+if out=$("$ROOT/tools/package/check-depends.sh" "$dep" 2>&1); then
+    pass "every dependency is installable from the distribution archive"
+else fail "Depends not installable from the distribution archive: $out"; fi
 dpkg-deb -c "$DEB" | awk '{print $6}' > "$W/files"
 grep -q '^\./etc/' "$W/files" && fail "package ships files in /etc: $(grep '^\./etc/' "$W/files" | head -3 | tr '\n' ' ')" \
     || pass "no files in /etc (the configuration is never package-owned)"
