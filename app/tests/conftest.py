@@ -343,7 +343,10 @@ def clean_db(superconn):
         cur.execute("DELETE FROM ui.tls_cert")
         cur.execute("INSERT INTO ui.setting (key, value) VALUES ('admin_subnet','192.0.2.0/24'),"
                     " ('admin_priv15','false'), ('custom_policy',''),"
-                    " ('banner_text','This system is for authorized use only. Testing banner text.')")
+                    " ('banner_text','This system is for authorized use only. Testing banner text.'),"
+                    # the licence question is answered, so admins are not sent to the prompt
+                    # (SPEC section 31; tests/test_licence.py clears it)
+                    " ('licence_case','free')")
     yield superconn
 
 

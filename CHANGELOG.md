@@ -14,6 +14,13 @@ release, so previews sort after it.
   your CA issues. Keys are stored encrypted. Changes are installed with Apply: the helper checks
   them again, restarts FreeRADIUS, tests and reloads the portal, and puts everything back if either
   does not come up with them. RUNBOOK §13.5.
+- **Licence page.** Settings → Licence records how a server is licensed under the Business Source
+  License 1.1 (free use for individuals and organizations with fewer than 50 people, or
+  commercial: a signed licence file, ECDSA P-384, checked offline, or a 60-day trial until it
+  arrives). Answering is the first setup step; admins are taken to it at sign-in
+  until it is answered, changes ask for confirmation and are listed on the page. Admins get one
+  dashboard line when something needs attention; after a trial ends, a banner on every admin page. Nothing is ever locked or limited and the server never contacts anyone. Every
+  page has a licence footer; the installer prints the notice and installs LICENSE and LICENSING.md.
 - **A second factor for device admin logins (Integrations).** A new Integrations page sets which
   device admin logins must be approved with a second factor: local or directory accounts, on all
   clients or selected ones, with exempt break-glass accounts. First provider: a remote RADIUS MFA

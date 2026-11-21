@@ -57,6 +57,10 @@
 #   --sqlite PATH           default /var/lib/freeradius/sqlite/freeradius.db
 #   --skip-preflight        do not abort on preflight failures (not recommended)
 #   -y, --yes               do not ask for confirmation
+#
+# Licence: source available under the Business Source License 1.1 (LICENSE, LICENSING.md).
+# Free for personal use and organizations with fewer than 50 people; larger organizations get
+# a 60-day trial, then need a commercial licence. Nothing is locked either way.
 set -euo pipefail
 umask 022
 export LC_ALL=C
@@ -1201,7 +1205,7 @@ phase_app() {
     detect_fr
     install_app_code || ok "application code unchanged"
     install -d -o root -g root -m 0755 "$OPT/docs"
-    for f in README.md docs/RUNBOOK.md docs/SECURITY.md; do
+    for f in README.md LICENSE LICENSING.md docs/RUNBOOK.md docs/SECURITY.md; do
         if [[ -f $SRC/$f ]]; then install -m 0644 "$SRC/$f" "$OPT/docs/$(basename "$f")"; fi
     done
     install_app_config
@@ -1571,4 +1575,7 @@ for p in "${ALL_PHASES[@]}"; do
 done
 hdr "Done"
 if (( WARNINGS > 0 )); then say "  $WARNINGS warning(s) above -- review them."; fi
+say "  radius-admin is source available under the Business Source License 1.1 ($OPT/docs/LICENSING.md)."
+say "  Free for personal use and organizations with fewer than 50 people; record your case under"
+say "  Settings -> Licence. Nothing is locked either way."
 exit 0

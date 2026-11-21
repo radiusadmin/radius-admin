@@ -1847,3 +1847,67 @@ helper.conf: `portal_tls_dir` (`/etc/radius-admin/tls`), `nginx` (`/usr/sbin/ngi
 The installer does not change portal-managed files: `freeradius` carries over the live EAP
 certificate paths and OCSP (section 14) and never writes `certs/site`; `site` keeps an existing
 portal certificate except with `tls: existing`, which installs the files the answers name.
+
+## 31. Change (2026-11-20): licence notice, Licence page and signed licence files
+
+radius-admin is source available under the Business Source License 1.1 (LICENSE, LICENSING.md).
+Enforcement is legal, not technical: nothing in this section may lock or limit a feature, make
+anything read-only, slow anything down, affect RADIUS, or contact a server.
+
+- **Notice.** Every signed-in page ends with a footer for every role: "Source available under the
+  Business Source License 1.1. Free for personal use and organizations with fewer than 50 people."
+  with a link to the licensing section of the project site. The installer prints the same at the
+  end and in `--help`, and installs `LICENSE` and `LICENSING.md` into `/opt/radius-admin/docs/`.
+- **Required first setup step.** The first required setup-checklist step (`licence`, not
+  skippable) is answering the licence question. While `licence_case` is unset, every GET of a page
+  by a fully signed-in admin (MFA done, no forced password change) redirects to `/settings/licence`,
+  except the `licence.`, `auth.`, `account.` and `sso.` pages and static files. POSTs, operators,
+  viewers and RADIUS are never affected; an upgraded installation sees the prompt once. If the check
+  itself fails, nobody is redirected.
+- **Licence page** (Settings → Licence, `/settings/licence`, admin + step-up; `licence` blueprint).
+  One drop-down with two choices, the same at setup and later: free use (`free`: personal, or an
+  organization with fewer than 50 people) or commercial (an organization with 50 or more people).
+  Commercial reveals the licence file fields (upload or paste) and, while no licence file is
+  installed and no trial is running, a "Start the 60-day trial" button (`op=trial`). Saving
+  Commercial needs a valid file, either the one given or the one already installed, unless a trial
+  is running (it then continues); the stored case is the file's type, `commercial` or
+  `exception` (written exceptions are issued as licence files), or `trial`. There is no
+  grace-period choice and no headcount field: the 90-day grace period is in the licence and the
+  commercial agreement, the tier is in the licence file. The first day of the trial is recorded
+  the first time it is chosen (`licence_trial_started`) and never changes: switching away and back
+  continues the same trial, and an ended trial cannot be started again.
+- **Changing the answer.** Moving from one recorded case to free use or the trial first shows a
+  confirmation page with the licence definitions (free use, headcount incl. contractors and
+  affiliates, highest in the previous 12 months, the trial) and a required acknowledgement tick;
+  installing a valid licence file needs no extra confirmation. Choosing the case already recorded
+  is not audited again. The page lists the last 20 answers (time, admin, from, to) from the audit
+  log. The licence file can be removed.
+- **Storage.** Rows in `ui.setting` (no migration): `licence_case`, `licence_trial_started`,
+  `licence_file` (the file's text), `licence_declared_by`, `licence_declared_at` (ISO date),
+  `licence_notice_snoozed` (`<notice key>|<ISO date>`).
+- **Licence file** (JSON, at most 16 KiB): `{"format": 1, "key_id", "payload", "signature"}`.
+  `signature` is base64 of the DER ECDSA P-384 / SHA-384 signature of `canonical(payload)` =
+  `json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)` in ASCII.
+  `key_id` = first 16 hex digits of SHA-256 of the public key's SubjectPublicKeyInfo DER; the app
+  accepts the P-384 keys in `app/radius_admin/licence_keys/*.pem` (several allowed, for rotation;
+  other key types are ignored). Payload: `product` = `radius-admin`, `licence_id`
+  (`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`, issued as `RA-<year>-<nnnn>`), `type` (`commercial` |
+  `exception`), `licensee` (1–200), `tier` (≤ 64), `scope` (≤ 300), `notes` (≤ 1000), `issued`,
+  `starts`, `expires` (ISO dates; `expires` may be null for an exception). The signature is checked
+  before any payload field is used. Verification is offline; there is no revocation list.
+- **Status and reminders** (`licence.status`, dates in UTC), admins only. Dashboard line with
+  "Hide for 30 days" (`POST /licence/notice/hide`, hides that reminder only): the trial from day 45
+  to day 60; a commercial licence or exception without a valid file; a licence file from 30 days
+  before its expiry until 30 days after. After the trial ends: a banner on every admin page, "Trial
+  ended on … Upload a licence on the Licence page", which cannot be hidden and stays until the
+  answer changes or a licence is installed. The Licence page always shows the full status.
+  Operators and viewers see the footer only.
+- **Audit.** `licence.declare` (`case`, `from`, `period_started`, `acknowledged`), `licence.file_upload` (success:
+  `licence_id`, `type`, `licensee`, `expires`, `replaced`; failure: `error`), `licence.file_remove`,
+  `licence.notice_hide` (`notice`).
+- **Issuing** (`tools/licence/licence-tool.py`, maintainer's machine only): `keygen`, `issue`,
+  `verify`, `list`, and `serve`, a page on 127.0.0.1 (default port 8766) to issue, download, renew
+  and mark licences revoked. The page needs the one-time token printed at start (then an HttpOnly,
+  SameSite=Strict cookie), a form token on every POST and a same-host Origin; CSP `default-src
+  'none'`. Its home (`/root/.config/radius-admin/licence-signing`, `LICENCE_HOME`) holds the
+  private key (0600), `register.json` and `issued/<id>.json`, never the repository.

@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block title %}Confirm licence change{% endblock %}
+{% block content %}
+<header class="page-head"><div><h1>Change how this server is licensed</h1>
+<p class="lede">From <strong>{{ old or 'Not answered' }}</strong> to <strong>{{ new }}</strong>. Nothing is locked or changed on the network by this answer; it is recorded in the audit log and the history on the Licence page.</p></div></header>
+{% for e in errors %}<p class="flash flash-error" role="alert">{{ e }}</p>{% endfor %}
+<section class="panel narrow" aria-labelledby="lic-defs">
+  <h2 id="lic-defs">The licence definitions</h2>
+  <ul class="licence-help">
+    <li><strong>Free use</strong> covers individuals (home networks, home labs, learning) and organizations with fewer than 50 people.</li>
+    <li><strong>Headcount</strong> counts every employee and individual contractor, full-time or part-time, across the whole group (parent, subsidiaries and sister companies under common control), using the highest number in the previous 12 months.</li>
+    <li><strong>Organizations with 50 or more people</strong> may use radius-admin in production for {{ periods.trial[0] }} days (commercial trial; the start date never resets), then need a commercial licence.</li>
+    <li>Testing, evaluation and labs that nothing depends on are always free.</li>
+  </ul>
+  <p class="small">Full terms: <a href="{{ licensing_url }}" rel="noopener">Licensing</a>.</p>
+  <form method="post" class="stack" action="{{ url_for('licence.index') }}">
+    {{ m.csrf() }}
+    <input type="hidden" name="action" value="save">
+    <input type="hidden" name="choice" value="{{ choice }}">
+    {% if op %}<input type="hidden" name="op" value="{{ op }}">{% endif %}
+    <input type="hidden" name="confirmed" value="1">
+    <label class="check"><input type="checkbox" name="acknowledge" value="1" required> I have read the definitions above and confirm that “{{ new }}” applies to this organization.</label>
+    <div class="actions">
+      <button type="submit" class="btn btn-primary">Confirm change</button>
+      <a class="btn btn-quiet" href="{{ url_for('licence.index') }}">Cancel</a>
+    </div>
+  </form>
+</section>
+{% endblock %}

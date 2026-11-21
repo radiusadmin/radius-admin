@@ -74,3 +74,16 @@ def test_every_dark_rule_has_an_explicit_twin(app):
     assert os_dark, "no OS dark rules found"
     for sel, body in os_dark:
         assert explicit.get(norm(sel)) == norm(body), "missing or different dark twin for %r" % sel
+
+
+def test_file_uploads_are_styled_as_buttons():
+    """Every <input type=file> shows a .btn-like button, not the browser's default control,
+    and the dark theme does not draw an input box around it."""
+    import os
+    import radius_admin
+    css = open(os.path.join(os.path.dirname(radius_admin.__file__), "static", "app.css")).read()
+    assert "input[type=file]::file-selector-button {" in css
+    assert "input[type=file] { padding: 0; border: 0; background: transparent;" in css
+    for line in css.splitlines():
+        if "background: #0f161d" in line and "input:not(" in line:
+            assert ":not([type=file])" in line, line

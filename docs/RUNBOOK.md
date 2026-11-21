@@ -1584,3 +1584,34 @@ which keeps an existing certificate) once the console manages the portal certifi
 Troubleshooting: "the private key does not belong to the certificate" (wrong key file, or for an
 issued certificate: the CA signed another request); "does not name …" (add the name as a DNS
 subject alternative name); "key type … is not allowed" (re-issue with RSA 3072+ or ECDSA).
+
+### 13.6 Licence
+
+radius-admin is source available under the Business Source License 1.1; see LICENSING.md. Nothing
+is locked whatever you record.
+
+1. Settings → **Licence**: choose free use (personal, or fewer than 50 people) or commercial. For
+   commercial, install the licence file, or, without one yet, press "Start the 60-day trial". This
+   is the first setup step: an admin is taken to this
+   page at sign-in until it is answered (operators, viewers and RADIUS are never affected). The
+   60-day trial starts the first time you choose it and does not restart. Changing the answer later
+   asks you to confirm the licence definitions; earlier answers are listed on the page.
+2. A commercial licence or written exception is a `.json` licence file (upload or paste). It is checked on the server against the project's public key. A renewed
+   licence is installed the same way.
+3. Admins see one line on the dashboard when something needs attention (a trial ending, a licence
+   expiring); "Hide for 30 days" hides that line. After a trial ends, a banner on every admin page
+   says so until a licence is installed or the answer changes. Changes are in the Audit log
+   (`licence.*`).
+
+**Issuing licences (maintainer).** On the machine that holds the signing key, as root:
+
+    tools/licence/licence-tool.py serve          # prints http://localhost:8766/?token=…
+    tools/licence/licence-tool.py issue --licensee "Example Corp" --tier 50-249
+    tools/licence/licence-tool.py list
+
+Files: `/root/.config/radius-admin/licence-signing/` (`signing-key.pem` 0600, `public.pem`,
+`register.json`, `issued/`). Back up the whole directory offline after issuing. Revoking only marks
+the register: a server keeps a revoked file valid until it expires, so issue revocable deals with
+short terms. To rotate the key: move the old directory aside, `keygen`, copy `public.pem` to
+`app/radius_admin/licence_keys/<key id>.pem` in the next release, keep the old public key there
+until the licences it signed have expired (remove it at once if it was exposed).

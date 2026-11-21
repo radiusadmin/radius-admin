@@ -1,6 +1,6 @@
 from flask import Blueprint, render_template
 
-from .. import db, helper_client
+from .. import db, helper_client, licence
 from ..security import cfg, has_role, login_required
 from ..alerts import LABELS
 from ..insight import clean_reason
@@ -43,5 +43,12 @@ def index():
                                " ORDER BY opened_at DESC LIMIT 10")
     from .setup import summary
     setup = summary() if has_role("admin") else None
+    licence_notice = ("", "")
+    if has_role("admin"):
+        try:   # a reminder only; never break the dashboard over it
+            licence_notice = licence.dashboard_notice(licence.today())
+        except Exception:
+            licence_notice = ("", "")
     return render_template("dashboard.html", status=status, counts=counts, rejects=rejects,
-                           state=pending_state(), ops=ops, open_alerts=open_alerts, labels=LABELS, setup=setup)
+                           state=pending_state(), ops=ops, open_alerts=open_alerts, labels=LABELS, setup=setup,
+                           licence_notice=licence_notice)
