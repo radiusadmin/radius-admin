@@ -80,6 +80,13 @@ release, so previews sort after it.
   `LICENSING.md`, which also lists the commercial licence prices. Contributor License
   Agreement version 1.1 (section 4).
 
+### Fixed
+- **A second factor approved after 30 seconds was rejected.** FreeRADIUS's stock
+  `max_request_time` (30 s) cut the Duo proxy's and remote MFA servers' wait of up to 60 s, so a
+  person who approved later got "the second-factor provider did not answer". The freeradius phase
+  now raises `max_request_time` in `radiusd.conf` to 90 s (a higher value is kept) and preflight
+  warns when it is lower.
+
 ## 0.2.5 - 2026-11-20
 
 ### Added

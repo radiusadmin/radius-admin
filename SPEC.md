@@ -1458,6 +1458,11 @@ meta refresh stays only inside `<noscript>`, so every page still works without J
 
 ## 29. Change (2026-11-20): second-factor providers for device admin logins
 
+The installer's freeradius phase keeps `max_request_time` in `radiusd.conf` at 90 s or more
+(`RA_FR_MAX_REQUEST_TIME`; a higher live value is kept): FreeRADIUS cuts every home server's
+`response_window` to it, and the providers below wait up to 60 s. Preflight warns when it is
+lower.
+
 First step of the MFA integrations: the FreeRADIUS chain, a remote RADIUS MFA server configured in
 the portal, and the live rules. Installing the Duo Authentication Proxy from the portal, its
 configuration file and the signed integrations catalog follow in later steps; the Duo chain is

@@ -16,9 +16,9 @@ remote: a remote RADIUS MFA server: checks the password itself (--password), ask
         forged Class) that FreeRADIUS must not pass on to the device.
 
 The second factor's answer comes from the JSON file --decisions, re-read for every
-request: {"<user name>": "allow" | "deny" | "silent" | "noclass" | "slow"}; a missing name
+request: {"<user name>": "allow" | "deny" | "silent" | "noclass" | "slow" | "slow40"}; a missing name
 means "allow". silent = never answer; noclass = approve but drop the Class (duo);
-slow = approve after 3 seconds. Every second-factor prompt is appended to --log as
+slow = approve after 3 seconds, slow40 after 40 seconds. Every second-factor prompt is appended to --log as
 "<user name> <decision>", so the bench can count prompts. Duplicate requests (same source,
 identifier and authenticator, RFC 5080 section 2.2.2) get the cached answer and no new prompt.
 """
@@ -198,6 +198,8 @@ class Fake:
             return ACCESS_REJECT, [(REPLY_MESSAGE, b"Second factor denied")]
         if d == "slow":
             time.sleep(3)
+        elif d == "slow40":
+            time.sleep(40)
         if d == "noclass":
             accept_attrs = [x for x in accept_attrs if x[0] != CLASS]
         return ACCESS_ACCEPT, accept_attrs

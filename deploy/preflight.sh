@@ -173,6 +173,10 @@ if [[ -d $RA_RADDB ]]; then
     if grep -Eq '^\s*ldap_debug\s*=\s*0x[0-9a-fA-F]*[1-9a-fA-F]' "$RA_RADDB/mods-available/ldap" 2>/dev/null; then
         warn "ldap_debug is enabled in mods-available/ldap (set to 0x0000 by the installer)"
     fi
+    MRT=$(fr_max_request_time "$RA_RADDB/radiusd.conf")
+    if [[ -n $MRT ]] && (( MRT < RA_FR_MAX_REQUEST_TIME )); then
+        warn "max_request_time = $MRT in radiusd.conf cuts second-factor waits to $MRT s (the freeradius phase raises it to $RA_FR_MAX_REQUEST_TIME)"
+    fi
 fi
 
 hdr "SQLite database"
