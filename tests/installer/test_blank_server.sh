@@ -4,7 +4,7 @@
 # settings an existing server carries over (directory, EAP certificates, localhost secret, OCSP),
 # and later updates must keep that state. Sandbox only, as root (needs the freerad group).
 #
-#   tests/installer/test_blank_server.sh [FR_PREFIX]
+#   tests/installer/test_blank_server.sh [FR_PREFIX [EAPOL_TEST]]
 #
 # With a FreeRADIUS build (FR_PREFIX, else $RADIUS_ADMIN_TEST_FR_PREFIX) the staged files are
 # installed into a copy of its stock raddb with install.sh's own functions, checked with
@@ -15,6 +15,7 @@ umask 022
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 INSTALL=$ROOT/deploy/install.sh
 FR_PREFIX=${1:-${RADIUS_ADMIN_TEST_FR_PREFIX:-}}
+EAPOL_TEST=${2:-${EAPOL_TEST:-}}
 [[ $EUID -eq 0 ]] || { echo "run as root (sandbox)"; exit 2; }
 getent group freerad >/dev/null || { echo "no freerad group (sandbox prerequisites: tests/freeradius/README.md)"; exit 2; }
 W=$(mktemp -d)
@@ -180,7 +181,19 @@ else
         && pass "staged files prepared for the stock raddb" || fail "staging for the stock raddb"
     mkdir -p "$W/work/policy.d"
     PYTHONDONTWRITEBYTECODE=1 python3 "$ROOT/tests/freeradius/render.py" "$W/work/policy.d/radius-admin" "$W/work/radius-admin-clients.conf" >/dev/null
-    eap_certs self-signed "" "" "" radius.example.net >/dev/null 2>&1
+    # the site's own certificates (eap_tls: existing), from a test CA that also issues a client
+    P=$W/pki; mkdir -p "$P"
+    openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-384 -nodes -days 30 -subj "/CN=Example Test CA" \
+        -addext "basicConstraints=critical,CA:TRUE" -keyout "$P/ca.key" -out "$P/ca.pem" >/dev/null 2>&1
+    for n in radius.example.net:serverAuth pc01.example.net:clientAuth; do
+        printf 'basicConstraints=CA:FALSE\nextendedKeyUsage=%s\nsubjectAltName=DNS:%s\n' "${n#*:}" "${n%%:*}" > "$P/ext"
+        openssl req -new -newkey ec -pkeyopt ec_paramgen_curve:P-384 -nodes -subj "/CN=${n%%:*}" \
+            -keyout "$P/${n%%:*}.key" -out "$P/req.csr" >/dev/null 2>&1
+        openssl x509 -req -in "$P/req.csr" -CA "$P/ca.pem" -CAkey "$P/ca.key" -set_serial "0x$(openssl rand -hex 8)" \
+            -days 30 -sha384 -extfile "$P/ext" -out "$P/${n%%:*}.pem" >/dev/null 2>&1
+    done
+    eap_certs existing "$P/radius.example.net.pem" "$P/radius.example.net.key" "$P/ca.pem" radius.example.net >/dev/null 2>&1 \
+        && pass "the site's EAP certificates installed (eap_tls: existing)" || fail "eap_certs existing on the stock raddb"
     fr_install_staged "$W/work" >/dev/null
     # production absolute paths -> this copy (test-only substitution, as the bench does)
     sed -i "s|/etc/freeradius/certs/site/|$R/certs/site/|g" "$R/mods-available/eap" "$R/radius-admin-clients.conf"
@@ -215,6 +228,25 @@ PY
               | timeout 20 "$FR_PREFIX/bin/radclient" -r 1 -t 10 -x 127.0.0.1:1812 auth "$sec" 2>&1)
         [[ $out == *"Access-Reject"* ]] && pass "answers on the new localhost secret (unknown user rejected)" \
             || fail "radclient: $(tail -n 5 <<<"$out")"
+        # without a directory, 802.1X still starts: EAP-Response/Identity "host/pc01" gets the EAP-TLS
+        # challenge, not a reject from the ldap module in authorize
+        out=$(printf 'User-Name = "host/pc01"\nEAP-Message = 0x0201000e01686f73742f70633031\nMessage-Authenticator = 0x00\n' \
+              | timeout 20 "$FR_PREFIX/bin/radclient" -r 1 -t 10 -x 127.0.0.1:1812 auth "$sec" 2>&1)
+        [[ $out == *"Access-Challenge"* ]] && pass "EAP starts without a directory (Access-Challenge)" \
+            || fail "EAP without a directory: $(grep -E 'Received|Reject|Challenge' <<<"$out" | head -3)"
+        # a whole EAP-TLS handshake: from the second round on authorize reaches the ldap module,
+        # which must not end it while no directory is configured; the policy rejects afterwards
+        if [[ -x $EAPOL_TEST ]]; then
+            printf 'network={\n key_mgmt=IEEE8021X\n eapol_flags=0\n eap=TLS\n identity="host/pc01.example.net"\n ca_cert="%s"\n domain_match="radius.example.net"\n client_cert="%s"\n private_key="%s"\n}\n' \
+                "$P/ca.pem" "$P/pc01.example.net.pem" "$P/pc01.example.net.key" > "$W/tls.conf"
+            out=$(timeout 30 "$EAPOL_TEST" -c "$W/tls.conf" -a 127.0.0.1 -s "$sec" -t 15 2>&1)
+            if grep -q 'remote certificate verification (param=success)' <<<"$out" \
+                && grep -q 'EAP-TLS: Done' <<<"$out" && grep -q 'code=3 (Access-Reject)' <<<"$out"; then
+                pass "EAP-TLS handshake completes without a directory (then rejected by the policy: no directory groups)"
+            else fail "EAP-TLS without a directory: $(grep -E 'verification|EAP-TLS|EAP-FAILURE|Access-' <<<"$out" | sort -u | head -6)"; fi
+        else
+            echo "SKIP: no eapol_test (pass EAPOL_TEST): EAP-TLS handshake not run"
+        fi
     else
         fail "radiusd did not start: $(grep -iE 'error|fail' "$W/radiusd.log" | tail -n 8)"
     fi

@@ -196,6 +196,8 @@ if isinstance(p, int) and p > 0:
 print("  [INFO] radcheck attributes: %s" % ", ".join(
     "%s x%d" % r for r in db.execute("SELECT attribute, count(*) FROM radcheck GROUP BY 1")))
 PY
+elif [[ ! -e $RA_SQLITE_DB && ! -e $RA_RADDB/policy.d/radius-admin ]]; then
+    info "no SQLite database: nothing to migrate (a new server)"
 else
     warn "SQLite DB $RA_SQLITE_DB not readable (migration needs it)"
 fi

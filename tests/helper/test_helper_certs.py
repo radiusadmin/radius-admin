@@ -49,6 +49,12 @@ esac
 exit 1
 """
 
+FAKE_SYSTEMD_RUN = r"""#!/bin/sh
+echo "systemd-run $*" >> "__ROOT__/systemd-run.log"
+while [ $# -gt 0 ]; do case "$1" in --*) shift;; *) break;; esac; done
+exec "$@"
+"""
+
 FAKE_NGINX = r"""#!/bin/sh
 echo "nginx $*" >> "__ROOT__/nginx.log"
 if [ -e "__ROOT__/failnginx" ]; then echo "nginx: [emerg] SSL_CTX_use_PrivateKey failed"; exit 1; fi
@@ -107,7 +113,8 @@ class Pki:
 def cenv(env):  # noqa: F811
     root = env.root
     bindir = os.path.join(root, "bin")
-    for name, text in (("radiusd", FAKE_RADIUSD_CERTS), ("systemctl", FAKE_SYSTEMCTL_CERTS), ("nginx", FAKE_NGINX)):
+    for name, text in (("radiusd", FAKE_RADIUSD_CERTS), ("systemctl", FAKE_SYSTEMCTL_CERTS), ("nginx", FAKE_NGINX),
+                       ("systemd-run", FAKE_SYSTEMD_RUN)):
         _write(os.path.join(bindir, name), text.replace("__ROOT__", root).replace("__RADDB__", env.raddb))
     eap = os.path.join(env.raddb, "mods-available", "eap")
     _write(eap, OCSP_EAP.replace("__RADDB__", env.raddb), 0o640)
@@ -117,7 +124,8 @@ def cenv(env):  # noqa: F811
     os.makedirs(os.path.join(root, "sites-enabled"))
     env.site = os.path.join(root, "sites-enabled", "radius-admin")
     with open(env.conf, "a") as fh:
-        fh.write("nginx = %s/nginx\nportal_tls_dir = %s\nportal_verify_tls = false\n" % (bindir, env.tls))
+        fh.write("nginx = %s/nginx\nsystemd_run = %s/systemd-run\nportal_tls_dir = %s\nportal_verify_tls = false\n"
+                 % (bindir, bindir, env.tls))
     env.pki = Pki(os.path.join(root, "pki"))
     env.stage()
     return env
@@ -269,6 +277,8 @@ def test_portal_certificate_applied_with_nginx_reload(cenv):
     assert os.stat(os.path.join(cenv.tls, "server.key")).st_mode & 0o777 == 0o600
     assert os.stat(os.path.join(cenv.tls, "server.crt")).st_mode & 0o777 == 0o644
     assert "nginx -t" in read(os.path.join(cenv.root, "nginx.log"))
+    # nginx -t runs outside the helper's sandbox, as a transient unit
+    assert "--wait --pipe" in read(os.path.join(cenv.root, "systemd-run.log"))
     assert "systemctl reload nginx.service" in read(os.path.join(cenv.root, "systemctl.log"))
     st = cenv.call({"action": "cert_status"})
     assert st["portal_configured"] and st["portal_server_name"] == "radius.example.net"

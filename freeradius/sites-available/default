@@ -529,7 +529,13 @@ authorize {
 
 	#
 	#  The ldap module reads passwords from the LDAP database.
-	-ldap
+	#  radius-admin: a directory that cannot be reached (or none configured
+	#  yet, RUNBOOK 13.4) does not end authorize here: local accounts and MAB
+	#  do not need it, and the policy's own lookups (EAP-TLS groups, directory
+	#  device admins) still reject when the directory does not answer.
+	ldap {
+		fail = 1
+	}
 
 	#
 	#  radius-admin: a device admin login (switch, access point, firewall)

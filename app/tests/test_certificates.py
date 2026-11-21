@@ -245,3 +245,24 @@ def test_installed_certificates_shown(app, browser, superconn, logged_in):
     t = browser.text(browser.get("/certificates/"))
     assert "CN=radius-admin EAP CA radius.example.net" in t and "2026-11-25" in t and "ECDSA P-384" in t
     assert "made by the installer: replace it" in t and "expires in 4 days" in t
+
+
+def test_rollback_before_portal_managed_certs_drops_applied_copy(app, browser, superconn, admin, pki):
+    """A rollback that puts back certificate files from before the portal managed them leaves no
+    applied certificates copy, so the next Apply shows (and installs) them all again."""
+    k = ec.generate_private_key(ec.SECP384R1())
+    upload(browser, "eap_server", files(cert_file=pem(pki.issue(k.public_key())), key_file=key_pem(k)))
+    r = browser.post("/apply/apply", {}, csrf_page="/apply/")
+    assert r.status_code == 200
+    from radius_admin import services
+    with app.app_context():
+        app.config["RA"]  # noqa
+        assert "certificates" in services.read_applied(app.config["RA"]["staging_dir"])["providers"]
+    bid = app.fake_helper.backups[-1]
+    app.fake_helper.fail_next["rollback"] = {"ok": True, "message": "rolled back", "backup_id": "20261023T999999Z",
+                                            "certificates_changed": ["eap_cert", "eap_key"]}
+    r = browser.post("/apply/rollback", {"backup_id": bid}, csrf_page="/apply/")
+    assert r.status_code == 200
+    assert "certificates" not in services.read_applied(app.config["RA"]["staging_dir"])["providers"]
+    t = browser.text(browser.get("/apply/"))
+    assert "@@ -0,0" in t and "[802.1X server certificate]" in t

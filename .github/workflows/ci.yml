@@ -167,7 +167,7 @@ jobs:
       - name: New-server install (FreeRADIUS from scratch)
         run: |
           cd "$REPO"
-          sudo bash tests/installer/test_blank_server.sh /opt/fr-3.2.10 | tee "$LOGS/blank-server.log"
+          sudo bash tests/installer/test_blank_server.sh /opt/fr-3.2.10 /opt/ci-src/eapol_test | tee "$LOGS/blank-server.log"
       - name: Migration test
         run: |
           cd "$REPO"

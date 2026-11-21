@@ -105,6 +105,7 @@ CONFIG_DEFAULTS = {
     # check and reload, and whether the reloaded portal must be seen serving the new certificate
     "portal_tls_dir": "/etc/radius-admin/tls",
     "nginx": "/usr/sbin/nginx",
+    "systemd_run": "/usr/bin/systemd-run",
     "portal_verify_tls": "true",
     "restart_wait": "15",
     "restart_timeout": "20",
@@ -182,7 +183,7 @@ def load_config(path):
     for key in ("radiusd", "raddb", "staging_dir", "work_dir", "systemctl", "runuser",
                 "ss", "fips_file", "update_dir", "update_pubkey", "openssl", "build_file", "portal_site",
                 "update_log_dir", "integration_dir", "integration_catalog", "integration_log_dir", "duo_dir",
-                "portal_tls_dir", "nginx"):
+                "portal_tls_dir", "nginx", "systemd_run"):
         cfg[key] = _abs(cfg, key)
     if not re.match(r"^[A-Za-z0-9@_.:-]{1,128}$", cfg["service"]):
         raise HelperError("helper.conf: invalid service name")
@@ -1556,7 +1557,10 @@ def overlay_certs(rd, cfg, files):
 
 def portal_reload_and_check(cfg, cert_pem):
     """nginx -t, reload, then the portal must listen and (portal_verify_tls) serve cert_pem."""
-    rc, out = run([cfg["nginx"], "-t", "-q", "-e", "stderr"], 30)
+    # nginx -t binds the listen sockets and opens its logs and pid file, which this unit's sandbox
+    # does not allow: it runs as a transient unit of its own (the helper restarts services anyway)
+    rc, out = run([cfg["systemd_run"], "--quiet", "--wait", "--pipe", "--collect", "--service-type=oneshot",
+                   cfg["nginx"], "-t", "-q"], 40)
     if rc != 0:
         return False, "nginx -t failed: %s" % tail(out, 3)
     rc, out = run([cfg["systemctl"], "reload", cfg["portal_service"]], 30)

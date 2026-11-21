@@ -202,7 +202,8 @@ def rollback():
     new_bid = resp.get("backup_id")
     new_bid = new_bid if isinstance(new_bid, str) and BACKUP_RE.match(new_bid) and new_bid != backup_id else None
     if ok:
-        restored = restore_applied_from_history(backup_id, new_backup_id=new_bid)
+        restored = restore_applied_from_history(backup_id, new_backup_id=new_bid,
+                                                certs_restored=bool(resp.get("certificates_changed")))
         if restored and not (hp and hc):
             hp, hc = sha256_hex(restored[0]), sha256_hex(restored[1])
     msg = (resp.get("message") or "") + ("; previous files saved as backup %s" % new_bid if new_bid else "")

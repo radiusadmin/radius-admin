@@ -1825,7 +1825,9 @@ in its `mods-available/eap` and clients file point at the copy (always, so `radi
 copy's certificates). `apply`: the backup also holds the certificate files the apply replaces
 (`meta.json` `certs`, absent file = removed on restore); FreeRADIUS files installed root:freerad
 0640 (`eap_conf` keeps its owner and mode), restart; then the portal files (server.crt 0644,
-server.key 0600, client-ca.pem 0644, root), `nginx -t -q -e stderr`, `systemctl reload
+server.key 0600, client-ca.pem 0644, root), `nginx -t -q` (as a transient unit,
+`systemd-run --wait --pipe`: it binds the listen sockets and opens nginx's logs, which the helper's
+sandbox does not allow), `systemctl reload
 <portal_service>`, wait ≤ 15 s for the portal to listen and, with `portal_verify_tls` (default true),
 for `openssl s_client` to see the new certificate's SHA-256. Any failure restores every file this
 apply changed (FreeRADIUS restarted, nginx reloaded) and answers `rolled_back`. `rollback` puts back
@@ -1833,7 +1835,8 @@ the certificate files its backup holds. Answers carry `certificates_sha256` and
 `certificates_changed` (file names). New read-only action `cert_status` → `{eap_server, client_ca,
 portal_server: [ {subject, issuer, not_before, not_after, sha256, san, key, ca, expired} ] | null,
 eap_ocsp: {enable, url} | null, portal_configured, portal_server_name}` (no key material).
-helper.conf: `portal_tls_dir` (`/etc/radius-admin/tls`), `nginx` (`/usr/sbin/nginx`),
+helper.conf: `portal_tls_dir` (`/etc/radius-admin/tls`), `nginx` (`/usr/sbin/nginx`), `systemd_run`
+(`/usr/bin/systemd-run`),
 `portal_verify_tls` (`true`). The helper unit may write `/etc/radius-admin/tls`.
 
 The installer does not change portal-managed files: `freeradius` carries over the live EAP

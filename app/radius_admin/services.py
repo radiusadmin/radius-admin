@@ -420,7 +420,7 @@ def save_applied(policy, clients, base=None, backup_id=None, providers=None):
         _put_provider_files(d, providers)
 
 
-def restore_applied_from_history(backup_id, base=None, new_backup_id=None):
+def restore_applied_from_history(backup_id, base=None, new_backup_id=None, certs_restored=False):
     """After a successful rollback: the archived copy becomes the applied copy.
     Returns (policy, clients) or None when no archived copy exists (then the
     applied copy is removed because it no longer reflects what is live)."""
@@ -441,7 +441,8 @@ def restore_applied_from_history(backup_id, base=None, new_backup_id=None):
         with open(os.path.join(h, "clients"), encoding="utf-8") as fh:
             clients = fh.read()
     except OSError:
-        for name in ("policy", "clients"):
+        names = ("policy", "clients") + (("certificates",) if certs_restored else ())
+        for name in names:
             try:
                 os.unlink(os.path.join(d, name))
             except OSError:
@@ -452,8 +453,11 @@ def restore_applied_from_history(backup_id, base=None, new_backup_id=None):
     # The helper does not put Duo's own sample back on a rollback (SPEC section 29.2): an
     # archived set without a Duo file leaves the applied Duo copy as it is.
     old = _get_provider_files(h)
-    if old:
-        _put_provider_files(d, dict(_get_provider_files(d), **old))
+    cur = _get_provider_files(d)
+    if certs_restored and "certificates" not in old:
+        # the helper put back certificate files from before the portal managed them (SPEC 30)
+        cur.pop("certificates", None)
+    _put_provider_files(d, dict(cur, **old))
     return policy, clients
 
 
