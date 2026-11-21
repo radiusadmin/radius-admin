@@ -145,6 +145,20 @@ while [[ $# -gt 0 ]]; do
 done
 require_root
 
+# A first install that stopped before the site phase saved its answers: on a terminal, ask the
+# set-up questions even when options were given (--skip-preflight, -y, --phase …). Only when the
+# phases need answers, nothing records them yet (site.yaml, the portal's nginx site) and none
+# were given; updates and scripts have no terminal and are never asked.
+_needs_answers=0
+if [[ ${#PHASES[@]} -eq 0 ]] || (( PRINT_ANSWERS )); then _needs_answers=1; fi
+for _p in "${PHASES[@]}"; do
+    case $_p in site|nginx|firewall|freeradius|bootstrap) _needs_answers=1 ;; esac
+done
+if (( ! INTERACTIVE && _needs_answers && ! PRINT_SETTINGS )) && [[ -z $ANSWERS && -t 0 ]] \
+    && [[ ! -e $RA_SITE_YAML && ! -e $RA_NGINX_SITE ]]; then
+    INTERACTIVE=1
+fi
+
 # Where each portal setting comes from: option, answers, site.yaml, nginx site, firewall
 # table or (nothing known) default. nginx and firewall refuse a default management subnet.
 declare -A SETTING_SRC=()
@@ -509,10 +523,25 @@ if new != open(path).read():
 PY
 }
 
+# pg_port_check CONFDIR : radius-admin connects on the default socket (.s.PGSQL.5432). A cluster
+# created while something else held TCP 5432 (another PostgreSQL; on WSL another distribution)
+# gets 5433 from postgresql-common, and nothing would connect to it.
+pg_port_check() {
+    local port; port=$(pg_cluster_port "$1")
+    [[ $port == 5432 ]] || die "PostgreSQL cluster $RA_PG_VERSION/$RA_PG_CLUSTER is set to port $port; radius-admin needs 5432 (postgresql-common picks another port when 5432 was in use while the cluster was created). radius-admin uses the Unix socket only (listen_addresses = ''), so set it back and re-run: sudo pg_conftool $RA_PG_VERSION $RA_PG_CLUSTER set port 5432 && sudo systemctl restart postgresql@$RA_PG_VERSION-$RA_PG_CLUSTER"
+}
+
+# pg_log_tail : the last lines of the cluster's log, for an error message
+pg_log_tail() {
+    local f=/var/log/postgresql/postgresql-$RA_PG_VERSION-$RA_PG_CLUSTER.log
+    if [[ -r $f ]]; then printf 'last lines of %s:\n%s' "$f" "$(tail -n 15 "$f")"; else printf 'no log at %s' "$f"; fi
+}
+
 phase_postgres() {
     hdr "Phase postgres"
     local cdir; cdir=$(pg_conf_dir)
     [[ -d $cdir ]] || die "PostgreSQL $RA_PG_VERSION cluster $RA_PG_CLUSTER not found ($cdir); install package postgresql"
+    pg_port_check "$cdir"
     local unit="postgresql@$RA_PG_VERSION-$RA_PG_CLUSTER.service"
     systemctl enable --now "$unit" >/dev/null 2>&1 || systemctl start postgresql
     local changed=0 restart=0
@@ -530,7 +559,7 @@ phase_postgres() {
         systemctl reload "$unit"
     fi
     for _ in $(seq 1 30); do runuser -u postgres -- pg_isready -q -h /var/run/postgresql && break; sleep 1; done
-    runuser -u postgres -- pg_isready -q -h /var/run/postgresql || die "PostgreSQL not ready"
+    runuser -u postgres -- pg_isready -q -h /var/run/postgresql || die "PostgreSQL not ready after 30 s; $(pg_log_tail)"
     local la; la=$(psql_su -At -c 'SHOW listen_addresses')
     if [[ -z $la ]]; then ok "PostgreSQL listens on the unix socket only"; else warn "listen_addresses = '$la' (expected '')"; fi
 
@@ -1359,7 +1388,7 @@ s.sendall(sys.stdin.buffer.read()); print(s.recv(65536).decode().strip())' 2>&1 
 
 need_admin_net() {
     [[ ${SETTING_SRC[admin_net]} != default ]] \
-        || die "management subnet unknown (no answers, no $RA_SITE_YAML, no installed nginx site): give --answers FILE or --admin-net CIDR"
+        || die "management subnet unknown (no answers, no $RA_SITE_YAML, no installed nginx site): run install.sh --interactive (on a terminal), or give --answers FILE or --admin-net CIDR"
     info "management subnet $RA_ADMIN_NET (${SETTING_SRC[admin_net]})"
 }
 

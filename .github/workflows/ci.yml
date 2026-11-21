@@ -94,6 +94,8 @@ jobs:
         run: cd "$REPO" && bash tests/installer/test_nginx_update.sh | tee "$LOGS/nginx-update.log"
       - name: FreeRADIUS max_request_time
         run: cd "$REPO" && bash tests/installer/test_max_request_time.sh | tee "$LOGS/max-request-time.log"
+      - name: Installer re-runs
+        run: cd "$REPO" && sudo bash tests/installer/test_install_reruns.sh | tee "$LOGS/install-reruns.log"
       - name: Release tooling tests
         run: cd "$REPO" && sudo bash tests/release/test_release.sh | tee "$LOGS/release.log"
       - name: Count tests
@@ -101,7 +103,7 @@ jobs:
         if: always()
         run: |
           tools/ci/test-counts.py "$LOGS/helper.log" "$LOGS/licence-tool.log" "$LOGS/installer.log" "$LOGS/live-settings.log" "$LOGS/ad-join.log" \
-              "$LOGS/ldap-carry-over.log" "$LOGS/eap-carry-over.log" "$LOGS/update-install.log" "$LOGS/integration-install.log" "$LOGS/duo-install.log" "$LOGS/nginx-dropin.log" "$LOGS/nginx-update.log" "$LOGS/max-request-time.log" "$LOGS/release.log" | tee -a "$GITHUB_OUTPUT"
+              "$LOGS/ldap-carry-over.log" "$LOGS/eap-carry-over.log" "$LOGS/update-install.log" "$LOGS/integration-install.log" "$LOGS/duo-install.log" "$LOGS/nginx-dropin.log" "$LOGS/nginx-update.log" "$LOGS/max-request-time.log" "$LOGS/install-reruns.log" "$LOGS/release.log" | tee -a "$GITHUB_OUTPUT"
 
   package:
     name: FreeRADIUS package
