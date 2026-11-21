@@ -19,6 +19,10 @@ RA_PYTHON=${RA_PYTHON:-/usr/bin/python3}
 # 1.24.0-2ubuntu7.20 (USN-9159-1). Raise this when a later nginx advisory affects the site:
 # preflight then warns and the installer's nginx-update phase (and update.sh) upgrades nginx.
 RA_NGINX_MIN_VERSION=${RA_NGINX_MIN_VERSION:-1.24.0-2ubuntu7.20}
+# FreeRADIUS cuts every home server's response_window down to max_request_time (radiusd.conf,
+# stock 30 s). The second-factor providers wait up to 60 s for the person (SPEC section 29), so
+# the freeradius phase raises max_request_time to at least this; a higher live value is kept.
+RA_FR_MAX_REQUEST_TIME=${RA_FR_MAX_REQUEST_TIME:-90}
 
 if [[ -t 1 ]]; then
     C_RED=$'\e[31m'; C_GRN=$'\e[32m'; C_YEL=$'\e[33m'; C_BLD=$'\e[1m'; C_OFF=$'\e[0m'
@@ -29,6 +33,10 @@ WARNINGS=0
 FAILURES=0
 
 say()   { printf '%s\n' "$*"; }
+fr_max_request_time() { # fr_max_request_time RADIUSD_CONF: its top-level max_request_time (empty if unset)
+    sed -nE 's/^max_request_time[[:space:]]*=[[:space:]]*([0-9]+)[[:space:]]*(#.*)?$/\1/p' "$1" 2>/dev/null \
+        | tail -n1 || true
+}
 hdr()   { printf '\n%s== %s ==%s\n' "$C_BLD" "$*" "$C_OFF"; }
 ok()    { printf '  %s[ OK ]%s %s\n' "$C_GRN" "$C_OFF" "$*"; }
 info()  { printf '  [INFO] %s\n' "$*"; }
@@ -154,6 +162,46 @@ live_nft() {
             if (k == "admin_net" && $i == "saddr") { print $(i + 1); exit }
             if (k == "listen_ip" && $i == "daddr") { print $(i + 1); exit } } }' "$RA_FIREWALL_NFT")
     [[ -n $v ]] && printf '%s\n' "$v"
+}
+
+# FIPS mode (require_fips in radius-admin.conf). Standard mode is the default; FIPS mode is an
+# explicit choice at the first install (answers "fips: on", --fips) and needs a host whose kernel
+# runs in FIPS mode. An update never changes the live setting.
+RA_APP_CONF=${RA_APP_CONF:-/etc/radius-admin/radius-admin.conf}
+RA_FIPS_ENABLED_FILE=${RA_FIPS_ENABLED_FILE:-/proc/sys/crypto/fips_enabled}
+kernel_fips() { [[ $(cat "$RA_FIPS_ENABLED_FILE" 2>/dev/null) == 1 ]]; }
+live_fips() { # live_fips -> prints on|off from the installed radius-admin.conf, or fails
+    [[ -r $RA_APP_CONF ]] || return 1
+    local v
+    v=$(awk -F= '/^[[:space:]]*\[/ { s = $0; gsub(/[][[:space:]]/, "", s) }
+        s == "app" && $1 ~ /^[[:space:]]*require_fips[[:space:]]*$/ { v = $2; gsub(/[[:space:]]/, "", v); print tolower(v); exit }' \
+        "$RA_APP_CONF")
+    case $v in
+        true|yes|1|on) echo on ;;
+        false|no|0|off) echo off ;;
+        "") echo on ;;   # key absent: the app's built-in default (config.py) is require_fips = true
+        *) return 1 ;;
+    esac
+}
+# render_app_conf EXAMPLE DST SERVER_NAME on|off: radius-admin.conf for a first install
+render_app_conf() {
+    local v=false
+    [[ $4 == on ]] && v=true
+    sed -e "s|^# server_name = .*|server_name = $3|" -e "s|^require_fips = .*|require_fips = $v|" "$1" > "$2"
+    grep -qx "require_fips = $v" "$2"
+}
+
+# render_nginx_site TEMPLATE DST LISTEN_IP SERVER_NAME ADMIN_NET RESOLVER OCSP_URL|"": the portal
+# site; without an OCSP responder the ssl_ocsp lines are left out (no revocation check)
+render_nginx_site() {
+    local tmpl=$1 dst=$2 ip=$3 name=$4 net=$5 res=$6 ocsp=$7
+    if [[ -n $ocsp ]]; then
+        sed -e "s#@OCSP_URL@#$ocsp#g" "$tmpl"
+    else
+        sed -e 's|^\([[:space:]]*\)ssl_ocsp leaf;.*|\1# no OCSP responder configured: client certificates are not checked for revocation|' \
+            -e '/^[[:space:]]*ssl_ocsp/d' "$tmpl"
+    fi | sed -e "s#@LISTEN_IP@#$ip#g" -e "s#@SERVER_NAME@#$name#g" -e "s#@ADMIN_NET@#$net#g" \
+        -e "s#@RESOLVER@#$res#g" > "$dst"
 }
 
 # DNS servers usable by nginx `resolver` (IPv4, real upstreams preferred over the stub).

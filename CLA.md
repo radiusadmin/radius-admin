@@ -1,11 +1,11 @@
 # radius-admin Contributor License Agreement
 
-Version 1.0, 2026-11-03
+Version 1.1, 2026-11-20
 
 Thank you for contributing to radius-admin (the "Project"). This agreement explains the
 rights you give for your contributions. It protects you and the Project's users, and it keeps
-the Project able to offer its code under other licence terms in the future, for example a
-commercial licence next to the open-source one.
+the Project able to offer its code under more than one set of licence terms, for example a
+commercial licence next to the public source-available one.
 
 You keep the copyright in your contributions. You only grant the licences below.
 
@@ -27,7 +27,8 @@ You grant the Maintainer, and everyone who receives software distributed by the 
 a perpetual, worldwide, non-exclusive, no-charge, royalty-free, irrevocable licence to
 reproduce, prepare derivative works of, publicly display, publicly perform, sublicense and
 distribute Your Contributions and such derivative works, **under any licence terms the
-Maintainer chooses**, including open-source licences and proprietary or commercial licences.
+Maintainer chooses**, including open-source, source-available, proprietary or commercial
+licences.
 
 ## 3. Patent licence
 
@@ -41,12 +42,17 @@ starts patent litigation claiming that the Project or a Contribution infringes a
 patent licences granted to that party under this agreement end on the date the litigation is
 filed.
 
-## 4. The Project stays open source
+## 4. The Project stays public and becomes open source
 
-The Maintainer will make every Contribution that is included in the Project available under
-the open-source licence the Project uses at that time (now the GNU Affero General Public
-License, version 3 or later), in addition to any other terms the Maintainer may offer.
-Code that has been published under an open-source licence remains available under it.
+The Maintainer will publish every Contribution that is included in the Project under the
+public licence the Project uses at that time, in addition to any other terms the Maintainer
+may offer. Today that licence is the Business Source License 1.1 with the GNU Affero General
+Public License, version 3 or later, as its Change License (see LICENSE).
+
+Every version of the Project that includes a Contribution will become available under an
+open-source licence (now the GNU Affero General Public License, version 3 or later) no later
+than four years after the Maintainer first publishes that version. Code that has been
+published under an open-source licence remains available under it.
 
 ## 5. What You confirm
 
@@ -73,7 +79,7 @@ kind, and You are not expected to provide support for them.
 You accept this agreement for a Contribution by stating in the pull request (or with the
 patch):
 
-> I have read CLA.md (version 1.0) and I agree to it for my contributions to radius-admin.
+> I have read CLA.md (version 1.1) and I agree to it for my contributions to radius-admin.
 
 and by ticking the matching box in the pull request template. Once You have accepted it, it
 applies to all Your later Contributions too, unless the Maintainer publishes a new version
@@ -86,3 +92,9 @@ This agreement is governed by the law of the country in which the Maintainer res
 without regard to its conflict-of-law rules. If a provision is held unenforceable, the rest
 of the agreement remains in effect, and the provision is to be applied as far as possible
 in line with its purpose.
+
+## 9. Versions of this agreement
+
+Version 1.1 (2026-11-20) replaces version 1.0 (2026-11-03). It changes section 4 for the
+move from the GNU AGPL to the Business Source License 1.1. Contributions accepted under
+version 1.0 stay under the terms of version 1.0.

@@ -3,7 +3,7 @@ import datetime
 import os
 import sys
 
-from flask import Flask, g, render_template, request, url_for
+from flask import Flask, g, redirect, render_template, request, url_for
 
 __all__ = ["create_app"]
 
@@ -34,7 +34,20 @@ def create_app(config_path=None, overrides=None):
         except Exception as e:      # the database may not be up yet; the console still refuses it
             print("radius-admin: could not check the PEAP setting for FIPS mode: %s" % e, file=sys.stderr)
 
+    from flask import Request
+
+    class _Request(Request):
+        """Requests are limited to MAX_CONTENT_LENGTH (2 MiB), except the upload of a
+        second-factor provider build (SPEC section 29.2; nginx allows the same path more)."""
+        @property
+        def max_content_length(self):
+            if self.path == "/integrations/duo/upload":
+                from .integrations import UPLOAD_MAX
+                return UPLOAD_MAX + 1024 * 1024
+            return super().max_content_length
+
     app = Flask(__name__, static_folder="static", template_folder="templates")
+    app.request_class = _Request
     app.config["RA"] = cfg
     app.config["MAX_CONTENT_LENGTH"] = 2 * 1024 * 1024
     app.config["SESSION_COOKIE_NAME"] = "unused"  # Flask sessions are not used
@@ -68,13 +81,15 @@ def create_app(config_path=None, overrides=None):
     from .listnav import install_listnav
     install_listnav(app)
 
-    from .views import (account, admins, alerts as alerts_v, apply as apply_v, auth, clients, dashboard, dot1x_users, logs,
-                        mab, profiles, reports, rules, sessions, settings as settings_v, setup, snmp as snmp_v,
-                        sso as sso_v, switch_admins, updates)
+    from .views import (account, admins, alerts as alerts_v, apply as apply_v, auth, certificates, clients, dashboard,
+                        dot1x_users, logs,
+                        integrations as integrations_v, mab, profiles, reports, rules, sessions, settings as settings_v,
+                        setup, snmp as snmp_v, sso as sso_v, switch_admins, updates, licence as licence_v)
     for bp in (auth.bp, account.bp, dashboard.bp, clients.bp, switch_admins.bp, switch_admins.legacy_bp,
                dot1x_users.bp, rules.bp,
                mab.bp, apply_v.bp, logs.bp, settings_v.bp, admins.bp, snmp_v.bp, sessions.bp,
-               alerts_v.bp, reports.bp, sso_v.bp, setup.bp, updates.bp, profiles.bp):
+               alerts_v.bp, reports.bp, sso_v.bp, setup.bp, updates.bp, profiles.bp, integrations_v.bp,
+               certificates.bp, licence_v.bp):
         app.register_blueprint(bp)
 
     # The SAML assertion consumer service receives a cross-site POST from the identity
@@ -90,6 +105,10 @@ def create_app(config_path=None, overrides=None):
         security.load_session()
         if request.method == "POST" and request.endpoint not in CSRF_EXEMPT:
             security.check_csrf()
+        # required first setup step (SPEC section 31): admins answer the licence question first
+        from . import licence
+        if licence.prompt_redirect_needed(request.endpoint, request.method, g.get("user"), g.get("session")):
+            return redirect(url_for("licence.index"))
         return None
 
     @app.after_request
@@ -147,7 +166,17 @@ def create_app(config_path=None, overrides=None):
             "now": g.get("now"),
             "theme": security.current_theme() if request.endpoint != "static" else "system",
             "sso_enabled": _sso_enabled() if (request.endpoint or "").startswith("auth.") else False,
+            "licence_banner": _licence_banner(user) if full else "",
         }
+
+    def _licence_banner(user):
+        if user["role"] != "admin" or request.endpoint in ("static", None):
+            return ""
+        from . import licence
+        try:   # a reminder only; never break a page over it
+            return licence.banner(licence.today())
+        except Exception:
+            return ""
 
     def _sso_enabled():
         from . import sso

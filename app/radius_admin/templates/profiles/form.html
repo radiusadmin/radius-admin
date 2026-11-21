@@ -96,6 +96,9 @@
   <label for="setup_coa">Turn on dynamic authorization (session actions) <span class="muted">(optional)</span></label>
   <textarea id="setup_coa" name="setup_coa" rows="3" class="mono" spellcheck="false"{{ m.described(errors, 'setup_coa') }}{{ ro }}>{{ f.setup_coa }}</textarea>
   {{ m.field_error(errors, 'setup_coa') }}
+  <label for="setup_mfa_timeout">RADIUS timeout for logins with a second factor <span class="muted">(optional)</span></label>
+  <textarea id="setup_mfa_timeout" name="setup_mfa_timeout" rows="2" class="mono" spellcheck="false"{{ m.described(errors, 'setup_mfa_timeout') }}{{ ro }}>{{ f.setup_mfa_timeout }}</textarea>
+  {{ m.field_error(errors, 'setup_mfa_timeout') }}
 
   {% if editable %}
   {% if need_stepup %}

@@ -4,7 +4,8 @@
 #   UPDATE_SIGNING_KEY="$(cat key.pem)" tools/release/make-release.sh CHANNEL OUTDIR [PREV_TAG]
 # CHANNEL is main, testing or dev; PREV_TAG the previous release on that channel (if any).
 # Needs packages/ (tools/package/build-freeradius-deb.sh) and a clean tree at HEAD.
-# Writes OUTDIR/radius-admin-<version>.tar.gz, manifest.json, manifest.json.sig and notes.md,
+# Writes OUTDIR/radius-admin-<version>.tar.gz (with integrations/catalog.json.sig, the signed
+# integrations catalog), manifest.json, manifest.json.sig and notes.md,
 # and prints the version. The key must be ECDSA P-384 and match deploy/keys/update-signing.pem,
 # the public key the servers pin, or nothing is written.
 set -euo pipefail
@@ -17,6 +18,9 @@ die() { printf 'make-release: %s\n' "$*" >&2; exit 1; }
 CHANNEL=${1:?usage: make-release.sh CHANNEL OUTDIR [PREV_TAG]}
 OUT=${2:?usage: make-release.sh CHANNEL OUTDIR [PREV_TAG]}
 PREV=${3:-}
+# PREV comes from a tag name: only an exact release tag may reach git (no options, no shell)
+[[ -z $PREV || $PREV =~ ^v[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}(-(rc|dev)\.[0-9]{1,6})?$ ]] \
+    || die "PREV_TAG is not a release tag (vX.Y.Z, vX.Y.Z-rc.N or vX.Y.Z-dev.N)"
 PINNED=$REPO/deploy/keys/update-signing.pem
 [[ -n ${UPDATE_SIGNING_KEY:-} ]] || die "UPDATE_SIGNING_KEY is empty"
 [[ -s $PINNED ]] || die "$PINNED is missing: commit the public key the servers pin first"
@@ -34,7 +38,15 @@ openssl pkey -in "$work/key.pem" -pubout -out "$work/pub.pem" 2>/dev/null
 
 ver=$("$HERE/build-version.sh" "$CHANNEL" HEAD)
 mkdir -p "$OUT"
-"$REPO/tools/package/make-bundle.sh" --channel "$CHANNEL" "$OUT" >&2
+# the integrations catalog (SPEC section 29) is signed with the same key; the bundle carries
+# the signature next to integrations/catalog.json, and the root helper checks it
+CAT=$REPO/integrations/catalog.json
+[[ -s $CAT ]] || die "integrations/catalog.json is missing"
+python3 -I "$REPO/tools/integrations/catalog.py" --catalog "$CAT" check >&2 || die "integrations/catalog.json is invalid"
+openssl dgst -sha384 -sign "$work/key.pem" -out "$work/catalog.json.sig" "$CAT"
+openssl dgst -sha384 -verify "$PINNED" -signature "$work/catalog.json.sig" "$CAT" >/dev/null \
+    || die "the catalog signature does not verify with $PINNED"
+"$REPO/tools/package/make-bundle.sh" --channel "$CHANNEL" --catalog-sig "$work/catalog.json.sig" "$OUT" >&2
 bundle=radius-admin-$ver.tar.gz
 rm -f "$OUT/$bundle.sha256"
 

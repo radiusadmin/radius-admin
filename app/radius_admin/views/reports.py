@@ -12,7 +12,7 @@ import socket
 
 from flask import Blueprint, Response, abort, g, render_template, request
 
-from .. import db, insight, oui
+from .. import db, insight, integrations, oui
 from ..security import has_role, login_required
 from ..services import get_settings, switch_admins
 from . import ev
@@ -26,8 +26,9 @@ REPORTS = {
                 "when, from where and what changed (the audit log). Sign-ins can be included.", True, "viewer"),
     "auth_summary": ("Authentication summary", "Accepts and rejects per switch and method, top reject reasons and "
                      "the stations rejected most often.", True, "viewer"),
-    "privileged": ("Privileged access", "Device admin accounts and directory groups (priv 15 setting, password scheme, disabled) and "
-                   "console administrators (role, two-factor method, last sign-in).", False, "admin"),
+    "privileged": ("Privileged access", "Device admin accounts and directory groups (priv 15 setting, password scheme, "
+                   "second factor, disabled), second-factor coverage and exemptions, and console administrators "
+                   "(role, two-factor method, last sign-in).", False, "admin"),
     "sessions": ("Network sessions", "Who was connected where and when, from RADIUS accounting.", True, "viewer"),
     "clients": ("RADIUS clients", "Inventory of switches and other RADIUS clients with key and monitoring state.",
                 False, "viewer"),
@@ -120,17 +121,22 @@ def build(key, start, end, opts):
                                 "rows": [[r["username"], r["station"], r["n"], r["last"]] for r in top]})
     elif key == "privileged":
         st = get_settings()
+        cov = integrations.coverage()
+        exempt = {u.lower() for u in cov["exempt"]}
         rep["columns"] = ["Account", "Kind", "Privilege", "Credential", "Status", "Two-factor", "Last sign-in"]
         for a in switch_admins():
             cred = "PBKDF2-HMAC-SHA-256" if a["pbkdf2"] and not a["legacy"] else (
                 "legacy hash (migrate)" if a["legacy"] else "none")
             rep["rows"].append([a["username"], "device admin (RADIUS)",
                                 "priv 15" if st["admin_priv15"] else "device default", cred,
-                                "disabled" if a["disabled"] else "enabled", "n/a", ""])
+                                "disabled" if a["disabled"] else "enabled",
+                                "exempt (break-glass)" if cov["local"]["enabled"] and a["username"].lower() in exempt
+                                else integrations.coverage_text(cov["local"]), ""])
         for grp in st["admin_directory_groups"]:
             rep["rows"].append([grp, "device admin directory group (RADIUS)",
                                 "priv 15" if st["admin_priv15"] else "device default", "directory password",
-                                "enabled" if st["admin_directory"] else "disabled", "n/a", ""])
+                                "enabled" if st["admin_directory"] else "disabled",
+                                integrations.coverage_text(cov["directory"]), ""])
         for u in db.query("SELECT username, role, mfa_method, enabled, locked_until, last_login_at, host(last_login_ip)"
                           " AS ip, must_change_password FROM ui.admin_user ORDER BY username"):
             status = "disabled" if not u["enabled"] else (
@@ -146,6 +152,22 @@ def build(key, start, end, opts):
         rep["notes"].append("Directory accounts for device admin logins are %s." % (
             "accepted for members of the directory groups listed" if st["admin_directory"]
             and st["admin_directory_groups"] else "not accepted"))
+        rows = []
+        for kind in integrations.ACCOUNT_KINDS:
+            c = cov[kind]
+            rows.append([c["label"], "yes" if c["enabled"] else "no", c["provider"] or "—",
+                         ("on" if c["provider_on"] else "off") if c["provider"] else "—",
+                         "all clients" if c["clients"] == "all" else (", ".join(c["clients"]) or "none"),
+                         ", ".join(cov["exempt"]) if kind == "local" and c["enabled"] else "—"])
+        rep["sections"].append({"title": "Second factor for device admin logins",
+                                "columns": ["Accounts", "Required", "Provider", "Provider state", "Clients",
+                                            "Exempt (break-glass)"], "rows": rows})
+        if cov["local"]["enabled"] and not cov["exempt"]:
+            rep["notes"].append("No local device admin is exempt from the second factor: if the provider is "
+                                "unreachable, nobody can log in to the devices.")
+        if any(cov[k]["enabled"] for k in integrations.ACCOUNT_KINDS):
+            rep["notes"].append("A login that needs a second factor is rejected when its provider is off or does "
+                                "not answer; exempt local accounts log in with their password only.")
     elif key == "sessions":
         idx = insight.ClientIndex.load()
         rows = db.query("SELECT username, callingstationid, host(nasipaddress) AS nas, nasportid, acctstarttime,"

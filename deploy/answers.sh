@@ -13,9 +13,21 @@
 #   tls_cert: /path/server.crt            tls: existing only (leaf first, then intermediates)
 #   tls_key: /path/server.key             tls: existing only
 #   admin_username: admin                 first portal administrator (created with a one-time password)
+#   eap_tls: self-signed                  802.1X (EAP) server certificate of a new server:
+#                                         self-signed (throwaway, replace it) | existing (files below)
+#   eap_cert: /path/radius.pem            eap_tls: existing only: server certificate (leaf)
+#   eap_key: /path/radius.key             eap_tls: existing only: its private key
+#   eap_ca: /path/ca.pem                  eap_tls: existing only: CA(s) that issue client certificates
+#   ocsp_url: http://ocsp.example.net/ocsp   OCSP responder for client certificates (portal and, on a
+#                                         new server, EAP-TLS); none by default. A server that already
+#                                         runs keeps its EAP certificates and OCSP settings.
+#   fips: off                             off (standard mode, the default) | on (FIPS mode: needs a
+#                                         host whose kernel runs in FIPS mode). Written to
+#                                         require_fips on the first install; an update keeps the live value
 # shellcheck shell=bash
 
-ANS_KEYS=(server_name admin_net listen_ip switch_nets resolver tls tls_cert tls_key admin_username)
+ANS_KEYS=(server_name admin_net listen_ip switch_nets resolver tls tls_cert tls_key admin_username fips
+          eap_tls eap_cert eap_key eap_ca ocsp_url)
 declare -A ANS=()
 
 ans_load() { # ans_load FILE [ARRAY]: into ANS, or the associative ARRAY (site.yaml as installed:
@@ -80,6 +92,8 @@ ans_defaults() {
     : "${ANS[resolver]:=$(detect_resolvers 2>/dev/null || true)}"
     : "${ANS[tls]:=self-signed}"
     : "${ANS[admin_username]:=admin}"
+    : "${ANS[fips]:=off}"
+    : "${ANS[eap_tls]:=self-signed}"
 }
 
 _ask() { # _ask KEY "Question" -> reads stdin (a terminal, or a pipe in tests)
@@ -105,6 +119,17 @@ ans_interactive() {
         _ask tls_key "Private key file"
     fi
     _ask admin_username "First administrator username"
+    say "  Crypto mode: off = standard mode; on = FIPS mode (the host kernel must run in FIPS mode)"
+    _ask fips "FIPS mode (on/off)"
+    say "  802.1X (EAP) server certificate, used when FreeRADIUS is set up for the first time:"
+    say "  existing (you have the certificate, key and client CA files) or self-signed (made now, replace it later)"
+    _ask eap_tls "EAP certificate"
+    if [[ ${ANS[eap_tls]} == existing ]]; then
+        _ask eap_cert "EAP server certificate file"
+        _ask eap_key "Its private key file"
+        _ask eap_ca "CA file for client certificates"
+    fi
+    _ask ocsp_url "OCSP responder URL for client certificates (empty: no revocation check)"
 }
 
 ans_validate() {
@@ -130,6 +155,17 @@ ans_validate() {
         *) die "tls must be self-signed, csr or existing (got '${ANS[tls]:-}')" ;;
     esac
     _ans_py user "${ANS[admin_username]:-}" || die "admin_username must be 2-64 characters: lowercase letters, digits, . _ -"
+    [[ ${ANS[fips]:-} == on || ${ANS[fips]:-} == off ]] || die "fips must be on or off (got '${ANS[fips]:-}')"
+    case ${ANS[eap_tls]:-} in
+        self-signed) [[ -z ${ANS[eap_cert]:-}${ANS[eap_key]:-}${ANS[eap_ca]:-} ]] || die "eap_cert/eap_key/eap_ca are only used with eap_tls: existing" ;;
+        existing)
+            local f
+            for f in eap_cert eap_key eap_ca; do
+                [[ -r ${ANS[$f]:-} ]] || die "$f '${ANS[$f]:-}' is not a readable file"
+            done ;;
+        *) die "eap_tls must be self-signed or existing (got '${ANS[eap_tls]:-}')" ;;
+    esac
+    [[ -z ${ANS[ocsp_url]:-} ]] || _ans_py url "${ANS[ocsp_url]}" || die "ocsp_url '${ANS[ocsp_url]}' is not an http(s) URL"
 }
 
 ans_print() {

@@ -1,5 +1,5 @@
 """Alerts (SPEC section 13): reject spikes, switches that stop answering SNMP,
-FreeRADIUS down and the web portal (nginx) down. Evaluated by the monitor service once a minute; each condition opens
+FreeRADIUS down, the web portal (nginx) down and the second factor (SPEC section 29.4). Evaluated by the monitor service once a minute; each condition opens
 one ui.alert row (one open row per kind+subject) and notifies once when it opens and
 once when it resolves.
 
@@ -17,11 +17,18 @@ import socket
 import ssl
 import syslog
 
-from . import audit, db
+from . import audit, db, integrations
 
 ACTOR = "system:monitor"
 LABELS = {"reject_spike": "Reject spike", "switch_down": "Switch not responding",
-          "radius_down": "FreeRADIUS down", "portal_down": "Portal down", "monitor_down": "Monitoring stopped", "test": "Test alert"}
+          "radius_down": "FreeRADIUS down", "portal_down": "Portal down", "monitor_down": "Monitoring stopped",
+          "mfa_provider_down": "Second-factor provider down", "mfa_timeouts": "Second factor not answering",
+          "mfa_unverified": "Unverified second-factor build", "mfa_withdrawn": "Withdrawn second-factor build",
+          "test": "Test alert"}
+MFA_KINDS = ("mfa_provider_down", "mfa_timeouts", "mfa_unverified", "mfa_withdrawn")
+# the reject reason of radius_admin_reject when a proxied login got no answer (unlang._MFA_NO_ANSWER)
+MFA_NO_ANSWER = "radius-admin: the second-factor provider did not answer"
+REMIND_HOURS = 24       # open unverified / withdrawn build alerts are sent again once a day
 
 
 def load_settings(conn):
@@ -232,6 +239,145 @@ def check_portal(conn, settings, status, state, smtp_password=None):
         state["down_checks"] = state.get("down_checks", 0) + 1
         if state["down_checks"] >= 2:
             open_alert(conn, settings, "portal_down", "", msg, None, smtp_password)
+
+
+# ---------------------------------------------------------------- second factor (SPEC section 29.4)
+def remind_alert(conn, settings, kind, subject, hours=REMIND_HOURS, smtp_password=None):
+    """Send an alert that is still open again once it was last sent `hours` ago."""
+    row = db.query_one("UPDATE ui.alert SET reminded_at = now() WHERE kind = %s AND subject = %s AND state = 'open'"
+                       " AND coalesce(reminded_at, opened_at) < now() - make_interval(hours => %s)"
+                       " RETURNING id, message", (kind, subject or "", int(hours)), conn=conn)
+    if row is None:
+        return None
+    notify(conn, settings, row["id"], kind, "open", subject, "Still open: " + row["message"], smtp_password)
+    return row["id"]
+
+
+def _duo_applied(conn):
+    """The enabled Duo provider, when the last successful apply installed a Duo configuration
+    (before the first apply the proxy is not meant to run, and the apply page says so)."""
+    row = db.query_one("SELECT p.id, p.label FROM ui.mfa_provider p WHERE p.type = 'duo' AND p.enabled"
+                       " AND coalesce((SELECT a.providers_sha256 FROM ui.apply_log a WHERE a.success"
+                       "  AND a.action IN ('apply', 'rollback') ORDER BY a.id DESC LIMIT 1), '') <> ''",
+                       conn=conn)
+    return row
+
+
+def check_mfa_provider(conn, settings, integ, state, smtp_password=None):
+    """mfa_provider_down. integ: the helper's integration_status response; state: dict kept by
+    the caller ({'down_checks': int}). A helper error (or a helper without integration_status)
+    neither opens nor resolves; two failed checks in a row are needed (Apply restarts the proxy)."""
+    if not settings.get("mfa_enabled", True):
+        state["down_checks"] = 0
+        for a in db.query("SELECT subject FROM ui.alert WHERE kind = 'mfa_provider_down' AND state = 'open'",
+                          conn=conn):
+            resolve_alert(conn, settings, "mfa_provider_down", a["subject"],
+                          "Second-factor alerting was switched off.", smtp_password)
+        return
+    p = _duo_applied(conn)
+    if p is None:
+        state["down_checks"] = 0
+        resolve_alert(conn, settings, "mfa_provider_down", "duo", "The Duo provider is off or no longer applied.",
+                      smtp_password)
+        return
+    if not integ.get("ok"):
+        return
+    duo = (integ.get("integrations") or {}).get("duo") or {}
+    if not duo.get("installed"):
+        msg = "The Duo Authentication Proxy is turned on but not installed on this server."
+    elif not duo.get("service_active"):
+        msg = "duoauthproxy.service is not active: device admin logins that need a second factor are rejected."
+    elif not duo.get("listening"):
+        msg = ("The Duo Authentication Proxy runs but does not listen on 127.0.0.1:18120: device admin logins"
+               " that need a second factor are rejected.")
+    else:
+        state["down_checks"] = 0
+        resolve_alert(conn, settings, "mfa_provider_down", "duo",
+                      "The Duo Authentication Proxy is active and listening again.", smtp_password)
+        return
+    state["down_checks"] = state.get("down_checks", 0) + 1
+    if state["down_checks"] >= 2:
+        open_alert(conn, settings, "mfa_provider_down", "duo", msg + " Exempt break-glass accounts still log in.",
+                   {"provider": "duo", "installed": bool(duo.get("installed")),
+                    "service_active": bool(duo.get("service_active")), "listening": bool(duo.get("listening"))},
+                   smtp_password)
+
+
+def check_mfa_timeouts(conn, settings, smtp_password=None):
+    """mfa_timeouts: device admin logins rejected because the provider did not answer."""
+    if not settings.get("mfa_timeout_enabled", True):
+        resolve_alert(conn, settings, "mfa_timeouts", "", "Second-factor timeout alerting was switched off.",
+                      smtp_password)
+        return
+    win = int(settings.get("mfa_timeout_window_minutes") or 15)
+    thr = int(settings.get("mfa_timeout_threshold") or 3)
+    r = db.query_one("SELECT count(*) AS n, count(DISTINCT username) AS users FROM radpostauth"
+                     " WHERE reply = 'Access-Reject' AND reason = %s AND authdate > now() - make_interval(mins => %s)",
+                     (MFA_NO_ANSWER, win), conn=conn)
+    n = r["n"]
+    if n >= thr:
+        top = db.query("SELECT coalesce(host(nasipaddress), '?') AS nas, count(*) AS n FROM radpostauth"
+                       " WHERE reply = 'Access-Reject' AND reason = %s AND authdate > now() - make_interval(mins => %s)"
+                       " GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT 3", (MFA_NO_ANSWER, win), conn=conn)
+        open_alert(conn, settings, "mfa_timeouts", "",
+                   "%d device admin login%s (%d account%s) got no answer from the second-factor provider in the last"
+                   " %d minutes (threshold %d). Clients: %s. Check the provider's service and its connection to the"
+                   " vendor's cloud." % (n, "" if n == 1 else "s", r["users"], "" if r["users"] == 1 else "s", win, thr,
+                                         ", ".join("%s x%d" % (t["nas"], t["n"]) for t in top)),
+                   {"count": n, "accounts": r["users"], "window_minutes": win, "threshold": thr}, smtp_password)
+    elif n < max(1, thr // 2):
+        resolve_alert(conn, settings, "mfa_timeouts", "",
+                      "Second-factor timeouts back to %d in the last %d minutes." % (n, win), smtp_password)
+
+
+def check_mfa_builds(conn, settings, integ, catalog, smtp_password=None):
+    """mfa_unverified (an enabled provider runs a build installed with an admin-pasted SHA-256 that
+    the signed catalog still does not list) and mfa_withdrawn (the installed build is withdrawn in
+    the catalog). Both are sent again once a day while open. integ / catalog: the helper's
+    integration_status / integration_catalog responses; an error leaves the alerts as they are."""
+    kinds = ("mfa_unverified", "mfa_withdrawn")
+    if not settings.get("mfa_enabled", True):
+        for kind in kinds:
+            resolve_alert(conn, settings, kind, "duo", "Second-factor alerting was switched off.", smtp_password)
+        return
+    if not integ.get("ok") or not catalog.get("ok"):
+        return
+    inst = ((integ.get("integrations") or {}).get("duo") or {}).get("installed") or {}
+    version, digest = inst.get("version") or "", inst.get("sha256") or ""
+    check = integrations.build_check(inst, catalog.get("entries"))
+    listed, withdrawn = check["listed"], check["withdrawn"]
+    enabled = db.query_one("SELECT enabled FROM ui.mfa_provider WHERE id = 'duo'", conn=conn)
+    if inst and enabled and enabled["enabled"] and integ.get("fips_enabled") and not check["fips_capable"]:
+        # FIPS mode (SPEC section 29.4): the helper refuses to apply Duo until the build qualifies
+        if open_alert(conn, settings, "mfa_unverified", "duo",
+                      "FIPS mode: Duo Authentication Proxy %s is turned on but is not a FIPS-capable build in the"
+                      " signed catalog (or was installed before FIPS mode was turned on). Changes to Duo cannot be"
+                      " applied; install a FIPS-capable build or turn the Duo provider off and apply."
+                      % (version or "(unknown version)"),
+                      {"provider": "duo", "version": version, "sha256": digest, "fips": True}, smtp_password) is None:
+            remind_alert(conn, settings, "mfa_unverified", "duo", smtp_password=smtp_password)
+    elif inst and enabled and enabled["enabled"] and inst.get("verified") == "pasted-hash" and not listed:
+        if open_alert(conn, settings, "mfa_unverified", "duo",
+                      "Duo Authentication Proxy %s is in use but unverified: it was installed with a SHA-256 an admin"
+                      " entered, and the project's signed catalog does not list it. Install a build from the catalog"
+                      " when one is available." % (version or "(unknown version)"),
+                      {"provider": "duo", "version": version, "sha256": digest}, smtp_password) is None:
+            remind_alert(conn, settings, "mfa_unverified", "duo", smtp_password=smtp_password)
+    else:
+        resolve_alert(conn, settings, "mfa_unverified", "duo",
+                      "No unverified second-factor build is in use any more." if not listed else
+                      "The signed catalog now lists the installed Duo build.", smtp_password)
+    if inst and withdrawn:
+        if open_alert(conn, settings, "mfa_withdrawn", "duo",
+                      "Duo Authentication Proxy %s is installed, but this build was withdrawn from the project's"
+                      " signed catalog (serial %s). Install a current build from the Duo integration page."
+                      % (version or "(unknown version)", catalog.get("serial", "?")),
+                      {"provider": "duo", "version": version, "sha256": digest, "catalog_serial": catalog.get("serial")},
+                      smtp_password) is None:
+            remind_alert(conn, settings, "mfa_withdrawn", "duo", smtp_password=smtp_password)
+    else:
+        resolve_alert(conn, settings, "mfa_withdrawn", "duo", "The withdrawn Duo build is no longer installed.",
+                      smtp_password)
 
 
 def send_test(conn, settings, by, smtp_password=None):

@@ -13,7 +13,7 @@
 <a class="skip" href="#main">Skip to content</a>
 {# pages reached from the Settings button at the bottom of the side panel #}
 {% set _ep = request.endpoint or '' %}
-{% set in_settings = _ep.startswith(('settings.', 'admins.', 'setup.', 'updates.')) and _ep not in ('settings.custom_policy', 'settings.policy_preview')
+{% set in_settings = _ep.startswith(('settings.', 'admins.', 'setup.', 'updates.', 'licence.')) and _ep not in ('settings.custom_policy', 'settings.policy_preview')
    or _ep in ('sso.settings', 'alerts.settings') %}
 {% if current_user %}
 <header class="topbar">
@@ -64,6 +64,8 @@
     <li><a href="{{ url_for('mab.index') }}" {% if ep.startswith('mab.') %}aria-current="page"{% endif %}>MAB devices{% if nav_counts and nav_counts.unknown_mab %}<span class="badge" title="Unknown devices waiting for approval">{{ nav_counts.unknown_mab }}<span class="sr-only"> unknown devices</span></span>{% endif %}</a></li>
     <li><a href="{{ url_for('dot1x_users.index') }}" {% if ep.startswith('dot1x_users.') %}aria-current="page"{% endif %}>802.1X users</a></li>
     <li><a href="{{ url_for('switch_admins.index') }}" {% if ep.startswith('switch_admins.') %}aria-current="page"{% endif %}>Device admins</a></li>
+    <li><a href="{{ url_for('integrations.index') }}" {% if ep.startswith('integrations.') %}aria-current="page"{% endif %}>Integrations</a></li>
+    <li><a href="{{ url_for('certificates.index') }}" {% if ep.startswith('certificates.') %}aria-current="page"{% endif %}>Certificates</a></li>
     {% if has_role('admin') %}
     <li><a href="{{ url_for('settings.custom_policy') }}" {% if ep in ('settings.custom_policy', 'settings.policy_preview') %}aria-current="page"{% endif %}>Custom policy</a></li>
     {% endif %}
@@ -101,9 +103,13 @@
 </div>
 {% endif %}
 {% endif %}
+{% if licence_banner and not _ep.startswith('licence.') %}
+<div class="licence-banner" role="status"><p>{{ licence_banner }}</p>
+  <a class="btn btn-small" href="{{ url_for('licence.index') }}">Open the Licence page</a></div>
+{% endif %}
 <main id="main" class="main" tabindex="-1">
   {% if current_user and in_settings and _ep != 'settings.overview' %}
-  <p class="crumb"><a href="{{ url_for('settings.overview') }}">All settings</a></p>
+  <p class="crumb"><a class="btn btn-quiet btn-small btn-back" href="{{ url_for('settings.overview') }}">All settings</a></p>
   {% endif %}
   {% with msgs = get_flashed_messages(with_categories=true) %}
   {% if msgs %}
@@ -113,6 +119,9 @@
   {% endif %}
   {% endwith %}
   {% block content %}{% endblock %}
+  {% if current_user %}
+  <footer class="app-foot"><p>Source available under the Business Source License 1.1. Free for personal use and organizations with fewer than 50 people. <a href="https://radiusadmin.net/#licence" rel="noopener">Licensing</a></p></footer>
+  {% endif %}
 </main>
 </body>
 </html>

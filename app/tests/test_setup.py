@@ -28,14 +28,14 @@ def make_ready(app, superconn):
 def test_dashboard_strip_until_finished(app, browser, superconn, logged_in):
     logged_in("admin")
     t = browser.text(browser.get("/dashboard"))
-    assert "Finish setting up this server" in t and "1 of 5 required steps done" in t   # FreeRADIUS is up
+    assert "Finish setting up this server" in t and "2 of 6 required steps done" in t   # FreeRADIUS is up, licence answered
     t = browser.text(browser.get("/setup/"))
     assert "Still the example network 192.0.2.0/24" in t and "disabled" in t.split("Finish setup")[0][-80:]
     r = browser.post("/setup/", {"action": "finish"})
     assert r.status_code == 302 and "Finish the required steps first" in browser.text(browser.get("/setup/"))
     make_ready(app, superconn)
     t = browser.text(browser.get("/setup/"))
-    assert "5 of 5 required steps done" in t and "All required steps are done." in t
+    assert "6 of 6 required steps done" in t and "All required steps are done." in t
     r = browser.post("/setup/", {"action": "finish"})
     assert r.status_code == 302 and r.headers["Location"].endswith("/dashboard")
     assert "Finish setting up this server" not in browser.text(browser.get("/dashboard"))

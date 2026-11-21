@@ -154,6 +154,29 @@ body.app {
 .setup-strip { display: flex; gap: 1rem; align-items: center; justify-content: space-between; flex-wrap: wrap;
   border-left: 4px solid var(--amber); }
 .setup-strip p { margin: 0 0 .3rem; }
+.licence-strip { display: flex; gap: 1rem; align-items: center; justify-content: space-between; flex-wrap: wrap;
+  border-left: 4px solid var(--steel-300); }
+.licence-strip p { margin: 0; }
+.licence-banner { display: flex; gap: 1rem; align-items: center; justify-content: space-between; flex-wrap: wrap;
+  margin: 0; padding: .6rem 1.5rem; background: var(--amber-bg); color: var(--ink); border-bottom: 1px solid var(--amber); }
+.licence-banner p { margin: 0; }
+.licence-help { margin: .4rem 0 0; padding-left: 1.1rem; }
+.licence-help li { margin: .15rem 0; padding-left: .2rem; }
+.licence-file { display: flex; flex-direction: column; gap: .35rem; margin-top: .6rem; padding-top: .8rem;
+  border-top: 1px solid var(--line); }
+.licence-file[hidden] { display: none; }
+.licence-file p { margin: 0 0 .2rem; }
+.licence-file label { font-weight: 600; font-size: .9rem; margin-top: .4rem; }
+.licence-paste { margin-top: .3rem; }
+.licence-paste summary { cursor: pointer; font-size: .9rem; color: var(--focus); }
+.licence-paste textarea { width: 100%; margin-top: .4rem; }
+.licence-trial { margin-top: .9rem; padding: .7rem .9rem; border: 1px dashed var(--line); border-radius: var(--radius-s); }
+.licence-trial[hidden] { display: none; }
+.licence-trial p { margin: 0 0 .5rem; }
+.licence-remove { margin-top: .8rem; }
+.licence-contact { margin: 1rem 0 0; }
+.app-foot { margin-top: 2.5rem; padding-top: .8rem; border-top: 1px solid var(--line); font-size: .8rem; color: var(--ink-soft); }
+.app-foot p { margin: 0; }
 .setup-strip progress { width: min(320px, 100%); accent-color: var(--teal); }
 .gate-or { text-align: center; margin: .2rem 0 .6rem; }
 /* colour theme: a three-way segmented control in the account menu */
@@ -196,8 +219,9 @@ body.app {
 
 .main { grid-area: main; padding: 1.5rem 2rem 3rem; max-width: none; width: 100%; min-width: 0; }
 .main:focus { outline: none; }
-.crumb { margin: 0 0 .5rem; font-size: .9rem; }
-.crumb a::before { content: "\2190\00a0"; }
+.crumb { margin: 0 0 .75rem; }
+/* back buttons above a page heading: a quiet button with a leading arrow */
+.btn-back::before { content: "\2190"; margin-right: .35rem; }
 
 /* Settings overview: one panel per category */
 /* columns, not a grid: cards stack without the gaps a tall card leaves in its row */
@@ -349,13 +373,27 @@ input:not([type=checkbox]):not([type=radio]), select, textarea {
   padding: .5rem .65rem; width: 100%; max-width: 100%; margin: 0;
 }
 input:not([type=checkbox]):not([type=radio]):not([type=file]), select { height: var(--ctl-h); padding-top: 0; padding-bottom: 0; line-height: normal; }
-input[type=file] { padding: .4rem .5rem; }
+/* file uploads: a plain button (like .btn) followed by the chosen file name, no input box */
+input[type=file] { padding: 0; border: 0; background: transparent; color: var(--ink-soft); font-size: .9rem;
+  cursor: pointer; }
+input[type=file]::file-selector-button {
+  font: inherit; font-weight: 600; font-size: .9rem; line-height: 1.2;
+  min-height: var(--ctl-h); padding: 0 1rem; margin: 0 .75rem 0 0; border-radius: var(--radius-s); cursor: pointer;
+  border: 1px solid var(--line); background: var(--surface); color: var(--ink);
+}
+input[type=file]:hover::file-selector-button { border-color: var(--steel-500); }
+input[type=file]:focus-visible { outline: none; }
+input[type=file]:focus-visible::file-selector-button { outline: 2px solid var(--focus); outline-offset: 2px; }
+input[type=file][aria-invalid="true"] { box-shadow: none; }
+input[type=file][aria-invalid="true"]::file-selector-button { border-color: var(--red); }
 .static-field { display: flex; align-items: center; height: var(--ctl-h); padding: 0 .65rem; margin: 0;
   border: 1px dashed var(--line); border-radius: var(--radius-s); color: var(--ink-soft); }
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) :is(input:not([type=checkbox]):not([type=radio]), select, textarea) { border-color: var(--steel-500); background: #0f161d; }
+  :root:not([data-theme="light"]) :is(input:not([type=checkbox]):not([type=radio]):not([type=file]), select, textarea) { border-color: var(--steel-500); background: #0f161d; }
+  :root:not([data-theme="light"]) input[type=file]::file-selector-button { border-color: var(--steel-500); }
 }
-:root[data-theme="dark"] :is(input:not([type=checkbox]):not([type=radio]), select, textarea) { border-color: var(--steel-500); background: #0f161d; }
+:root[data-theme="dark"] :is(input:not([type=checkbox]):not([type=radio]):not([type=file]), select, textarea) { border-color: var(--steel-500); background: #0f161d; }
+:root[data-theme="dark"] input[type=file]::file-selector-button { border-color: var(--steel-500); }
 input.mono, textarea.mono, select.mono { font-family: var(--mono); }
 input[aria-invalid="true"], textarea[aria-invalid="true"] { border-color: var(--red); box-shadow: 0 0 0 1px var(--red); }
 .field-error { color: var(--red); font-size: .85rem; margin: .1rem 0 0; }
@@ -738,3 +776,20 @@ td.coa-state { display: table-cell; white-space: normal; }
 .coa-state .cell-sub { margin-top: .1rem; }
 .row-actions .coa-state { margin-right: .5rem; }
 @media print { .bulk-bar, .check-cell { display: none !important; } }
+
+/* Integrations: Duo page (SPEC section 29.2) */
+.check-results { list-style: none; padding: 0; margin: .75rem 0 0; }
+.check-results li { margin: .3rem 0; }
+.inline-form { display: flex; flex-wrap: wrap; align-items: flex-end; gap: .5rem; margin: .75rem 0; }
+.inline-form label { flex-basis: 100%; }
+.install-form { border-top: 1px solid var(--line); padding-top: .75rem; margin-top: .75rem; }
+.panel-head-actions { display: flex; flex-wrap: wrap; gap: .5rem; }
+.catalog-action { margin: .5rem 0 0; }
+/* certificates (SPEC section 30) */
+.cert-list { list-style: none; padding: 0; margin: .25rem 0 .75rem; }
+.cert-list li { padding: .4rem 0; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+.cert-list li:last-child { border-bottom: 0; }
+.cert-list .small { display: block; }
+details.disclose { margin: .75rem 0; }
+details.disclose > summary { cursor: pointer; font-weight: 600; }
+details.disclose > form { margin-top: .5rem; }

@@ -4,7 +4,7 @@ import json
 
 from flask import Blueprint, abort, render_template, request
 
-from .. import audit, db, insight, oui, paging
+from .. import audit, db, insight, integrations, oui, paging
 from ..services import display_zone, get_settings
 from ..security import login_required, role_required
 from . import ev
@@ -48,7 +48,8 @@ def auth_log():
     if f["reply"] in ("Access-Accept", "Access-Reject"):
         where.append("reply = %s")
         params.append(f["reply"])
-    if f["method"] in ("eap-tls", "ttls-pap", "ttls-ldap", "peap", "peap-ldap", "pap-admin", "admin-ldap", "mab", "other"):
+    if f["method"] in ("eap-tls", "ttls-pap", "ttls-ldap", "peap", "peap-ldap", "pap-admin", "admin-ldap", "pap-admin+mfa",
+                       "admin-ldap+mfa", "mab", "other"):
         where.append("authmethod = %s")
         params.append(f["method"])
     if since:
@@ -84,7 +85,8 @@ def auth_detail(aid):
                             " FROM ui.access_rule WHERE id = %s", (r["rule_id"],))
     # device admin login with a directory account: the groups allowed now, to mark matches
     admin_groups = [g.lower() for g in get_settings()["admin_directory_groups"]] \
-        if r.get("authmethod") == "admin-ldap" else []
+        if r.get("authmethod") in ("admin-ldap", "admin-ldap+mfa") else []
+    mfa_provider = integrations.login_provider(r.get("authmethod"), r.get("authdate"))
     expiry = insight.cert_expiry(r.get("cert_expiry"))
     mac = oui.normalize(r["callingstationid"])
     mab = pending = None
@@ -103,7 +105,7 @@ def auth_detail(aid):
                                " ORDER BY acctstarttime DESC NULLS LAST LIMIT 1", (r["callingstationid"], r["nas"]))
     now = datetime.datetime.now(datetime.timezone.utc)
     return render_template("logs/auth_detail.html", r=r, client=client, groups=groups, rule=rule,
-                           admin_groups=admin_groups,
+                           admin_groups=admin_groups, mfa_provider=mfa_provider,
                            expiry=expiry, expired=bool(expiry and expiry <= now),
                            reason=insight.clean_reason(r.get("reason")),
                            hint=insight.reason_hint(r.get("reason"), r["reply"]),

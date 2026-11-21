@@ -9,7 +9,7 @@
 ![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-4169E1?logo=postgresql&logoColor=white)
 ![FIPS mode](https://img.shields.io/badge/FIPS%20mode-optional-informational)
-[![licence](https://img.shields.io/badge/licence-AGPL--3.0--or--later-blue)](LICENSE)
+[![licence](https://img.shields.io/badge/licence-BSL%201.1%20(source%20available)-blue)](LICENSING.md)
 ![made with love](https://img.shields.io/badge/made%20with-%E2%9D%A4%EF%B8%8F-red)
 
 **A secure web console for FreeRADIUS: 802.1X, MAB, RadSec and switch logins, managed in one place.**
@@ -38,7 +38,8 @@ automatically if FreeRADIUS does not come back up.
   device, optional expiry, vendor names, and an approval queue: unknown devices that try to
   connect show up for one-click approval.
 - **Switch and device administrator logins** over RADIUS (PAP), limited to the management
-  subnet, with optional privilege level 15.
+  subnet, with optional privilege level 15 and an optional second factor (Duo push or your own
+  RADIUS MFA server).
 - **Access points and controllers over untrusted networks.** RadSec (RADIUS over TLS) per
   client: switch an AP to RadSec while your switches stay on plain RADIUS.
 - **Security-conscious and regulated environments.** Optional FIPS mode, a hash-chained audit
@@ -58,7 +59,14 @@ automatically if FreeRADIUS does not come back up.
 - MAB devices and the unknown-device approval queue.
 - Device administrator logins for switches, access points and firewalls: local accounts
   (PBKDF2-hashed) or members of chosen directory groups with their directory password (LDAPS).
+- A second factor for device administrator logins: the Duo Authentication Proxy, installed and
+  configured from the portal (the password is checked here before the push), or a remote RADIUS
+  MFA server such as a Network Policy Server with the Entra multifactor extension. Per account type
+  and client, with break-glass exemptions; logins that need it fail closed.
 - Custom unlang policy for administrators, checked before it is installed.
+- Certificates in the console: the 802.1X server certificate, the CA for client certificates, OCSP
+  for EAP-TLS and the portal's HTTPS certificate. Upload them, or make the key and request on the
+  server; they are installed with Apply and rolled back if FreeRADIUS or the portal does not take them.
 
 **Operations**
 - Dashboard, live sessions, and change of authorization (disconnect, re-authenticate, bounce port).
@@ -144,7 +152,9 @@ FreeRADIUS when you click **Apply**. More detail: [SPEC.md](SPEC.md) and
    ```
 2. **Install.** Run the installer with no options and answer the questions: server name,
    management subnet, portal address, DNS resolvers, portal certificate (self-signed to start,
-   a CSR for your CA, or existing files) and the first administrator:
+   a CSR for your CA, or existing files), the first administrator, the crypto mode (standard by
+   default; FIPS mode on a FIPS host), the 802.1X (EAP) server certificate (your files, or
+   self-signed to replace later) and an optional OCSP responder:
    ```bash
    sudo ./deploy/install.sh
    ```
@@ -158,12 +168,16 @@ FreeRADIUS when you click **Apply**. More detail: [SPEC.md](SPEC.md) and
    resolver: "192.0.2.53"
    tls: self-signed
    admin_username: netadmin
+   eap_tls: self-signed
    ```
    ```bash
    sudo ./deploy/install.sh --answers site.yaml --print-answers   # check only
    sudo ./deploy/install.sh --answers site.yaml
    ```
-   The installer keeps your answers in `/etc/radius-admin/site.yaml` for later runs.
+   The installer keeps your answers in `/etc/radius-admin/site.yaml` for later runs. On a new
+   server, FreeRADIUS starts without a directory and rejects every 802.1X user until you add
+   access rules and set up the directory
+   ([RUNBOOK §13.4](docs/RUNBOOK.md#134-a-new-server-directory-eap-certificates-and-ocsp)).
 3. **Sign in.** Browse from the management subnet to `https://<server name>/`, sign in with the
    one-time password the installer printed, choose your own password and set up two-factor
    authentication.
@@ -192,23 +206,34 @@ allow TCP 2083 from those clients.
 
 Being a young project, some parts are still to come:
 
-- The installer expects the FreeRADIUS certificates under `/etc/freeradius/certs/site/`.
-  Generating the whole FreeRADIUS configuration is the next phase.
+- The directory (LDAP/AD) of a new server is set up by hand in `mods-available/ldap`; a portal
+  Setup step for the directory comes with the generated FreeRADIUS configuration, the next phase.
 - The bundled FreeRADIUS package is built for Ubuntu 24.04 (amd64); Debian 12 follows.
-- The nginx phase expects the site CA bundle and an OCSP responder for client-certificate MFA.
 - Vendor profiles: Cisco Catalyst 1200/1300 is the tested switch family today.
 
 ## Licence
 
 Copyright © 2026 Collin Linde.
 
-radius-admin is free software: you can redistribute it and/or modify it under the terms of the
-[GNU Affero General Public License](LICENSE) as published by the Free Software Foundation,
-either version 3 of the License, or (at your option) any later version. It is free to use, at
-home and in organizations. If you run a modified version for others over a network, the AGPL
-asks you to offer them its source code (section 13). radius-admin is distributed in the hope
-that it will be useful, but WITHOUT ANY WARRANTY; see the licence for details. Other licensing
-terms may be available from the copyright holder.
+radius-admin is **source available** under the [Business Source License 1.1](LICENSE). Every
+feature is in the same public code, with nothing locked behind a licence key.
+
+- **Free** for personal use (home networks and labs), for organizations with **fewer than 50**
+  people (employees and contractors, affiliates included), and for any organization during its
+  first 60 days of production use. Testing, development and evaluation are always free.
+- **Organizations with 50 or more people need a commercial licence** for production use after
+  the 60-day trial. So does running radius-admin for a customer that has 50 or more people.
+- Each version becomes available under the GNU Affero General Public License, version 3 or
+  later, four years after it is published. Versions up to and including 0.2.5 are under the
+  GNU AGPL already.
+
+Commercial licences are annual, per organization, by headcount: USD 1,000 (50–249 people),
+USD 4,000 (250–999), USD 10,000 (1,000–4,999), on request from 5,000. Every tier includes every
+feature and unlimited servers. These are list prices; deployments with special requirements are
+quoted individually. [LICENSING.md](LICENSING.md) explains how to count the
+headcount, the rules for service providers and how to get a licence. Questions, or a price that
+does not fit? E-mail licensing@radiusadmin.net; prices are open to discussion.
+radius-admin is provided WITHOUT ANY WARRANTY; see the licence for details.
 
 The release bundle also contains the `radius-admin-freeradius` package: FreeRADIUS, a separate
 program under its own licence (GNU GPL version 2 or later; parts under the LGPL). Its upstream

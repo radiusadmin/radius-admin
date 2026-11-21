@@ -68,7 +68,12 @@ _FORBIDDEN_SUFFIXES = ("-password", "-passwd", "-secret")
 _RAW_ATTR_RE = re.compile(r"(^|-)Attr-\d|^Vendor-", re.IGNORECASE)
 
 _TOP_KEYS = {"format", "id", "label", "description", "status", "reply", "coa", "snmp", "setup", "mab"}
-SETUP_TOPICS = ("accounting", "coa")
+SETUP_TOPICS = ("accounting", "coa", "mfa_timeout")
+# Shown for a profile without setup.mfa_timeout: device admin logins with a second factor wait for
+# a person to answer a push (SPEC section 29.4).
+GENERIC_MFA_TIMEOUT = ("Give device admin logins at least 60 seconds in total before the device gives up on"
+                       " RADIUS: raise its RADIUS timeout, or the timeout times the number of tries, to 60"
+                       " seconds or more. A retransmitted request does not send a second push.")
 # Device commands shown on the portal's pages (escaped HTML text, never configuration).
 _SETUP_RE = re.compile(r"[^\x00-\x08\x0b-\x1f\x7f]{1,1500}")
 _COA_KEYS = {"port", "identify", "send_nas_port_id"} | set(COA_ACTIONS)
@@ -348,7 +353,8 @@ def profile_to_form(p):
          "coa_send_port": p["coa"]["send_nas_port_id"],
          "port_rules": "\n".join("%s => %s%s" % (r["match"], r["format"], " (ignore case)" if r["ignore_case"] else "")
                                  for r in p["snmp"]["port_names"]),
-         "setup_accounting": p["setup"]["accounting"] or "", "setup_coa": p["setup"]["coa"] or ""}
+         "setup_accounting": p["setup"]["accounting"] or "", "setup_coa": p["setup"]["coa"] or "",
+         "setup_mfa_timeout": p["setup"].get("mfa_timeout") or ""}
     for key, field in FORM_REPLY.items():
         f[field] = "\n".join("%s %s %s" % (e["attr"], e["op"], e["value"]) for e in p["reply"][key])
     for a in COA_ACTIONS:
@@ -369,7 +375,8 @@ def form_to_profile(f):
            "coa": {"identify": f.get("coa_identify", ""), "send_nas_port_id": bool(f.get("coa_send_port"))},
            "snmp": {"port_names": []},
            "setup": {"accounting": (f.get("setup_accounting") or "").replace("\r\n", "\n").strip() or None,
-                     "coa": (f.get("setup_coa") or "").replace("\r\n", "\n").strip() or None}}
+                     "coa": (f.get("setup_coa") or "").replace("\r\n", "\n").strip() or None,
+                     "mfa_timeout": (f.get("setup_mfa_timeout") or "").replace("\r\n", "\n").strip() or None}}
     port = (f.get("coa_port") or "").strip()
     doc["coa"]["port"] = int(port) if port.isascii() and port.isdigit() and len(port) <= 5 else port
     for key, field in FORM_REPLY.items():
@@ -413,7 +420,7 @@ _FIELD_OF = (("reply.vlan", "reply_vlan"), ("reply.admin_full", "reply_admin"), 
              ("mab", "mab"), ("coa.port", "coa_port"), ("coa.identify", "coa_identify"),
              ("coa.send_nas_port_id", "coa_send_port"), ("coa.reauth", "coa_reauth"), ("coa.bounce", "coa_bounce"),
              ("coa.disconnect", "coa_disconnect"), ("snmp", "port_rules"), ("setup.accounting", "setup_accounting"),
-             ("setup.coa", "setup_coa"), ("id", "id"), ("label", "label"), ("description", "description"))
+             ("setup.coa", "setup_coa"), ("setup.mfa_timeout", "setup_mfa_timeout"), ("id", "id"), ("label", "label"), ("description", "description"))
 
 
 def form_field(message):
@@ -461,6 +468,13 @@ def unknown_attributes(profile, names):
         if profile["coa"][a]:
             out += [("coa_" + a, e["attr"]) for e in profile["coa"][a]["attrs"] if e["attr"].lower() not in names]
     return out
+
+
+def mfa_timeout_hint(profile):
+    """(text, is_commands): the profile's device commands for a RADIUS timeout long enough for a
+    second factor, or the generic advice."""
+    v = (profile.get("setup") or {}).get("mfa_timeout")
+    return (v, True) if v else (GENERIC_MFA_TIMEOUT, False)
 
 
 def coa_port(client, profile):

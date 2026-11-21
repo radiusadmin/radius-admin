@@ -1,0 +1,57 @@
+# -*- text -*-
+######################################################################
+#
+#	radius-admin: the password check of a device admin login that
+#	needs a second factor (SPEC section 29).
+#
+#	The default server proxies such a login to the Duo Authentication
+#	Proxy on this server, which sends it back here before it asks for
+#	the second factor. This server checks the password and the device
+#	admin group exactly like the default server does for a login
+#	without a second factor (local account: radcheck + group
+#	net-admins; directory account: LDAP bind as the user + one of the
+#	configured directory groups), through the policies
+#	radius_admin_mfa_primary_* in policy.d/radius-admin, and answers
+#	Access-Accept with Class "radius-admin:<method>". The default
+#	server accepts the login only with that Class in the Duo proxy's
+#	answer. It checked the management subnet before proxying.
+#
+#	Its listener (127.0.0.1 only) and its one client, the Duo proxy,
+#	are rendered into radius-admin-clients.conf while a Duo provider
+#	is enabled; without one this server receives nothing. The default
+#	server writes the authentication log; this one does not.
+#
+######################################################################
+
+server radius-admin-mfa-primary {
+
+authorize {
+	filter_username
+	radius_admin_mfa_primary_authorize
+
+	#  local accounts: the stored password (radcheck) for pap
+	sql
+	pap
+}
+
+authenticate {
+	Auth-Type PAP {
+		pap
+	}
+
+	#  directory accounts (radius_admin_mfa_primary_authorize): an LDAP
+	#  bind as the user
+	Auth-Type ldap_user {
+		ldap_user
+	}
+}
+
+post-auth {
+	radius_admin_mfa_primary_postauth
+
+	Post-Auth-Type REJECT {
+		attr_filter.access_reject
+	}
+}
+
+}

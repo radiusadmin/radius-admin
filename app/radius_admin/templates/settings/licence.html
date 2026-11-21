@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block title %}Licence{% endblock %}
+{% block content %}
+<header class="page-head"><div><h1>Licence</h1>
+{% if not st.case %}<p class="flash flash-info" role="status">Before using the console, choose how this server is licensed. This is the first setup step; your answer never changes how RADIUS or the console work.</p>{% endif %}
+<p class="lede">radius-admin is source available under the Business Source License 1.1. Every feature works for everyone: what you record here is for your own records and never locks, limits or slows anything, and this server never contacts anyone about it.</p></div></header>
+{% for e in errors %}<p class="flash flash-error" role="alert">{{ e }}</p>{% endfor %}
+
+<section class="panel" aria-labelledby="lic-status">
+  <h2 id="lic-status">Status</h2>
+  <dl class="kv">
+    <dt>Case</dt><dd>{% if st.level == 'warn' %}<span class="tag tag-warn">{{ st.label }}</span>{% elif st.case %}<span class="tag tag-ok">{{ st.label }}</span>{% else %}<span class="tag tag-muted">{{ st.label }}</span>{% endif %}</dd>
+    <dt>Details</dt><dd id="lic-summary">{{ st.summary }}</dd>
+    {% if state.licence_declared_by %}<dt>Recorded by</dt><dd>{{ state.licence_declared_by }} on {{ state.licence_declared_at }}</dd>{% endif %}
+    {% if st.licence %}
+    <dt>Licence number</dt><dd class="mono">{{ st.licence.licence_id }}</dd>
+    <dt>Licensee</dt><dd>{{ st.licence.licensee }}</dd>
+    <dt>Type</dt><dd>{{ 'Commercial licence' if st.licence.type == 'commercial' else 'Written exception' }}{% if st.licence.tier %} · {{ st.licence.tier }}{% endif %}</dd>
+    {% if st.licence.scope %}<dt>Scope</dt><dd>{{ st.licence.scope }}</dd>{% endif %}
+    <dt>Valid</dt><dd>{{ st.licence.starts.isoformat() }} to {{ st.licence.expires.isoformat() if st.licence.expires else 'no end date' }}</dd>
+    {% if st.licence.notes %}<dt>Notes</dt><dd>{{ st.licence.notes }}</dd>{% endif %}
+    {% elif st.file_error %}
+    <dt>Licence file</dt><dd><span class="tag tag-warn">Not valid</span> {{ st.file_error }}</dd>
+    {% endif %}
+  </dl>
+</section>
+
+<section class="panel narrow" aria-labelledby="lic-case">
+  <h2 id="lic-case">How is this server licensed?</h2>
+  <form method="post" enctype="multipart/form-data" class="stack">
+    {{ m.csrf() }}
+    <input type="hidden" name="action" value="save">
+    <label for="lic-choice">Licence</label>
+    <select id="lic-choice" name="choice" required data-reveal-box="lic-file-box lic-trial-box" data-reveal-value="commercial" aria-describedby="lic-help">
+      {% if not choice %}<option value="" selected disabled>Choose…</option>{% endif %}
+      {% for k, label in choices.items() %}
+      <option value="{{ k }}" {{ 'selected' if choice == k else '' }}>{{ label }}</option>
+      {% endfor %}
+    </select>
+    <ul id="lic-help" class="licence-help small muted">
+      <li>Free for individuals and for organizations with fewer than 50 people (employees and contractors, affiliates included).</li>
+      <li>Organizations with 50 or more people need a commercial licence. Without one yet, start the {{ periods.trial[0] }}-day trial; it starts once and does not restart.</li>
+      <li>A written exception is issued as a licence file: choose Commercial and install it.</li>
+      <li>Testing, evaluation and labs that nothing depends on are always free.</li>
+    </ul>
+    {% if not st.licence %}
+    <div id="lic-trial-box" class="licence-trial"{% if choice != 'commercial' %} hidden{% endif %}>
+      {% if st.case == 'trial' and not trial.ended %}
+      <p class="small"><strong>Trial: {{ trial.left }} day{{ '' if trial.left == 1 else 's' }} left</strong> (until {{ trial.last.isoformat() }}). Install your licence file below when you have it.</p>
+      {% elif trial.ended %}
+      <p class="small">The trial ended on {{ trial.last.isoformat() }} and does not restart. Install your licence file below.</p>
+      {% else %}
+      <p class="small">No licence yet?{% if trial.started %} The trial started on {{ trial.started.isoformat() }} and has {{ trial.left }} day{{ '' if trial.left == 1 else 's' }} left; it does not restart.{% else %} Use radius-admin in production for {{ periods.trial[0] }} days while you arrange one. The trial starts once and does not restart.{% endif %}</p>
+      <button type="submit" class="btn btn-quiet" name="op" value="trial">{{ 'Continue the trial' if trial.started else 'Start the %d-day trial' % periods.trial[0] }}</button>
+      {% endif %}
+    </div>
+    {% endif %}
+    <div id="lic-file-box" class="licence-file"{% if choice != 'commercial' %} hidden{% endif %}>
+      <p class="small">A commercial licence or written exception comes as a signed licence file. It is checked on this server against the project's public key; nothing is sent anywhere.{% if st.licence %} Leave the fields empty to keep the installed licence {{ st.licence.licence_id }}.{% endif %}</p>
+      <label for="lic-upload">Licence file (.json)</label>
+      <input id="lic-upload" type="file" name="file" accept=".json,application/json">
+      <details class="licence-paste"{% if request.form.get('text', '').strip() %} open{% endif %}>
+        <summary>Paste the licence contents instead</summary>
+        <label for="lic-text" class="sr-only">Licence file contents</label>
+        <textarea id="lic-text" name="text" rows="5" class="mono" spellcheck="false" maxlength="16384"></textarea>
+      </details>
+    </div>
+    <div class="actions"><button type="submit" class="btn btn-primary" name="op" value="save">Save</button></div>
+  </form>
+  {% if state.licence_file %}
+  <div class="licence-remove">{{ m.post_button(url_for('licence.index'), 'Remove licence file', 'btn btn-quiet btn-small', confirm='Remove the licence file from this server?', fields={'action': 'remove'}) }}</div>
+  {% endif %}
+  <p class="small licence-contact">Full terms: <a href="{{ licensing_url }}" rel="noopener">Licensing</a>. Licences and questions: <a href="mailto:licensing@radiusadmin.net">licensing@radiusadmin.net</a>.</p>
+</section>
+{% if history %}
+<section class="panel" aria-labelledby="lic-history">
+  <h2 id="lic-history">History</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th scope="col">When</th><th scope="col">By</th><th scope="col">From</th><th scope="col">To</th></tr></thead>
+    <tbody>{% for h in history %}
+    <tr><td>{{ h.at|dt }}</td><td>{{ h.actor or '—' }}</td><td>{{ h.old_label }}</td><td>{{ h.new_label }}</td></tr>
+    {% endfor %}</tbody>
+  </table></div>
+</section>
+{% endif %}
+{% endblock %}

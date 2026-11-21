@@ -16,8 +16,8 @@ Contents: 1 Prerequisites · 2 Plan the maintenance window · 3 Install step by 
 
 | Item | How to check |
 |---|---|
-| Kernel FIPS on | `cat /proc/sys/crypto/fips_enabled` → `1` |
-| Ubuntu Pro FIPS stream | `pro status` (see SECURITY.md §1 about `fips-updates` vs `fips`) |
+| Kernel FIPS on (FIPS mode only) | `cat /proc/sys/crypto/fips_enabled` → `1` |
+| Ubuntu Pro FIPS stream (FIPS mode only) | `pro status` (see SECURITY.md §1 about `fips-updates` vs `fips`) |
 | Internal apt mirror reachable | `apt-get update` |
 | Packages available | `apt-cache policy postgresql nginx python3-flask python3-psycopg2 gunicorn python3-cryptography python3-qrcode nftables` |
 | FreeRADIUS unit + binary | new server: nothing to do, the release bundle carries `packages/radius-admin-freeradius_*.deb` (§1.2). Existing server: `systemctl list-unit-files 'freeradius*' 'radiusd*'`; `command -v radiusd freeradius` |
@@ -125,10 +125,20 @@ needed, a second one. Allow 2 hours including verification.
 
 Every phase is idempotent and can be re-run. `install.sh --help` lists options.
 
+**Crypto mode (choose before the first install).** Standard mode is the default. FIPS mode is an
+explicit choice: answers key `fips: on`, the last interactive question, or `install.sh --fips`
+(`--standard-mode` or `fips: off` choose standard mode explicitly). FIPS mode is refused unless
+the host's kernel already runs in FIPS mode (`/proc/sys/crypto/fips_enabled` = 1: Ubuntu Pro,
+`pro enable fips-updates`, reboot). The first install writes the choice as `require_fips` in
+`/etc/radius-admin/radius-admin.conf`; later runs and updates never change it (an option or answer
+that differs is ignored with a warning), and `install.sh --print-settings` shows the mode in use.
+Preflight treats its FIPS checks as blocking only in FIPS mode (`preflight.sh --fips-mode on|off`,
+default: the installed `require_fips`, else standard mode).
+
 ### 3.0 Before the window
 
 ```bash
-sudo ./deploy/preflight.sh
+sudo ./deploy/preflight.sh                # FIPS mode: sudo ./deploy/preflight.sh --fips-mode on
 sudo ./deploy/make-csr.sh                 # ECDSA P-384; add --ip <management-IP> if wanted; --rsa for RSA-3072
 cat /etc/radius-admin/tls/server.csr      # submit to pki.example.net (TLS Web Server template)
 # when issued (leaf first, then Example-IssuingCA):
@@ -228,7 +238,9 @@ What it does, in order:
    them root:freerad 0640; also leaves them in the app's staging dir.
 4. Removes the symlinks listed in `freeradius/modules-to-disable.txt` (including
    `exec`: nothing in the new configuration runs external programs) and
-   `sites-enabled/inner-tunnel`.
+   `sites-enabled/inner-tunnel`. Raises `max_request_time` in `radiusd.conf` to 90 s when it is
+   lower (stock: 30 s; a higher value is kept): FreeRADIUS cuts every home server's wait to it,
+   and second-factor providers wait up to 60 s for the person (§6.9b).
 5. `radiusd -XC` (run as root, like the service — radiusd drops to `freerad` itself). On failure the tarball is restored at once
    (the running daemon was never touched).
 6. With `--restart-freeradius`: restart, wait ≤ 15 s for active + UDP 1812, otherwise
@@ -291,7 +303,7 @@ other admins in the UI (Admins page) — each gets their own account; do not sha
 systemctl status freeradius radius-admin radius-admin-helper.socket nginx postgresql@16-main radius-admin-firewall
 ss -lunp | grep -E ':1812|:1813'                  # radiusd
 ss -ltnp | grep -E ':443|:80 |:5432'              # only nginx on <management-IP>:443
-sudo -u radius-admin env RADIUS_ADMIN_CONFIG=/etc/radius-admin/radius-admin.conf PYTHONPATH=/opt/radius-admin/app python3 -m radius_admin.cli check-fips
+sudo -u radius-admin env RADIUS_ADMIN_CONFIG=/etc/radius-admin/radius-admin.conf PYTHONPATH=/opt/radius-admin/app python3 -m radius_admin.cli check-fips   # FIPS mode
 nft list table inet radius_admin
 curl -sI https://radius.example.net/login | head -n 5     # from an admin PC: 200 + HSTS
 curl -m 5 https://radius.example.net/                      # from a NON-admin subnet: must time out
@@ -641,6 +653,23 @@ UI → **Alerts**. The monitoring service checks every minute and raises:
   Alerts page cannot be reached, so this one is useful only with syslog forwarding or
   email (the Alerts pages warn while email is off); afterwards it stays in the alert history. nginx restarts itself every 30 seconds after a failure (nginx phase drop-in), so
   an alert means it has stayed down; check `systemctl status nginx` and `nginx -t`.
+* **Second-factor provider down**: the Duo provider is on, a configuration with Duo has been
+  applied, and `duoauthproxy.service` is not active or not listening on 127.0.0.1:18120 in two
+  checks in a row. Device admin logins that need a second factor are rejected meanwhile; exempt
+  break-glass accounts still log in (§6.9b).
+* **Second factor not answering**: N or more device admin logins rejected with "the
+  second-factor provider did not answer" within M minutes (default 3 in 15; its own switch);
+  clears below N/2. A few are normal (an ignored push); many mean the provider or its link to
+  the vendor's cloud is down.
+* **Unverified second-factor build**: the Duo provider is on and its build was installed with
+  an admin-entered SHA-256 that the signed catalog still does not list. Sent again once a day
+  while open; clears by itself once a release's catalog lists the build.
+* **Withdrawn second-factor build**: the installed Duo build was withdrawn from the signed
+  catalog (by SHA-256 or version). Sent again once a day until a current build is installed.
+
+  The three provider alerts share one switch in Alert settings. The monitor asks the helper
+  (`integration_status`, the catalog once an hour); an older helper without those actions
+  raises nothing.
 
 Each alert is sent once when it opens and once when it clears, and recorded in the audit
 log. The dashboard and the side menu show open alerts; the dashboard and Alerts page also
@@ -804,6 +833,180 @@ from outside the management subnet never reach the directory.
 Upgrade to this release: `sudo ./deploy/install.sh --phase postgres`, `--phase app`, then
 `--phase freeradius --restart-freeradius` in a maintenance window. The old address
 `/switch-admins/` redirects to `/device-admins/`.
+
+### 6.9b A second factor for device admin logins (Integrations)
+
+A device admin login can be made to need a second factor (SPEC section 29): FreeRADIUS checks the
+management subnet, then sends the login to a multi-factor provider, which asks the person to
+approve it. 802.1X network access never uses a second factor.
+
+**Remote RADIUS MFA server** (directory accounts). Any RADIUS server that checks the password and
+asks for the second factor itself: a Network Policy Server with the Microsoft Entra multifactor
+extension, privacyIDEA, an Okta RADIUS agent on another host. FreeRADIUS looks the person up in the
+directory first (unknown names never leave the server) and, after the remote server's accept, still
+requires one of the device admin groups (§6.9a). Not offered in FIPS mode.
+
+1. On the remote server, add this RADIUS server as a client with a new shared secret (16–128
+   characters) and make sure it answers with Message-Authenticator (or untick that option below).
+2. UI → **Integrations → Add remote MFA server**: id, address, port, shared secret, how long to wait
+   for the person (5–60 s). Save (step-up), then **Apply changes**.
+3. UI → **Integrations → Change the rules**: *Directory accounts* → require a second factor with that
+   server, on all clients or on selected ones. Saved rules apply at the next login, no Apply.
+4. On each device, raise the RADIUS timeout so that it waits for the answer (for example about 60 s,
+   or the server's wait time plus a margin), with one retry. A device that gives up early shows a
+   failed login although the person approved.
+
+**Duo Authentication Proxy** (local and directory accounts). FreeRADIUS sends the login to the Duo
+proxy on this server (127.0.0.1:18120); Duo sends the password check back to the virtual server
+`radius-admin-mfa-primary` (127.0.0.1:18121), which checks it exactly like a normal device admin
+login, and only then asks for the push, phone call or passcode. Installing and configuring Duo from
+the portal is described below.
+
+**Rules and break-glass.** Rules exist per account kind (local, directory) and can be limited to
+selected clients. Exempt local accounts (at most 10) never need a second factor: keep at least one,
+because a login that needs a second factor is rejected when the provider does not answer, is turned
+off, or was added but not applied yet.
+
+**Check.** Auth log: methods `pap-admin+mfa` and `admin-ldap+mfa`. Reject reasons: refused in the
+second-factor chain (Duo: wrong password, not a device admin, or denied), the second-factor server
+refused the login, the provider did not answer, the provider is turned off, the login did not reach
+its provider (apply the configuration), a remote server for a local account.
+
+Upgrade to this release: `sudo ./deploy/install.sh --phase postgres`, `--phase app`, then
+`--phase freeradius --restart-freeradius` in a maintenance window. Nothing changes until a provider
+and a rule are configured.
+
+**Provider builds and the catalog.** Builds of a provider installed on this server (Duo) are
+checked against `/opt/radius-admin/integrations/catalog.json`, which every release signs with the
+update key (`catalog.json.sig` next to it). The helper keeps the newest catalog it has seen
+(`/var/lib/radius-admin-helper/integrations-catalog.json`), so a downgrade does not bring back a
+withdrawn build. Downloads land in `/var/lib/radius-admin/integrations/` (status in
+`fetch-<provider>.json`, unit `radius-admin-integration-fetch@<provider>-<version>`), installs run
+as `radius-admin-integration-install@<provider>` with the log in
+`/var/log/radius-admin/integration-<provider>-<time>.log`. A checkout (not a release bundle) has no
+signed catalog: builds then need the SHA-256 entered, and nothing installs in FIPS mode.
+
+**Setting up Duo** (Integrations → Duo Authentication Proxy):
+
+1. In the Duo Admin Panel, protect an application of type *RADIUS*; note its integration key,
+   secret key and API hostname. Allow outbound HTTPS from this server to that hostname.
+2. *Check this server*, then *Download* a build the catalog lists (or *Upload* Duo's unmodified
+   source file). A build that is not in the catalog can be installed outside FIPS mode after you
+   enter its SHA-256 from Duo's checksum page; it shows as *Unverified*.
+3. *Install* (a few minutes; the Details drop-down shows the log).
+4. *Connect to Duo*: keys, API hostname, fail mode, factors; tick *On*, save, then **Apply
+   changes** (this starts the Duo proxy and restarts FreeRADIUS).
+5. *Run the check*, then choose Duo in **Change the rules** for local and/or directory accounts,
+   keep a break-glass account exempt, and raise the devices' RADIUS timeout to about 60 s.
+
+**Duo on this server** (SPEC section 29.2). The install builds Duo's source as the unprivileged
+user `radius-admin-build` (about two minutes; build packages are added when missing), runs Duo's
+installer into `/opt/duoauthproxy` (service user `duo_authproxy_svc`, unit `duoauthproxy.service`,
+hardened by a radius-admin drop-in) and leaves the proxy stopped until its configuration is
+applied. Applying changes writes `/opt/duoauthproxy/conf/authproxy.cfg` (never edit it by hand: the
+next apply replaces it) and restarts the proxy before FreeRADIUS; if the proxy does not come up its
+previous configuration returns and FreeRADIUS is not touched. Duo's own log is
+`/opt/duoauthproxy/log/authproxy.log`. Removing Duo is refused while FreeRADIUS still sends logins
+to it: turn the Duo provider off and apply first; the removal keeps a copy of the configuration in
+`/var/backups/radius-admin/`. Outbound HTTPS from the proxy to `api-*.duosecurity.com:443` must be
+allowed.
+
+**Elsewhere in the portal.** The Integrations page lists, per device profile of the clients the
+rules cover, how to raise the device's RADIUS timeout (Catalyst 1200/1300: `radius-server timeout
+30` and `radius-server retransmit 2`, about 90 s with the retries; other devices: at least 60 s in
+total); custom profiles have a field for it. The auth log detail of a `+mfa` login names the
+provider the rule named at that time (rebuilt from the audit log of rule changes). The
+privileged-access report shows per account whether a second factor is needed, by which provider
+and on which clients, the exemptions, and warns when no local account is exempt. The setup
+checklist has an optional step "Second factor for device admins". Alerts: §6.5.
+
+**How long FreeRADIUS waits.** The Duo provider waits 60 s for the person, a remote server as
+long as its setting (5–60 s). FreeRADIUS cuts any such wait to `max_request_time` in
+`radiusd.conf` (stock 30 s; radiusd then logs `Ignoring "response_window = 60.000000", forcing to
+"response_window = 30.000000"` at start), so the freeradius phase raises it to 90 s and preflight
+warns when it is lower. Run `--phase freeradius --restart-freeradius` after upgrading to this
+release.
+
+**Applying with Duo takes longer.** An apply that changes Duo's configuration restarts the Duo
+proxy and then FreeRADIUS; in the worst case (both fail and are restored) the helper needs about
+180 s. The portal then waits up to `helper_duo_timeout` (210 s, `[app]` in radius-admin.conf),
+nginx and gunicorn up to 240 s; the Apply button says it can take a few minutes. A changed
+`restart_timeout`/`restart_wait` in helper.conf must keep `lock + validate + 4 × (restart + wait)`
+below `helper_duo_timeout`.
+
+**FIPS mode.** Only builds the signed catalog marks FIPS-capable can be installed, turned on and
+applied; the build must have been installed in FIPS mode, and Duo then runs with `fips_mode=true`
+and fail mode secure. A Duo installed before FIPS mode was turned on is refused at apply (validate
+says so) and the Unverified alert names the reason; install a FIPS-capable build or turn Duo off
+and apply. FIPS-capable builds: Duo 6.8.1 (checked on Ubuntu 24.04 Pro `fips-updates`, amd64).
+Remote MFA servers are not offered in FIPS mode.
+
+Duo in FIPS mode keeps RADIUS's MD5 on its two loopback hops, like FreeRADIUS itself (SECURITY.md
+§1.1 exceptions 1, 2 and 9); its TLS to Duo runs on Duo's bundled OpenSSL FIPS Provider 3.1.2
+(CMVP #4985). Before turning it on, put the controls of SECURITY.md §1.3 in place: isolated
+management network for RADIUS (IPsec between sites, RadSec where devices support it), unique
+secrets and Message-Authenticator per device, host firewall (outbound only to
+`api-*.duosecurity.com:443`), Duo factors push or passcode with lockout on, a break-glass account,
+alerts to the SIEM. After installing or updating Duo, keep the evidence for the assessor:
+
+```bash
+sudo python3 tools/integrations/duo-fips-check.py host
+sudo python3 tools/integrations/duo-fips-check.py installed --running --json duo-fips.json
+```
+
+(from the release bundle; R1–R6 must pass). Record exception 9 in the SSP.
+
+Maintainers add a build with `tools/integrations/catalog.py add duo X.Y.Z <downloaded file>
+--vendor-sha256 <value from the vendor's checksum page>` (refused unless both agree), mark it
+FIPS-capable only after the FIPS VM check (`catalog.py fips duo X.Y.Z <platform>`), and withdraw a
+bad one with `catalog.py withdraw duo X.Y.Z`; the next release signs the catalog.
+
+**FIPS check of a Duo build (maintainers only; lab VM, never a production server).** A build gets
+`fips: true` only after this check passes for it. What is known so far (Duo 6.8.1, read and run in
+a standard-mode sandbox): Duo ships a prebuilt OpenSSL FIPS provider per architecture
+(`pkgs/fips_modules/<amd64|aarch64>/fips.so`, "OpenSSL FIPS Provider 3.1.2", module MAC intact)
+with its `openssl.cnf`, installed as `/opt/duoauthproxy/usr/local/openssl/`; `fips_mode = true`
+in `[main]` makes Duo's `cryptography` 43.0.1 (a manylinux wheel that links its own OpenSSL 3.3.2)
+use only that provider: SHA-256 works, MD5 is refused. Duo logs "FIPS mode is not enabled" at a
+start without it.
+
+1. Lab VM: Ubuntu 24.04 LTS, `sudo pro attach <token>`, `sudo pro enable fips-updates`, reboot;
+   `cat /proc/sys/crypto/fips_enabled` must print 1. Install radius-admin from the release
+   candidate's bundle (`require_fips` on).
+2. Static check of Duo's file (nothing in it runs):
+   `python3 tools/integrations/duo-fips-check.py source duoauthproxy-X.Y.Z-src.tgz`
+   (R3: the provider for this architecture is intact; prints its version).
+3. Lab catalog: the helper installs in FIPS mode only builds the signed catalog marks
+   FIPS-capable, so sign a lab catalog with a throwaway key on the VM:
+   `openssl ecparam -name secp384r1 -genkey -noout -out lab.pem`,
+   `openssl pkey -in lab.pem -pubout -out lab-pub.pem`, `cp integrations/catalog.json lab.json`,
+   `tools/integrations/catalog.py --catalog lab.json add duo X.Y.Z <file> --vendor-sha256 <Duo's value>`,
+   `catalog.py --catalog lab.json fips duo X.Y.Z lab`, `catalog.py --catalog lab.json sign lab.pem`;
+   install `lab.json` and its `.sig` as `catalog.json` / `catalog.json.sig` (root, 0644) in
+   `/opt/radius-admin/integrations/`, and point `update_pubkey` in `/etc/radius-admin/helper.conf`
+   at `lab-pub.pem`. Never on a real server and never committed.
+4. Portal: Integrations → Duo: upload the build, install (FIPS mode), connect with the keys of a
+   Duo trial account's RADIUS application (or dummy keys: the proxy starts, logins fail), tick
+   On, Apply. A test login with a push is worth doing with a trial account.
+5. Full check: `sudo python3 tools/integrations/duo-fips-check.py all duoauthproxy-X.Y.Z-src.tgz
+   --running --json duo-X.Y.Z-fips.json`. Required: R1 kernel FIPS, R2 system OpenSSL FIPS
+   provider active, R3/R3i provider intact and the installed copy is the source's, R4 Duo's
+   provider loads and passes its self-tests, R5 MD5 refused / SHA-256 works in Duo's Python, R6
+   applied `fips_mode=true` + `failmode=secure`, proxy listening, log says FIPS mode is enabled.
+   Your decision: M1, the provider version is on an active CMVP certificate for OpenSSL's FIPS
+   provider (csrc.nist.gov, Cryptographic Module Validation Program; check the certificate's
+   status and its operational environment notes); M2, a prebuilt provider binary from Duo and a
+   `cryptography` wheel with its own OpenSSL are acceptable under rule 6 and the maintainer's
+   FIPS decision for providers.
+6. Only if all of that holds: in the repository, `tools/integrations/catalog.py fips duo X.Y.Z
+   ubuntu-24.04-pro-fips-updates-<arch>` (one name per architecture actually checked), with the
+   JSON report's summary in the pull request; the next release signs it. Otherwise leave
+   `fips: false` and note why in the release notes. Record of decisions: Duo 6.8.1, 2026-11-20,
+   amd64: R1–R6 passed; M1 accepted (OpenSSL FIPS Provider 3.1.2 = CMVP #4985, FIPS 140-3, active
+   to 2030-03-10; Ubuntu 24.04 not a tested environment); M2 accepted (Duo's prebuilt provider and
+   `cryptography` wheel); its RADIUS MD5 on loopback is SECURITY.md exception 9.
+7. Throw the VM away (or `sudo /opt/duoauthproxy/uninstall --no-prompt` and restore
+   `update_pubkey`).
 
 ### 6.10 Device profiles (switches from other vendors)
 
@@ -1205,7 +1408,7 @@ migration (new switch-admin passwords, MAB devices) exists only in PostgreSQL.
 | `400 The SSL certificate error` | the browser presented a client certificate that is revoked, expired, or **OCSP could not be checked** (responder `pki.example.net:8080` unreachable or DNS failing). nginx fails closed. Check `/var/log/nginx/radius-admin.error.log`. Workaround: use a browser profile without the certificate and sign in with TOTP. |
 | nginx won't start: `host not found in OCSP responder` | `pki.example.net` must resolve at nginx start; fix DNS / `--resolver` |
 | `502 Bad Gateway` | `systemctl status radius-admin`; `journalctl -u radius-admin`; socket perms `ls -l /run/radius-admin/` (srwxrwx--- radius-admin:radius-admin-web); `id www-data` must list radius-admin-web (restart nginx after adding) |
-| App refuses to start: FIPS | `check-fips`; `/proc/sys/crypto/fips_enabled`; never set `require_fips = false` in production |
+| App refuses to start: FIPS | FIPS mode only: `check-fips`; `/proc/sys/crypto/fips_enabled`; do not set `require_fips = false` on a server installed in FIPS mode |
 | "helper unavailable" | `systemctl status radius-admin-helper.socket`; `ls -l /run/radius-admin-helper.sock` (root:radius-admin 0660) |
 | "helper misconfigured" | `journalctl -t radius-admin-helper`; `/etc/radius-admin/helper.conf` must be root-owned, not group/world-writable, keys valid |
 | Validate fails | output shows the radiusd error and line; most often custom policy syntax; fix and re-validate. "forbidden construct" = the policy uses `$INCLUDE`, `$ENV`, `$TEMPLATE`, `%{exec:}`, `Exec-Program`, backticks, an interpreter xlat or a numeric attribute alias (`Attr-<n>`); use attribute names instead |
@@ -1257,7 +1460,7 @@ the rollback option is no longer needed.
 ### 13.1 Interactive install and answers file
 
 `sudo ./deploy/install.sh` with no options asks for the server name, management subnet,
-portal address, switch networks (where the monitor may send SNMP and CoA, §6.3), DNS resolvers, portal certificate and first administrator, shows a summary and
+portal address, switch networks (where the monitor may send SNMP and CoA, §6.3), DNS resolvers, portal certificate, first administrator, crypto mode (standard by default, FIPS mode on request: §3), the 802.1X (EAP) certificate of a new server and an OCSP responder (§13.4), shows a summary and
 asks for confirmation. Unattended: `--answers FILE` (format in `deploy/answers.sh`);
 `--print-answers` only checks and prints. The answers are kept in `/etc/radius-admin/site.yaml`
 (root 0640); re-run later with `--answers /etc/radius-admin/site.yaml`.
@@ -1307,3 +1510,108 @@ CoA to RadSec clients still goes over UDP to the client's CoA port.
 4. Test in a private window with an account in a mapped group. Refusals are in the Audit log
    (`auth.login`, `method: saml`, with the reason).
 5. Keep at least one local administrator with MFA as break-glass access.
+
+### 13.4 A new server: directory, EAP certificates and OCSP
+
+On a new server (FreeRADIUS never set up by radius-admin and no SQLite database to migrate) the
+`freeradius` phase installs a working configuration that rejects every 802.1X user until you
+configure it. It needs nothing from the stock FreeRADIUS files:
+
+- **Access rules** may be empty: a warning says that every 802.1X user is rejected until you add
+  rules in the portal. (With a SQLite database present the phase still refuses and asks for the
+  `migrate` phase first.)
+- **Directory: not configured.** `mods-available/ldap` gets the line
+  `#  radius-admin: directory not configured`, an empty password, the server
+  `ldaps://directory.invalid` and a connection pool that does not connect at start. FreeRADIUS
+  starts. Directory lookups fail, so EAP-TLS and directory accounts are rejected, while local
+  accounts, PEAP/TTLS with local users and MAB work. Updates keep this state while the marker line
+  is there.
+- **EAP certificates** in `/etc/freeradius/certs/site/` (`radius.pem`, `radius.key`, `ca.pem`):
+  the installer asks whether you have them (answers `eap_tls: existing` with `eap_cert`, `eap_key`
+  and `eap_ca`, the CA that issues client certificates). If you don't, it makes **self-signed**
+  ones: a throwaway ECDSA P-384 CA signs the server certificate for the server name, then its key
+  is destroyed. Replace them: no client certificate can chain to that CA. Files already in
+  `certs/site/` are kept.
+- **localhost client secret**: a random one replaces the stock `testing123`.
+- **OCSP** for EAP-TLS and portal client certificates: only with a responder (answers `ocsp_url`,
+  or `RA_OCSP_URL` in the environment). Without one, EAP OCSP is off and the nginx site has no
+  `ssl_ocsp` lines. Preflight checks the responder's name only when one is set.
+
+**Set up the directory later** (by hand until the portal's Setup step exists):
+
+1. In `/etc/freeradius/mods-available/ldap` set `server`, `port`, `identity`, `password`,
+   `base_dn` and, in `tls { }`, `ca_file` (the CA of your domain controllers). Test the login with
+   the same values first:
+   `LDAPTLS_CACERT=<ca_file> ldapwhoami -x -H ldaps://dc01.example.net -D '<identity>' -W`.
+2. Delete the line `#  radius-admin: directory not configured`.
+3. `sudo ./deploy/install.sh --phase freeradius --restart-freeradius`. The phase now carries your
+   settings over, tests the bind and starts the connection pool as shipped. Updates keep them.
+
+**Replace the EAP certificates** in the console: **Certificates** (§13.5), then Apply changes.
+
+### 13.5 Certificates in the console
+
+**Network access → Certificates** shows the installed certificates (subject, issuer, expiry, key
+type, fingerprint) and lets an administrator (with step-up) change them. Nothing is installed until
+**Apply changes**; the Apply page lists what changes, with private keys only as fingerprints.
+
+- **802.1X server certificate** (FreeRADIUS, also RadSec) and **portal HTTPS certificate**:
+  - *Upload a certificate and key*: PEM certificate (server certificate first, then the
+    intermediate CAs, or the intermediates as a second file) and PEM key, with its password if it
+    has one; or one PKCS#12 file (.p12/.pfx) with its password.
+  - *Make a key and certificate request here*: give the DNS name(s) and key type (ECDSA P-384 by
+    default), download the `.csr`, have your CA issue the certificate (TLS Web Server template),
+    then upload the issued certificate (and the intermediates). The key never leaves the server.
+  - The portal certificate must name the portal (its `server_name`); the 802.1X certificate needs
+    the name your supplicants are configured to expect.
+- **Client certificate CA**: the issuing and root CA certificates of your client certificates.
+  FreeRADIUS trusts them for EAP-TLS and the portal for client-certificate sign-in.
+- **OCSP for EAP-TLS**: leave as installed, off, or on with the responder URL.
+
+Allowed keys: RSA 3072 bits or more, ECDSA P-256 or P-384. Expired certificates, CA certificates as
+server certificates, and certificates for client authentication only are refused.
+
+On Apply the helper checks everything again, validates FreeRADIUS with the new files, restarts it,
+then (portal certificate or client CA) tests and reloads nginx and checks that the portal serves
+the new certificate. If any step fails, every file of that apply is put back. A rollback on the
+Apply page also restores the certificate files of that backup.
+
+**Stop managing it here** leaves the installed certificate as it is and stops the console from
+changing it. Note: re-running the installer with `tls: existing` in the answers installs the
+portal certificate files those answers name; remove `tls_cert`/`tls_key` (or use `tls: self-signed`,
+which keeps an existing certificate) once the console manages the portal certificate.
+
+Troubleshooting: "the private key does not belong to the certificate" (wrong key file, or for an
+issued certificate: the CA signed another request); "does not name …" (add the name as a DNS
+subject alternative name); "key type … is not allowed" (re-issue with RSA 3072+ or ECDSA).
+
+### 13.6 Licence
+
+radius-admin is source available under the Business Source License 1.1; see LICENSING.md. Nothing
+is locked whatever you record.
+
+1. Settings → **Licence**: choose free use (personal, or fewer than 50 people) or commercial. For
+   commercial, install the licence file, or, without one yet, press "Start the 60-day trial". This
+   is the first setup step: an admin is taken to this
+   page at sign-in until it is answered (operators, viewers and RADIUS are never affected). The
+   60-day trial starts the first time you choose it and does not restart. Changing the answer later
+   asks you to confirm the licence definitions; earlier answers are listed on the page.
+2. A commercial licence or written exception is a `.json` licence file (upload or paste). It is checked on the server against the project's public key. A renewed
+   licence is installed the same way.
+3. Admins see one line on the dashboard when something needs attention (a trial ending, a licence
+   expiring); "Hide for 30 days" hides that line. After a trial ends, a banner on every admin page
+   says so until a licence is installed or the answer changes. Changes are in the Audit log
+   (`licence.*`).
+
+**Issuing licences (maintainer).** On the machine that holds the signing key, as root:
+
+    tools/licence/licence-tool.py serve          # prints http://localhost:8766/?token=…
+    tools/licence/licence-tool.py issue --licensee "Example Corp" --tier 50-249
+    tools/licence/licence-tool.py list
+
+Files: `/root/.config/radius-admin/licence-signing/` (`signing-key.pem` 0600, `public.pem`,
+`register.json`, `issued/`). Back up the whole directory offline after issuing. Revoking only marks
+the register: a server keeps a revoked file valid until it expires, so issue revocable deals with
+short terms. To rotate the key: move the old directory aside, `keygen`, copy `public.pem` to
+`app/radius_admin/licence_keys/<key id>.pem` in the next release, keep the old public key there
+until the licences it signed have expired (remove it at once if it was exposed).

@@ -219,10 +219,10 @@ def stop(p):
 
 
 # ----------------------------------------------------------------------------- clients
-def radclient(prefix, client, attrs, server="127.0.0.1:1812"):
+def radclient(prefix, client, attrs, server="127.0.0.1:1812", timeout=5, retries=1):
     src, secret = client
     lines = list(attrs) + ["Packet-Src-IP-Address = %s" % src, "Message-Authenticator = 0x00"]
-    r = subprocess.run([os.path.join(prefix, "bin", "radclient"), "-x", "-r", "1", "-t", "5",
+    r = subprocess.run([os.path.join(prefix, "bin", "radclient"), "-x", "-r", str(retries), "-t", str(timeout),
                         "-D", os.path.join(prefix, "share", "freeradius"),
                         server, "auth", secret],
                        input=",\n".join(lines) + "\n", capture_output=True, text=True)
@@ -420,6 +420,202 @@ def admin_directory_cases(prefix):
     set_admin_directory(False)
     code, out = login("netadmin", DIR_PW)
     record("DEVICE ADMIN directory accounts turned off again (no restart) -> Reject", code == "reject", last())
+
+
+# ----------------------------------------------------------------------------- second factor
+MFA_LOG = "/var/tmp/ra-bench-mfa.log"
+MFA_DECISIONS = "/var/tmp/ra-bench-mfa-decisions.json"
+
+
+def start_mfa_fakes():
+    """The Duo proxy and remote MFA server stand-ins (fake-mfa-proxy.py), with the secrets
+    render.py put into the clients file."""
+    sys.dont_write_bytecode = True
+    sys.path.insert(0, HERE)
+    from render import MFA_DUO, MFA_REMOTE, MFA_REMOTE_PASSWORD
+    for f in (MFA_LOG, MFA_DECISIONS):
+        if os.path.exists(f):
+            os.unlink(f)
+    fake = os.path.join(HERE, "fake-mfa-proxy.py")
+    common = ["--decisions", MFA_DECISIONS, "--log", MFA_LOG]
+    procs = [subprocess.Popen([sys.executable, fake, "--mode", "duo", "--listen", "127.0.0.1:18120",
+                               "--secret", MFA_DUO["secret"], "--primary", "127.0.0.1:18121",
+                               "--primary-secret", MFA_DUO["primary_secret"]] + common),
+             subprocess.Popen([sys.executable, fake, "--mode", "remote", "--listen", "127.0.0.1:18130",
+                               "--secret", MFA_REMOTE["secret"], "--password", MFA_REMOTE_PASSWORD] + common)]
+    time.sleep(0.5)
+    return procs
+
+
+def mfa_prompts(user=None):
+    try:
+        with open(MFA_LOG) as fh:
+            lines = [ln.split() for ln in fh if ln.strip()]
+    except OSError:
+        return []
+    # "primary-reject" / "password-reject": refused before any second factor was asked
+    return [ln for ln in lines if (user is None or ln[0] == user) and ln[1:2] not in (["primary-reject"],
+                                                                                     ["password-reject"])]
+
+
+def set_mfa(local=None, directory=None, scope="all", clients=(), exempt=(), providers=None):
+    """Live MFA policy (sql/101-mfa.sql). local/directory: provider id or None (off)."""
+    if providers is None:
+        providers = {"duo": ("duo", True), "remote-mfa": ("radius-mfa", True), "ghost": ("duo", True)}
+    sql = ["BEGIN;",
+           # the bench's clients come from render.py; the rules name clients of ui.radius_client
+           "INSERT INTO ui.radius_client (name, ipaddr, secret) VALUES"
+           " ('sw-192-0-2-10', '192.0.2.10', 'TestSwitchInSecret012345678'),"
+           " ('sw-generic', '127.0.0.2', 'TestGenericSecret0123456789') ON CONFLICT (name) DO NOTHING;",
+           "UPDATE ui.mfa_policy SET enabled=false, provider_id=NULL, client_scope='all';",
+           "DELETE FROM ui.mfa_policy_client;", "DELETE FROM ui.mfa_exempt;", "DELETE FROM ui.mfa_provider;"]
+    for pid, (ptype, on) in sorted(providers.items()):
+        sql.append("INSERT INTO ui.mfa_provider (id, type, enabled) VALUES (%s, %s, %s);"
+                   % (q(pid), q(ptype), "true" if on else "false"))
+    for kind, pid in (("local", local), ("directory", directory)):
+        if pid:
+            sql.append("UPDATE ui.mfa_policy SET enabled=true, provider_id=%s, client_scope=%s WHERE account_kind=%s;"
+                       % (q(pid), q(scope), q(kind)))
+            for c in clients:
+                sql.append("INSERT INTO ui.mfa_policy_client (account_kind, client_id)"
+                           " SELECT %s, id FROM ui.radius_client WHERE name=%s;" % (q(kind), q(c)))
+    for u in exempt:
+        sql.append("INSERT INTO ui.mfa_exempt (username) VALUES (%s);" % q(u))
+    sql.append("COMMIT;")
+    psql("".join(sql))
+
+
+def set_mfa_decisions(d):
+    import json
+    with open(MFA_DECISIONS, "w") as fh:
+        json.dump(d, fh)
+
+
+def mfa_cases(prefix):
+    """Second factor for device admin logins (SPEC section 29): live policy, the Duo chain
+    through radius-admin-mfa-primary, a remote RADIUS MFA server, fail-closed cases."""
+    from render import MFA_REMOTE_PASSWORD
+
+    def login(user, pw, client=SW_IN, **kw):
+        attrs = ['NAS-IP-Address = %s' % client[0], 'Service-Type = Login-User',
+                 'User-Name = "%s"' % user, 'User-Password = "%s"' % pw]
+        return radclient(prefix, client, attrs, timeout=kw.pop("timeout", 12), **kw)
+
+    def last(user):
+        return psql("SELECT authmethod||'|'||reply||'|'||coalesce(reason,'') FROM radpostauth"
+                    " WHERE username = %s ORDER BY id DESC LIMIT 1" % q(user))
+
+    def case(name, user, pw, want, method=None, why="", prompts=None, client=SW_IN, check=None, **kw):
+        before = len(mfa_prompts(user))
+        code, out = login(user, pw, client, **kw)
+        got = last(user)
+        n = len(mfa_prompts(user)) - before
+        ok = code == want and why in got and (method is None or got.startswith(method + "|"))
+        ok = ok and (prompts is None or n == prompts) and (check is None or check(out))
+        record("MFA " + name, ok, "%s %r prompts=%d" % (code, got, n))
+        return out
+
+    # the tables exist and nothing is required by default
+    record("MFA policy rows exist and are off by default",
+           psql("SELECT string_agg(account_kind||':'||enabled, ',' ORDER BY account_kind) FROM ui.mfa_policy")
+           == "directory:false,local:false")
+    set_mfa_decisions({})
+    set_mfa()
+    case("policy off: local admin logs in without a second factor", "t-admin1", ADMIN_PW, "accept",
+         "pap-admin", prompts=0)
+
+    set_mfa(local="duo")
+    for priv15 in (False, True):
+        set_priv15(priv15)
+        case("Duo: local admin, password and second factor accepted [priv15=%s]" % priv15, "t-admin1", ADMIN_PW,
+             "accept", "pap-admin+mfa", prompts=1, check=lambda out, p=priv15: has_priv15(out) == p)
+    set_priv15(False)
+    case("Duo: wrong password -> Reject, no second-factor prompt", "t-admin1", "wrong-password", "reject",
+         "pap-admin+mfa", "refused in the second-factor chain", prompts=0)
+    set_mfa_decisions({"t-admin1": "deny"})
+    case("Duo: second factor denied -> Reject", "t-admin1", ADMIN_PW, "reject", "pap-admin+mfa",
+         "refused in the second-factor chain", prompts=1)
+    set_mfa_decisions({"t-admin1": "noclass"})
+    case("Duo: an Accept without the password check's Class -> Reject", "t-admin1", ADMIN_PW, "reject",
+         "pap-admin+mfa", "did not carry the password check", prompts=1)
+    set_mfa_decisions({"t-admin1": "slow"})
+    case("Duo: the device retransmits while the user answers -> one prompt, Accept", "t-admin1", ADMIN_PW,
+         "accept", "pap-admin+mfa", prompts=1, timeout=2, retries=4)
+    # FreeRADIUS clamps a home server's response_window to max_request_time (stock 30 s): the
+    # installer raises it so that the Duo realm's 60 s window holds (a person approving after
+    # 30 s was rejected with "the second-factor provider did not answer")
+    set_mfa_decisions({"t-admin1": "slow40"})
+    case("Duo: the person approves after 40 s -> Accept (max_request_time above the 60 s window)",
+         "t-admin1", ADMIN_PW, "accept", "pap-admin+mfa", prompts=1, timeout=55, retries=1)
+    set_mfa_decisions({})
+    case("Duo: not in group net-admins -> Reject, no prompt", "t-notgroup", ADMIN_PW, "reject",
+         "pap-admin+mfa", "refused in the second-factor chain", prompts=0)
+    case("Duo: unknown user -> Reject, no prompt", "nosuchuser", ADMIN_PW, "reject", None, "", prompts=0)
+    case("Duo: from outside the management subnet -> Reject before proxying", "t-admin1", ADMIN_PW, "reject",
+         "pap-admin+mfa", "outside the management subnet", prompts=0, client=SW_OUT)
+    case("Duo: legacy Crypt-Password checked by radius-admin-mfa-primary -> Accept", "t-legacy", LEGACY_PW,
+         "accept", "pap-admin+mfa", prompts=1)
+
+    set_mfa(local="duo", exempt=["T-ADMIN2"])
+    case("exempt local account (case-insensitive) -> Accept without a prompt", "t-admin2", ADMIN_PW, "accept",
+         "pap-admin", prompts=0)
+    case("not exempt -> still needs the second factor", "t-admin1", ADMIN_PW, "accept", "pap-admin+mfa", prompts=1)
+
+    set_mfa(local="duo", scope="selected", clients=["sw-generic"])
+    case("selected clients: a login on another client needs no second factor", "t-admin1", ADMIN_PW, "accept",
+         "pap-admin", prompts=0)
+    set_mfa(local="duo", scope="selected", clients=["sw-192-0-2-10"])
+    case("selected clients: a login on a selected client needs it", "t-admin1", ADMIN_PW, "accept",
+         "pap-admin+mfa", prompts=1)
+
+    set_mfa(local="duo", providers={"duo": ("duo", False)})
+    case("provider turned off -> Reject (fail closed)", "t-admin1", ADMIN_PW, "reject", None,
+         "its provider is turned off", prompts=0)
+    set_mfa(local="ghost")
+    case("provider enabled but not applied (no realm) -> Reject (fail closed)", "t-admin1", ADMIN_PW, "reject",
+         "pap-admin+mfa", "did not reach its provider", prompts=0)
+    set_mfa(local="remote-mfa")
+    case("remote server for a local account -> Reject", "t-admin1", ADMIN_PW, "reject", "pap-admin+mfa",
+         "checks directory accounts only", prompts=0)
+
+    # injection through the user name while the policy is on: hex to SQL, never a prompt
+    set_mfa(local="duo")
+    for pl in ("x' OR '1'='1", "x'); DELETE FROM ui.mfa_policy; --", "\\047 OR 1=1 --"):
+        code, out = login(pl, ADMIN_PW)
+        record("MFA INJECTION %r in the user name -> Reject" % pl, code == "reject", code)
+    record("MFA injection left ui.mfa_policy intact", psql("SELECT count(*) FROM ui.mfa_policy") == "2")
+
+    # directory accounts through the remote MFA server: password and second factor there,
+    # the device admin group checked here
+    set_admin_directory(True)
+    set_mfa(directory="remote-mfa")
+    case("remote: directory admin, remote password and second factor -> Accept", "netadmin", MFA_REMOTE_PASSWORD,
+         "accept", "admin-ldap+mfa", prompts=1,
+         check=lambda out: "Session-Timeout" not in out and "remote says hello" not in out)
+    case("remote: the remote server's reply attributes never reach the device", "netadmin", MFA_REMOTE_PASSWORD,
+         "accept", "admin-ldap+mfa", prompts=1, check=lambda out: "Class" not in out.split("Received Access")[-1])
+    case("remote: directory account not in a device admin group -> Reject although the server accepted",
+         "jroe", MFA_REMOTE_PASSWORD, "reject", "admin-ldap+mfa", "not in a device admin group", prompts=1)
+    case("remote: wrong password at the remote server -> Reject", "netadmin", "wrong-password", "reject",
+         "admin-ldap+mfa", "the second-factor server refused", prompts=0)
+    case("remote: unknown directory user -> Reject before proxying", "nosuchadmin", MFA_REMOTE_PASSWORD, "reject",
+         None, "no such device admin", prompts=0)
+    set_mfa_decisions({"netadmin": "silent"})
+    case("remote: no answer -> Reject after the timeout", "netadmin", MFA_REMOTE_PASSWORD, "reject",
+         "admin-ldap+mfa", "did not answer", prompts=1, timeout=15)
+    set_mfa_decisions({})
+    set_mfa(local="duo", directory="duo")
+    case("Duo: directory admin, LDAP bind in radius-admin-mfa-primary -> Accept", "netadmin", DIR_PW, "accept",
+         "admin-ldap+mfa", prompts=1)
+    case("Duo: directory admin wrong password -> Reject, no prompt", "netadmin", "wrong-password", "reject",
+         "admin-ldap+mfa", "refused in the second-factor chain", prompts=0)
+    case("Duo: directory account outside the device admin groups -> Reject, no prompt", "jroe", DIR_PW, "reject",
+         "admin-ldap+mfa", "refused in the second-factor chain", prompts=0)
+    set_admin_directory(False)
+    set_mfa()
+    psql("DELETE FROM ui.radius_client WHERE name IN ('sw-192-0-2-10', 'sw-generic')")
+    # leave the last t-notgroup row as the plain group refusal that postauth_checks expects
+    login("t-notgroup", ADMIN_PW)
 
 
 def mab_cases(prefix):
@@ -979,7 +1175,7 @@ def db_down_cases(eapol_test, bench, prefix):
 # certificate name pc1.example.net.
 RADSEC_PORT = 2083
 PROXY_SECRET = "TestRadsecProxySecret0123"     # UDP leg inside the bench only
-PROXIES = {"pc1": 18121, "pc2": 18122, "rogue": 18123, "pc5": 18124}
+PROXIES = {"pc1": 18141, "pc2": 18142, "rogue": 18143, "pc5": 18144}   # 18120/18121: second factor
 
 
 def start_radsecproxy(bench, cert, port):
@@ -1110,6 +1306,11 @@ def sql_args_audit(logname):
                 n += 1
                 if not pat_src.search(q_):
                     bad.append(q_[:160])
+            elif "radius_admin_mfa_hex(" in q_:
+                n += 1
+                kinds.add("mfa")
+                if not re.fullmatch(r"SELECT radius_admin_mfa_hex\('[0-9a-f]*', '[0-9a-f]*', '(local|directory)'\)", q_):
+                    bad.append(q_[:160])
             elif "radius_admin_dot1x_user_hex(" in q_:
                 n += 1
                 kinds.add("dot1x_user")
@@ -1137,7 +1338,7 @@ def sql_args_audit(logname):
            str(bad[:3]))
     record("AUDIT: the policy uses radius_admin_vlan_rule_hex and radius_admin_mab_hex",
            "radius_admin_vlan_rule_hex(" in kinds and "mab" in kinds and "radius_admin_vlan_hex(" not in kinds
-           and {"dot1x_user", "dot1x_vlan", "dot1x_nt"} <= kinds,
+           and {"dot1x_user", "dot1x_vlan", "dot1x_nt", "mfa"} <= kinds,
            str(sorted(kinds)))
 
 
@@ -1152,7 +1353,8 @@ def postauth_checks():
                 "WHERE table_name='radpostauth'")
     record("radpostauth has no password column", "pass" not in cols.split(","), cols)
     dump = psql("SELECT coalesce(string_agg(t::text, E'\\n'), '') FROM radpostauth t")
-    leaked = [p for p in (ADMIN_PW, LEGACY_PW, DOT1X_PW, DIR_PW, "wrong-password") if p in dump]
+    from render import MFA_REMOTE_PASSWORD
+    leaked = [p for p in (ADMIN_PW, LEGACY_PW, DOT1X_PW, DIR_PW, "wrong-password", MFA_REMOTE_PASSWORD) if p in dump]
     record("no password text anywhere in radpostauth", not leaked, str(leaked))
 
     def find(user, reply, method, vlan=None):
@@ -1226,6 +1428,7 @@ def main():
     ocsp = start_ocsp(bench)
     raddb = os.path.join(bench, "raddb")
     rad = None
+    fakes = []
     try:
         seed_db()
         subprocess.run([os.path.join(HERE, "build-raddb.sh"), a.prefix, bench, BIND_PW], check=True,
@@ -1235,11 +1438,16 @@ def main():
         record("radiusd -XC", "Configuration appears to be OK" in r.stdout + r.stderr, (r.stdout + r.stderr)[-800:])
         logname = os.path.join(bench, "radiusd-base.log")
         rad = start_radiusd(a.prefix, raddb, logname)
+        with open(logname) as fh:
+            forced = [ln.strip() for ln in fh if 'forcing to "response_window' in ln]
+        record("no home server's response_window is cut by max_request_time", not forced, " | ".join(forced))
         for priv15 in (False, True):
             set_priv15(priv15)  # live setting, no restart
             pap_cases(a.prefix, priv15)
         set_priv15(False)
         admin_directory_cases(a.prefix)
+        fakes = start_mfa_fakes()
+        mfa_cases(a.prefix)
         mab_cases(a.prefix)
         if a.eapol_test:
             eap_cases(a.eapol_test, bench, logname)
@@ -1266,6 +1474,8 @@ def main():
         keeper_stop.set()
         stop(rad)
         stop(ocsp)
+        for f in fakes:
+            stop(f)
         subprocess.run(["pkill", "-f", "slapd -f %s/slapd" % bench])
     failed = [r for r in results if not r[1]]
     print("\n%d passed, %d failed" % (len(results) - len(failed), len(failed)))

@@ -20,7 +20,7 @@ SETTING_KEYS = ("admin_subnet", "admin_priv15", "custom_policy", "banner_text", 
                 "update_channel", "update_mode", "update_window_day", "update_window_hour",
                 "update_check_requested", "display_timezone", "dot1x_ttls",
                 "dot1x_ttls_directory", "dot1x_peap", "dot1x_peap_directory", "default_vendor_profile",
-                "admin_directory", "admin_directory_groups")
+                "admin_directory", "admin_directory_groups", "eap_ocsp", "eap_ocsp_url")
 RADSEC_KEYS = ("enabled", "listen", "port", "max_connections", "idle_timeout", "ocsp", "ocsp_url")
 SAML_KEYS = ("enabled", "idp_metadata", "entity_id", "group_attribute", "name_attribute", "local_login")
 DEFAULT_BANNER = ("This system is for authorized use only. Activity on this system is "
@@ -88,6 +88,9 @@ def get_settings(conn=None):
                    "requested": raw.get("update_check_requested", "")},
         # IANA zone for times shown in the console (display_zone() validates)
         "display_timezone": raw.get("display_timezone") or "UTC",
+        # OCSP for EAP-TLS managed in the portal (SPEC section 30): keep | off | on, and the responder
+        "eap_ocsp": raw.get("eap_ocsp") or "keep",
+        "eap_ocsp_url": raw.get("eap_ocsp_url", ""),
     }
 
 
@@ -176,13 +179,16 @@ def load_clients(conn=None):
     return db.query("SELECT " + CLIENT_COLS + " FROM ui.radius_client ORDER BY name", conn=conn)
 
 
-def render_all(conn=None):
+def render_all(conn=None, datakey=None):
     """Return (policy_text, clients_text) rendered from the current DB state.
 
     SPEC section 10: access rules and settings are evaluated live by FreeRADIUS through
     SQL functions, so the policy file depends only on the custom policy body and on the
-    vendor profiles in use (SPEC section 26).
+    vendor profiles in use (SPEC section 26). The clients file also carries the enabled
+    second-factor providers (SPEC section 29), whose secrets need the data key: the
+    running app's, or `datakey` (the command line).
     """
+    from . import integrations
     u = unlang()
     settings = get_settings(conn)
     default_id = settings["default_vendor_profile"]
@@ -202,7 +208,52 @@ def render_all(conn=None):
                                          % (c["name"], pid))
             others[pid] = cat[pid]
     return (u.render_policy(settings["custom_policy"], cat[default_id], list(others.values())),
-            u.render_clients(clients, settings["radsec"], default_id))
+            u.render_clients(clients, settings["radsec"], default_id,
+                             integrations.render_inputs(conn, datakey)))
+
+
+def _require_fips():
+    try:
+        return bool(current_app.config["RA"]["require_fips"])
+    except (RuntimeError, KeyError):
+        return False
+
+
+PROVIDER_FILES = ("provider-duo", "certificates")
+
+
+def _datakey(datakey):
+    if datakey is not None:
+        return datakey
+    return current_app.config["RA_DATA_KEY"]
+
+
+def render_provider_files(conn=None, datakey=None):
+    """{staged name: text} of the files an apply installs besides policy and clients: the Duo
+    Authentication Proxy's configuration while a Duo provider is enabled (SPEC section 29.2) and
+    the certificates the portal manages (SPEC section 30)."""
+    from . import certs, integrations
+    u = unlang()
+    out = {}
+    for p in integrations.render_inputs(conn, datakey):
+        if p["type"] == "duo":
+            out["provider-duo"] = u.render_duo_config(p, fips=_require_fips())
+    try:
+        dk = _datakey(datakey)
+    except (RuntimeError, KeyError):   # no app context and no key (command line render)
+        dk = None
+    if dk is not None:
+        bundle = certs.render_bundle(conn, dk, get_settings(conn))
+        if bundle:
+            out["certificates"] = bundle
+    return out
+
+
+def providers_sha256(files):
+    """One hash over the provider files ('' when there are none), for ui.apply_log."""
+    if not files:
+        return ""
+    return sha256_hex("".join("%s\0%s\0" % (k, files[k]) for k in sorted(files)))
 
 
 LIVE_POLICY_MARKERS = ("radius_admin_vlan_hex(", "radius_admin_vlan_rule_hex(")
@@ -226,7 +277,7 @@ def policy_format_upgrade(applied_policy, new_policy):
 
 def last_applied(conn=None):
     return db.query_one(
-        "SELECT id, at, actor, action, policy_sha256, clients_sha256, backup_id, message"
+        "SELECT id, at, actor, action, policy_sha256, clients_sha256, providers_sha256, backup_id, message"
         " FROM ui.apply_log WHERE success AND action IN ('apply','rollback')"
         " ORDER BY id DESC LIMIT 1", conn=conn)
 
@@ -237,6 +288,7 @@ def pending_state(conn=None):
         return g.pending_state
     try:
         policy, clients = render_all(conn)
+        xh = providers_sha256(render_provider_files(conn))
     except Exception as e:  # validation error in stored data or broken unlang module
         state = {"pending": True, "error": str(e), "policy": True, "clients": True}
     else:
@@ -244,11 +296,13 @@ def pending_state(conn=None):
         ph, ch = sha256_hex(policy), sha256_hex(clients)
         if last is None:
             state = {"pending": True, "never_applied": True, "policy": True, "clients": True,
-                     "policy_sha256": ph, "clients_sha256": ch}
+                     "providers": bool(xh), "policy_sha256": ph, "clients_sha256": ch, "providers_sha256": xh}
         else:
-            state = {"pending": ph != last["policy_sha256"] or ch != last["clients_sha256"],
+            lx = last.get("providers_sha256") or ""
+            state = {"pending": ph != last["policy_sha256"] or ch != last["clients_sha256"] or xh != lx,
                      "policy": ph != last["policy_sha256"], "clients": ch != last["clients_sha256"],
-                     "policy_sha256": ph, "clients_sha256": ch, "last": last, "format_upgrade": False}
+                     "providers": xh != lx, "policy_sha256": ph, "clients_sha256": ch, "providers_sha256": xh,
+                     "last": last, "format_upgrade": False}
             if state["policy"]:
                 try:
                     state["format_upgrade"] = policy_format_upgrade(read_applied()["policy"], policy)
@@ -282,11 +336,39 @@ def staging_dir():
     return current_app.config["RA"]["staging_dir"]
 
 
-def write_staging(policy, clients, base=None):
+def _put_provider_files(d, providers):
+    """Write the provider files into d and remove those not given (SPEC section 29.2)."""
+    for name in PROVIDER_FILES:
+        path = os.path.join(d, name)
+        if name in providers:
+            _write_0600(path, providers[name])
+        else:
+            try:
+                os.unlink(path)
+            except FileNotFoundError:
+                pass
+
+
+def _get_provider_files(d):
+    out = {}
+    for name in PROVIDER_FILES:
+        try:
+            with open(os.path.join(d, name), encoding="utf-8") as fh:
+                out[name] = fh.read()
+        except OSError:
+            pass
+    return out
+
+
+def write_staging(policy, clients, base=None, providers=None):
+    """Stage the files for the helper. `providers` (render_provider_files) replaces the staged
+    provider files; None leaves them as they are (the command line render)."""
     base = base or staging_dir()
     os.makedirs(base, mode=0o700, exist_ok=True)
     _write_0600(os.path.join(base, "policy"), policy)
     _write_0600(os.path.join(base, "clients"), clients)
+    if providers is not None:
+        _put_provider_files(base, providers)
 
 
 def read_staging(base=None):
@@ -315,10 +397,11 @@ def read_applied(base=None):
                 out[name] = fh.read()
         except OSError:
             out[name] = None
+    out["providers"] = _get_provider_files(d)
     return out
 
 
-def save_applied(policy, clients, base=None, backup_id=None):
+def save_applied(policy, clients, base=None, backup_id=None, providers=None):
     """Record what is now live. The helper's backup <backup_id> holds the files that
     were live BEFORE this apply, so the previous applied copy is archived under
     applied/history/<backup_id>/ for a later rollback to that backup."""
@@ -330,11 +413,14 @@ def save_applied(policy, clients, base=None, backup_id=None):
         os.makedirs(h, mode=0o700, exist_ok=True)
         _write_0600(os.path.join(h, "policy"), prev["policy"])
         _write_0600(os.path.join(h, "clients"), prev["clients"])
+        _put_provider_files(h, prev["providers"])
     _write_0600(os.path.join(d, "policy"), policy)
     _write_0600(os.path.join(d, "clients"), clients)
+    if providers is not None:
+        _put_provider_files(d, providers)
 
 
-def restore_applied_from_history(backup_id, base=None, new_backup_id=None):
+def restore_applied_from_history(backup_id, base=None, new_backup_id=None, certs_restored=False):
     """After a successful rollback: the archived copy becomes the applied copy.
     Returns (policy, clients) or None when no archived copy exists (then the
     applied copy is removed because it no longer reflects what is live)."""
@@ -347,6 +433,7 @@ def restore_applied_from_history(backup_id, base=None, new_backup_id=None):
         os.makedirs(nh, mode=0o700, exist_ok=True)
         _write_0600(os.path.join(nh, "policy"), prev["policy"])
         _write_0600(os.path.join(nh, "clients"), prev["clients"])
+        _put_provider_files(nh, prev["providers"])
     h = os.path.join(d, "history", backup_id)
     try:
         with open(os.path.join(h, "policy"), encoding="utf-8") as fh:
@@ -354,7 +441,8 @@ def restore_applied_from_history(backup_id, base=None, new_backup_id=None):
         with open(os.path.join(h, "clients"), encoding="utf-8") as fh:
             clients = fh.read()
     except OSError:
-        for name in ("policy", "clients"):
+        names = ("policy", "clients") + (("certificates",) if certs_restored else ())
+        for name in names:
             try:
                 os.unlink(os.path.join(d, name))
             except OSError:
@@ -362,6 +450,14 @@ def restore_applied_from_history(backup_id, base=None, new_backup_id=None):
         return None
     _write_0600(os.path.join(d, "policy"), policy)
     _write_0600(os.path.join(d, "clients"), clients)
+    # The helper does not put Duo's own sample back on a rollback (SPEC section 29.2): an
+    # archived set without a Duo file leaves the applied Duo copy as it is.
+    old = _get_provider_files(h)
+    cur = _get_provider_files(d)
+    if certs_restored and "certificates" not in old:
+        # the helper put back certificate files from before the portal managed them (SPEC 30)
+        cur.pop("certificates", None)
+    _put_provider_files(d, dict(cur, **old))
     return policy, clients
 
 

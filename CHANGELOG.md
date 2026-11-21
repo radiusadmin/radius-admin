@@ -5,6 +5,96 @@ Each release has a section here. `main` builds are the stable releases (`0.2.0`)
 show the "Unreleased" section plus their commits. Bump `VERSION` on `dev` right after a
 release, so previews sort after it.
 
+## 0.3.0 - 2026-11-20
+
+### Added
+- **A second factor for device admin logins (Integrations).** A new Integrations page sets which
+  device admin logins must be approved with a second factor: local or directory accounts, on all
+  clients or selected ones, with exempt break-glass accounts. First provider: a remote RADIUS MFA
+  server (for example a Network Policy Server with the Entra multifactor extension, privacyIDEA or
+  an Okta RADIUS agent) for directory accounts; FreeRADIUS still checks the management subnet first
+  and the device admin group after the server's accept. Second provider: the Duo
+  Authentication Proxy on this server (password checked here before the push; see below).
+  Logins that need a second factor fail closed. Auth log methods `pap-admin+mfa` and `admin-ldap+mfa`.
+- **Duo set up from the portal.** Integrations → Duo Authentication Proxy: check the server,
+  download or upload Duo, install it with a live log, enter its keys, test the connection, remove
+  it. Duo then serves local and directory device admin accounts; its configuration is applied, shown
+  as a diff and rolled back together with FreeRADIUS's files.
+- **Duo Authentication Proxy installer.** Builds Duo's source as an unprivileged user, installs it
+  with a hardened systemd unit and configures it from the portal: applying changes writes Duo's
+  configuration and restarts it before FreeRADIUS, restoring both if either fails. Removal and
+  Duo's connectivity check through the root helper. Checked with Duo 6.8.1.
+- **Signed integrations catalog.** Releases carry a catalog of provider builds this project has
+  checked, signed with the update key. The root helper can download a provider build, check it
+  against the catalog (or, outside FIPS mode, a SHA-256 the admin enters) and hand it to an install
+  unit; FIPS mode accepts only builds the catalog lists as FIPS-capable.
+- **Second-factor alerts.** Alerts when the Duo proxy stops or stops listening, when device admin
+  logins get no answer from the second-factor provider (threshold and window in Alert settings),
+  and once a day while the Duo build in use is unverified or was withdrawn from the signed catalog.
+- **Second factor in reports and logs.** The privileged-access report shows per account whether a
+  second factor is needed, by which provider and on which clients, and the break-glass exemptions;
+  the auth log detail of a `+mfa` login names its provider; the setup checklist has an optional
+  "Second factor for device admins" step; the Integrations page shows each device profile's RADIUS
+  timeout commands (Catalyst 1200/1300: `radius-server timeout 30`, `retransmit 2`), and custom
+  profiles have a field for them.
+- **Certificates in the console.** A new Certificates page manages the 802.1X server certificate,
+  the CA for client certificates, OCSP for EAP-TLS and the portal's HTTPS certificate. Upload a
+  certificate and key (PEM or PKCS#12), or make the key and request on the server and upload what
+  your CA issues. Keys are stored encrypted. Changes are installed with Apply: the helper checks
+  them again, restarts FreeRADIUS, tests and reloads the portal, and puts everything back if either
+  does not come up with them. RUNBOOK §13.5.
+- **A new server installs from the release bundle.** On a server where FreeRADIUS was never set
+  up by radius-admin and there is nothing to migrate, the installer now brings up a working,
+  default-deny FreeRADIUS and the portal: no access rules needed yet, no directory yet (EAP-TLS and
+  directory accounts are rejected until it is configured), the EAP certificates you give it
+  (answers `eap_tls: existing`) or self-signed ones to replace, a new localhost secret instead of
+  the stock one, and OCSP only when you name a responder (answers `ocsp_url`). The portal no
+  longer needs an OCSP responder either. Fixes the stock `testing123` localhost secret being kept
+  on such a server. RUNBOOK §13.4.
+- **Licence page.** Settings → Licence records how a server is licensed under the Business Source
+  License 1.1 (free use for individuals and organizations with fewer than 50 people, or
+  commercial: a signed licence file, ECDSA P-384, checked offline, or a 60-day trial until it
+  arrives). Answering is the first setup step; admins are taken to it at sign-in
+  until it is answered, changes ask for confirmation and are listed on the page. Admins get one
+  dashboard line when something needs attention; after a trial ends, a banner on every admin page. Nothing is ever locked or limited and the server never contacts anyone. Every
+  page has a licence footer; the installer prints the notice and installs LICENSE and LICENSING.md.
+
+### Changed
+- **Licence: from the GNU AGPL to the Business Source License 1.1 (source available).**
+  Free for personal use, for organizations with fewer than 50 people and for a 60-day trial;
+  organizations with 50 or more people need a commercial licence for production use. Every
+  feature stays in the same public code. Each version becomes GNU AGPL (version 3 or later)
+  four years after it is published; 0.2.5 and earlier stay under the GNU AGPL. See
+  `LICENSING.md`, which also lists the commercial licence prices. Contributor License
+  Agreement version 1.1 (section 4).
+- **Standard mode is the installer's default; FIPS mode is an explicit choice.** A fresh install
+  on a host without FIPS no longer stops in preflight. Choose FIPS mode with the answers key
+  `fips: on`, the new interactive question or `install.sh --fips` (`--standard-mode` / `fips: off`
+  for standard mode); it is refused unless the host's kernel runs in FIPS mode. The choice is
+  written as `require_fips` on the first install and never changed by later runs or updates.
+  Preflight's FIPS checks block only in FIPS mode (`preflight.sh --fips-mode on|off`).
+- An apply that also restarts the Duo proxy may take up to about three minutes; the portal, nginx
+  and gunicorn now wait long enough for it (`helper_duo_timeout`, 210 s; 240 s in front).
+- A Duo build the signed catalog marks FIPS-capable is now required in FIPS mode for turning Duo on
+  and for every apply with Duo, not only for installing.
+- **Duo in FIPS mode.** The signed catalog lists Duo Authentication Proxy 6.8.1 and marks it
+  FIPS-capable, checked on Ubuntu 24.04 Pro `fips-updates` (amd64): Duo runs with its FIPS mode on
+  its bundled OpenSSL FIPS Provider 3.1.2 (CMVP certificate #4985) for TLS to Duo. Its RADIUS hops
+  on this server's loopback still use RADIUS's MD5, as FreeRADIUS does; SECURITY.md records this as
+  a documented exception and lists the controls to put in place (§1.3).
+- The Duo page shows a build as checked once a later catalog lists it, and flags a withdrawn build.
+- The release workflow no longer puts tag-derived values into its scripts: the version and the
+  previous release tag reach the signing job only as environment variables, are checked against
+  exact patterns in both jobs, and a tag whose name is not an exact release tag is ignored
+  (`tools/release/prev-tag.sh`). `make-release.sh` refuses such a previous tag too.
+
+### Fixed
+- **A second factor approved after 30 seconds was rejected.** FreeRADIUS's stock
+  `max_request_time` (30 s) cut the Duo proxy's and remote MFA servers' wait of up to 60 s, so a
+  person who approved later got "the second-factor provider did not answer". The freeradius phase
+  now raises `max_request_time` in `radiusd.conf` to 90 s (a higher value is kept) and preflight
+  warns when it is lower.
+
 ## 0.2.5 - 2026-11-20
 
 ### Added

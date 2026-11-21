@@ -1,0 +1,154 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block title %}Certificates{% endblock %}
+{% block content %}
+<header class="page-head">
+  <div><h1>Certificates</h1>
+  <p class="lede">The certificates FreeRADIUS and this portal present, and the CA that issues client certificates. Upload a certificate with its key, or make a key and request here and upload what your CA issues. Changes are installed with <a href="{{ url_for('apply.index') }}">Apply changes</a>; if FreeRADIUS or the portal does not come back with them, the previous files are restored.</p></div>
+</header>
+{% if not status.ok %}<p class="flash flash-error">The helper is not reachable ({{ status.message }}), so the installed certificates are not shown.</p>{% endif %}
+
+{% macro cert_list(items, empty='None') %}
+  {% if items %}
+  <ul class="cert-list">
+  {% for c in items %}
+    <li>{% if c.error %}<span class="warn-text">{{ c.error }}</span>{% else %}
+      <span class="mono">{{ c.subject }}</span>
+      {% if c.ca %}<span class="tag">CA</span>{% endif %}
+      {% if (c.issuer or '').startswith('CN=radius-admin EAP CA') %}<span class="tag tag-warn">made by the installer: replace it</span>{% endif %}
+      {% if c.expired %}<span class="tag tag-danger">expired</span>{% elif c.days_left is defined and c.days_left < 30 %}<span class="tag tag-warn">expires in {{ c.days_left }} days</span>{% endif %}
+      <span class="small muted">issued by {{ c.issuer }}; valid until {{ c.not_after.strftime('%Y-%m-%d') if c.not_after.strftime is defined else c.not_after }}; {{ c.key }}{% if c.san %}; {{ c.san|join(', ') }}{% endif %}</span>
+      <span class="small muted mono">SHA-256 {{ c.sha256[:47] }}…</span>
+    {% endif %}</li>
+  {% endfor %}
+  </ul>
+  {% else %}<p class="muted">{{ empty }}</p>{% endif %}
+{% endmacro %}
+
+{% macro managed_state(kind) %}
+  {% set mv = managed[kind] %}
+  {% if mv.certs %}
+  <p>{% if mv.applied %}<span class="tag tag-ok">Installed</span> The portal manages this certificate.{% else %}<span class="tag tag-warn">Waiting for Apply</span> Saved in the portal, not installed yet.{% endif %}</p>
+  {% if not mv.applied %}{{ cert_list(mv.certs) }}{% endif %}
+  {% endif %}
+  {% if mv.error %}<p class="warn-text">{{ mv.error }}</p>{% endif %}
+{% endmacro %}
+
+{% macro server_forms(kind) %}
+  {% set mv = managed[kind] %}
+  {% if mv.csr %}
+  <div class="callout">
+    <p><strong>Request waiting for the issued certificate:</strong> <span class="mono">{{ mv.csr.subject }}</span> <span class="small muted">{{ mv.csr.san|join(', ') }}; {{ mv.csr.key }}</span></p>
+    <p><a class="btn btn-quiet btn-small" href="{{ url_for('certificates.download_csr', kind=kind) }}">Download the request (.csr)</a></p>
+    <form method="post" action="{{ url_for('certificates.issued', kind=kind) }}" enctype="multipart/form-data" class="stack" data-busy="Checking…">
+      {{ m.csrf() }}
+      <label for="{{ kind }}-issued">Issued certificate (PEM)</label>
+      <input id="{{ kind }}-issued" name="cert_file" type="file" accept=".pem,.crt,.cer">
+      <label for="{{ kind }}-issued-chain">Intermediate CA certificates, if the file above has only the server certificate (optional)</label>
+      <input id="{{ kind }}-issued-chain" name="chain_file" type="file" accept=".pem,.crt,.cer">
+      <div class="actions"><button class="btn" type="submit">Save the issued certificate</button>
+        {{ m.post_button(url_for('certificates.forget', kind=kind), 'Discard the request', 'btn btn-quiet', fields={'what': 'csr'}, confirm='Discard this request and its key? A certificate issued for it can then no longer be used.') }}</div>
+    </form>
+  </div>
+  {% endif %}
+  <details class="disclose">
+    <summary>Upload a certificate and key</summary>
+    <form method="post" action="{{ url_for('certificates.upload', kind=kind) }}" enctype="multipart/form-data" class="stack" data-busy="Checking…">
+      {{ m.csrf() }}
+      <label for="{{ kind }}-cert">Certificate (PEM: the server certificate first, then intermediate CAs)</label>
+      <input id="{{ kind }}-cert" name="cert_file" type="file" accept=".pem,.crt,.cer">
+      <label for="{{ kind }}-chain">Intermediate CA certificates, if not in the file above (optional)</label>
+      <input id="{{ kind }}-chain" name="chain_file" type="file" accept=".pem,.crt,.cer">
+      <label for="{{ kind }}-key">Private key (PEM)</label>
+      <input id="{{ kind }}-key" name="key_file" type="file" accept=".pem,.key">
+      <label for="{{ kind }}-p12">Or one PKCS#12 file with both (.p12, .pfx)</label>
+      <input id="{{ kind }}-p12" name="p12_file" type="file" accept=".p12,.pfx">
+      <label for="{{ kind }}-pw">Password of the key or PKCS#12 file, if it has one</label>
+      <input id="{{ kind }}-pw" name="password" type="password" autocomplete="off">
+      <p class="small muted">Allowed keys: RSA 3072 bits or more, ECDSA P-256 or P-384. The key is stored encrypted on this server.</p>
+      <div class="actions"><button class="btn" type="submit">Save</button></div>
+    </form>
+  </details>
+  <details class="disclose">
+    <summary>Make a key and certificate request here</summary>
+    <form method="post" action="{{ url_for('certificates.make_csr', kind=kind) }}" class="stack" data-busy="Making the key…">
+      {{ m.csrf() }}
+      <label for="{{ kind }}-cn">DNS name of the server</label>
+      <input id="{{ kind }}-cn" name="common_name" value="{{ portal_name or '' }}" required>
+      <label for="{{ kind }}-names">More DNS names (optional, space separated)</label>
+      <input id="{{ kind }}-names" name="dns_names">
+      <label for="{{ kind }}-kt">Key type</label>
+      <select id="{{ kind }}-kt" name="key_type">{% for k, label in key_types.items() %}<option value="{{ k }}">{{ label }}</option>{% endfor %}</select>
+      <p class="small muted">The key never leaves this server. {% if mv.csr %}A new request replaces the one above.{% endif %}</p>
+      <div class="actions"><button class="btn" type="submit">Make the request</button></div>
+    </form>
+  </details>
+{% endmacro %}
+
+<section class="panel" id="eap_server" aria-labelledby="eap-h">
+  <h2 id="eap-h">{{ labels.eap_server }}</h2>
+  <p class="small muted">What FreeRADIUS presents to 802.1X clients (EAP-TLS, EAP-TTLS, PEAP) and RadSec clients. Supplicants check it against the CA they trust.</p>
+  <h3>Installed</h3>
+  {{ cert_list(status.eap_server if status.ok else none) }}
+  {{ managed_state('eap_server') }}
+  {% if has_role('admin') %}{{ server_forms('eap_server') }}
+  {% if managed.eap_server.row and managed.eap_server.row.cert_pem %}<p>{{ m.post_button(url_for('certificates.forget', kind='eap_server'), 'Stop managing it here', 'btn btn-quiet btn-small', confirm='The installed certificate stays; the portal stops changing it. Continue?') }}</p>{% endif %}
+  {% endif %}
+</section>
+
+<section class="panel" id="client_ca" aria-labelledby="ca-h">
+  <h2 id="ca-h">{{ labels.client_ca }}</h2>
+  <p class="small muted">The CA certificates that issue client certificates. FreeRADIUS accepts EAP-TLS clients whose certificates chain to them, and the portal accepts client-certificate sign-in from the same CAs.</p>
+  <h3>Installed</h3>
+  {{ cert_list(status.client_ca if status.ok else none) }}
+  {{ managed_state('client_ca') }}
+  {% if has_role('admin') %}
+  <details class="disclose">
+    <summary>Upload the CA certificates</summary>
+    <form method="post" action="{{ url_for('certificates.upload', kind='client_ca') }}" enctype="multipart/form-data" class="stack" data-busy="Checking…">
+      {{ m.csrf() }}
+      <label for="ca-file">CA bundle (PEM: issuing CA and root CA, one or more certificates)</label>
+      <input id="ca-file" name="cert_file" type="file" accept=".pem,.crt,.cer">
+      <label for="ca-text">Or paste it</label>
+      <textarea id="ca-text" name="cert_text" rows="6" class="mono" placeholder="-----BEGIN CERTIFICATE-----"></textarea>
+      <div class="actions"><button class="btn" type="submit">Save</button></div>
+    </form>
+  </details>
+  {% if managed.client_ca.row %}<p>{{ m.post_button(url_for('certificates.forget', kind='client_ca'), 'Stop managing it here', 'btn btn-quiet btn-small', confirm='The installed CA bundle stays; the portal stops changing it. Continue?') }}</p>{% endif %}
+  {% endif %}
+</section>
+
+<section class="panel" id="eap_ocsp" aria-labelledby="ocsp-h">
+  <h2 id="ocsp-h">Revocation check (OCSP) for EAP-TLS</h2>
+  <p class="small muted">Ask your CA's OCSP responder whether a client certificate was revoked. When the responder cannot be reached, EAP-TLS logins are rejected.</p>
+  <dl class="kv"><dt>Installed</dt><dd>{% if status.ok and status.eap_ocsp %}{% if status.eap_ocsp.enable %}On, <span class="mono">{{ status.eap_ocsp.url }}</span>{% else %}Off{% endif %}{% else %}Unknown{% endif %}</dd></dl>
+  {% if has_role('admin') %}
+  <form method="post" action="{{ url_for('certificates.ocsp') }}" class="stack">
+    {{ m.csrf() }}
+    <fieldset><legend class="sr-only">OCSP</legend>
+      <label class="check"><input type="radio" name="mode" value="keep" {{ 'checked' if ocsp_mode == 'keep' }}> Leave it as installed</label>
+      <label class="check"><input type="radio" name="mode" value="off" {{ 'checked' if ocsp_mode == 'off' }}> Off</label>
+      <label class="check"><input type="radio" name="mode" value="on" {{ 'checked' if ocsp_mode == 'on' }}> On, with this responder:</label>
+    </fieldset>
+    <label for="ocsp-url">Responder URL</label>
+    <input id="ocsp-url" name="url" value="{{ ocsp_url }}" placeholder="http://ocsp.example.net/ocsp">
+    <div class="actions"><button class="btn" type="submit">Save</button></div>
+  </form>
+  {% endif %}
+</section>
+
+<section class="panel" id="portal_server" aria-labelledby="portal-h">
+  <h2 id="portal-h">{{ labels.portal_server }}</h2>
+  {% if status.ok and not status.portal_configured %}
+  <p class="muted">The portal's web server site is not installed on this server, so its certificate cannot be changed here.</p>
+  {% else %}
+  <p class="small muted">What browsers see when they open this console{% if portal_name %} (<span class="mono">{{ portal_name }}</span>; the certificate must name it){% endif %}. The web server is checked before it reloads, and the old certificate comes back if the portal does not answer with the new one.</p>
+  <h3>Installed</h3>
+  {{ cert_list(status.portal_server if status.ok else none) }}
+  {{ managed_state('portal_server') }}
+  {% if has_role('admin') %}{{ server_forms('portal_server') }}
+  {% if managed.portal_server.row and managed.portal_server.row.cert_pem %}<p>{{ m.post_button(url_for('certificates.forget', kind='portal_server'), 'Stop managing it here', 'btn btn-quiet btn-small', confirm='The installed certificate stays; the portal stops changing it. Continue?') }}</p>{% endif %}
+  {% endif %}
+  {% endif %}
+</section>
+{% endblock %}
