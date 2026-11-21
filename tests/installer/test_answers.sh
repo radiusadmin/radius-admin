@@ -20,6 +20,8 @@ export RA_SNMP_UNIT=$W/no-such-unit
 # crypto mode: a host whose kernel is not in FIPS mode, and no installed radius-admin.conf
 echo 0 > "$W/fips_enabled"
 export RA_FIPS_ENABLED_FILE=$W/fips_enabled RA_APP_CONF=$W/no-such-radius-admin.conf
+# and no installed portal site to take an OCSP responder from
+export RA_NGINX_SITE=$W/no-such-nginx-site
 
 good() {
     cat > "$W/a.yaml" <<EOF
@@ -65,6 +67,25 @@ bad "switch network with host bits" "switch_nets: 198.51.100.7/24"
 bad "/0 switch network" "switch_nets: \"192.0.2.0/24 0.0.0.0/0\""
 bad "switch networks with shell characters" "switch_nets: \"192.0.2.0/24;reboot\""
 bad "crypto mode other than on/off" "fips: maybe"
+bad "unknown EAP certificate choice" "eap_tls: acme"
+bad "existing EAP certificate without files" "eap_tls: existing"
+bad "EAP certificate files with a self-signed choice" "eap_cert: /etc/hostname"
+bad "OCSP responder that is not an http(s) URL" "ocsp_url: ldap://ocsp.example.net"
+
+# 802.1X (EAP) certificate of a new server and the OCSP responder
+good
+grep -qx 'eap_tls: self-signed' <<<"$out" && ! grep -q '^ocsp_url:' <<<"$out" \
+    && pass "EAP certificate defaults to self-signed, no OCSP responder" || fail "eap/ocsp defaults: $out"
+openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-384 -nodes -days 30 -subj "/CN=radius.example.net" \
+    -keyout "$W/eap.key" -out "$W/eap.pem" >/dev/null 2>&1
+printf 'eap_tls: existing\neap_cert: %s\neap_key: %s\neap_ca: %s\nocsp_url: http://ocsp.example.net/ocsp\n' \
+    "$W/eap.pem" "$W/eap.key" "$W/eap.pem" >> "$W/a.yaml"
+eo=$("$INSTALL" --answers "$W/a.yaml" --print-answers 2>&1)
+grep -qx 'eap_tls: existing' <<<"$eo" && grep -qx "eap_key: $W/eap.key" <<<"$eo" \
+    && grep -qx 'ocsp_url: http://ocsp.example.net/ocsp' <<<"$eo" \
+    && pass "existing EAP certificate files and an OCSP responder are accepted" || fail "eap existing: $eo"
+grep -qx 'ocsp_url: http://ocsp.example.net/ocsp (answers)' <("$INSTALL" --answers "$W/a.yaml" --print-settings 2>&1) \
+    && pass "the answers' OCSP responder is the one the run uses" || fail "ocsp_url from answers not used"
 
 # crypto mode: standard mode by default; FIPS mode only on a host whose kernel runs in FIPS
 # mode; the installed require_fips always wins (an update never changes it)
@@ -99,8 +120,9 @@ grep -qx 'fips: on' <(RA_APP_CONF=$W/live-on.conf "$INSTALL" --answers "$W/a.yam
 pf_fips_fails() { grep -E '\[FAIL\].*(FIPS|fips|_hashlib)' "$1"; }
 good
 "$INSTALL" --answers "$W/a.yaml" --phase preflight -y --skip-preflight >"$W/pf.out" 2>&1
-if grep -q '== Crypto mode ==' "$W/pf.out" && grep -q 'standard mode' "$W/pf.out" && ! pf_fips_fails "$W/pf.out" >/dev/null; then
-    pass "standard-mode answers: preflight on a non-FIPS host has no FIPS failures"
+if grep -q '== Crypto mode ==' "$W/pf.out" && grep -q 'standard mode' "$W/pf.out" && ! pf_fips_fails "$W/pf.out" >/dev/null \
+    && grep -q 'no OCSP responder configured' "$W/pf.out" && ! grep -q '\[FAIL\].*OCSP' "$W/pf.out"; then
+    pass "standard-mode answers: preflight on a non-FIPS host has no FIPS or OCSP failures"
 else fail "standard-mode preflight: $(pf_fips_fails "$W/pf.out" || tail -3 "$W/pf.out")"; fi
 "$ROOT/deploy/preflight.sh" --fips-mode on >"$W/pf.out" 2>&1
 pf_fips_fails "$W/pf.out" | grep -q 'kernel FIPS mode OFF' \

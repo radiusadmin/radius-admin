@@ -186,6 +186,7 @@ if (( INTERACTIVE )) || [[ -n $ANSWERS ]]; then
     for k in server_name admin_net listen_ip resolver; do : "${SETTING_SRC[$k]:=answers}"; done
     RA_SERVER_NAME=${ANS[server_name]}; RA_ADMIN_NET=${ANS[admin_net]}
     LISTEN_IP=${ANS[listen_ip]}; RESOLVER=${ANS[resolver]}; SWITCH_NETS=${ANS[switch_nets]}
+    if [[ -z $OPT_OCSP_URL && -n ${ANS[ocsp_url]:-} ]]; then OPT_OCSP_URL=${ANS[ocsp_url]}; OCSP_FROM_ANSWERS=1; fi
     if (( PRINT_ANSWERS )); then ans_print; exit 0; fi
     if (( INTERACTIVE )); then
         say ""; ans_print | sed '1d; s/^/    /'
@@ -211,13 +212,20 @@ else
     resolve_fips "$OPT_FIPS" option
 fi
 live_pick RA_OCSP_URL ocsp_url "$OPT_OCSP_URL"
+if (( ${OCSP_FROM_ANSWERS:-0} )); then SETTING_SRC[ocsp_url]=answers; fi
 _ans_py url "$RA_OCSP_URL" || die "OCSP responder '$RA_OCSP_URL' (${SETTING_SRC[ocsp_url]}) is not an http(s) URL"
-if [[ ${SETTING_SRC[ocsp_url]} != default ]]; then RA_OCSP_HOST=$(sed -E 's#^[a-z]+://([^/:]+).*#\1#' <<<"$RA_OCSP_URL"); fi
+# OCSP for portal client certificates (nginx) and, on a new server, EAP-TLS: only with a
+# responder from an option, the answers, site.yaml or the installed nginx site; none otherwise
+OCSP_ON=0
+if [[ ${SETTING_SRC[ocsp_url]} != default ]]; then
+    OCSP_ON=1; RA_OCSP_HOST=$(sed -E 's#^[a-z]+://([^/:]+).*#\1#' <<<"$RA_OCSP_URL")
+fi
 
 if (( PRINT_SETTINGS )); then
     for k in server_name admin_net listen_ip resolver ocsp_url fips; do
         case $k in
-            server_name) v=$RA_SERVER_NAME ;; admin_net) v=$RA_ADMIN_NET ;; ocsp_url) v=$RA_OCSP_URL ;;
+            server_name) v=$RA_SERVER_NAME ;; admin_net) v=$RA_ADMIN_NET ;;
+            ocsp_url) v=""; (( OCSP_ON )) && v=$RA_OCSP_URL ;;
             fips) v=$FIPS_MODE ;;
             listen_ip) v=${LISTEN_IP:-$(detect_vlan_ip "$RA_ADMIN_NET" || true)} ;;
             resolver) v=${RESOLVER:-$(detect_resolvers || true)} ;;
@@ -298,7 +306,8 @@ app_env() { # run a command as radius-admin with the app environment
 
 phase_preflight() {
     hdr "Phase preflight (read-only)"
-    if ! "$HERE/preflight.sh" --sqlite "$RA_SQLITE_DB" --admin-net "$RA_ADMIN_NET" --fips-mode "$FIPS_MODE"; then
+    local ocsp=""; (( OCSP_ON )) && ocsp=$RA_OCSP_URL
+    if ! "$HERE/preflight.sh" --sqlite "$RA_SQLITE_DB" --admin-net "$RA_ADMIN_NET" --fips-mode "$FIPS_MODE" --ocsp-url "$ocsp"; then
         if (( SKIP_PREFLIGHT )); then
             warn "preflight reported blocking failures; continuing because of --skip-preflight"
         else
@@ -602,6 +611,8 @@ def keep_ldap_settings():
     if not (os.path.exists(s_path) and os.path.exists(l_path)):
         return
     text, ltext = open(s_path).read(), open(l_path).read()
+    if "radius-admin: directory not configured" in text:   # install.sh ldap_directory_off
+        return
     for key in ("identity", "base_dn", "port"):
         rx = r"^[ \t]*%s[ \t]*=(?![ \t]*\$\{).*$" % key
         lm, sm = re.search(rx, ltext, re.M), re.search(rx, text, re.M)
@@ -787,7 +798,7 @@ def keep_eap_settings():
 keep_eap_settings()
 # clients.conf: the secret inside `client localhost { ... }`
 s_path = os.path.join(staged, "clients.conf")
-if os.path.exists(s_path) and "REDACTED" in open(s_path).read():
+if os.path.exists(s_path) and re.search(r"^[ \t]*secret[ \t]*=[ \t]*REDACTED[ \t]*$", open(s_path).read(), re.M):
     rx = r"(client[ \t]+localhost[ \t]*\{[^}]*?^[ \t]*secret[ \t]*=)([^\n]*)$"
     lt = open(os.path.join(live, "clients.conf")).read()
     m = re.search(rx, lt, re.M | re.S)
@@ -855,6 +866,133 @@ PY
     esac
 }
 
+# ------------------------------------------------------------------ a new (blank) server
+# A new server: FreeRADIUS has never been configured by radius-admin (no policy.d/radius-admin)
+# and there is no SQLite database to migrate. The freeradius phase then installs a working,
+# default-deny configuration without the site settings an existing server carries over: no
+# directory yet, the EAP certificates from the answers or self-signed ones, a new localhost
+# secret instead of the stock one, and OCSP only when a responder is configured.
+fr_blank() { [[ ! -e $RA_RADDB/policy.d/radius-admin && ! -e $RA_SQLITE_DB ]]; }
+
+access_rules_check() { # access_rules_check COUNT : refuse an empty rule set only while a migration is pending
+    (( $1 > 0 )) && return 0
+    if [[ -e $RA_SQLITE_DB ]]; then
+        die "ui.access_rule is empty and $RA_SQLITE_DB exists -- run the migrate phase first (--phase migrate --confirm-migrate); refusing to install a policy that rejects every EAP user"
+    fi
+    warn "no access rules yet: every 802.1X user is rejected until you add rules in the portal (Access rules)"
+}
+
+# The LDAP module of a server without a directory: no connection at start (pool start = 0, as
+# ldap_user), a server name that never resolves, an empty password, and a marker line. Directory
+# lookups fail, so EAP-TLS and directory accounts are rejected; local accounts and MAB work.
+# Updates keep this state while the live file has the marker (RUNBOOK §13.4).
+RA_LDAP_OFF_MARK='radius-admin: directory not configured'
+ldap_is_off() { [[ -r $1 ]] && grep -q "^[[:space:]]*#.*$RA_LDAP_OFF_MARK" "$1"; }
+ldap_directory_off() { # ldap_directory_off STAGED_LDAP
+    python3 - "$1" "$RA_LDAP_OFF_MARK" <<'PY'
+import re, sys
+p, mark = sys.argv[1:3]
+t = open(p).read()
+def one(rx, new, what):
+    global t
+    t, n = re.subn(rx, new, t, count=1, flags=re.M)
+    if n != 1:
+        sys.exit("%s: %s not found" % (p, what))
+one(r"^(ldap[ \t]*\{[^\n]*\n)",
+    lambda m: m.group(1) + "\t#  %s. Directory lookups fail (EAP-TLS and\n"
+    "\t#  directory accounts are rejected) until server, port, identity, password, base_dn and\n"
+    "\t#  tls { ca_file } below are this site's. Then delete the line above and run\n"
+    "\t#  install.sh --phase freeradius --restart-freeradius (RUNBOOK section 13.4).\n" % mark,
+    "the ldap { section")
+one(r"^([ \t]*)password[ \t]*=.*$", r"\1password = ''", "password")
+one(r"^([ \t]*)server[ \t]*=(?![ \t]*\$\{).*$", r"\1server = 'ldaps://directory.invalid'", "server")
+one(r"^([ \t]*)start[ \t]*=[ \t]*\$\{thread\[pool\]\.start_servers\}[ \t]*$", r"\1start = 0", "pool start")
+one(r"^([ \t]*)min[ \t]*=[ \t]*\$\{thread\[pool\]\.min_spare_servers\}[ \t]*$", r"\1min = 0", "pool min")
+open(p, "w").write(t)
+PY
+}
+
+fr_localhost_secret() { # fr_localhost_secret STAGED : a new server does not keep the stock testing123
+    local live s
+    live=$(python3 - "$RA_RADDB/clients.conf" <<'PY'
+import re, sys
+try:
+    t = open(sys.argv[1]).read()
+except OSError:
+    sys.exit(0)
+m = re.search(r"client[ \t]+localhost[ \t]*\{[^}]*?^[ \t]*secret[ \t]*=[ \t]*([^\n#]*)", t, re.M | re.S)
+print(m.group(1).strip().strip("'\"") if m else "")
+PY
+)
+    if [[ -n $live && $live != testing123 && $live != REDACTED ]]; then return 0; fi   # carried over
+    s=$(openssl rand -hex 24)
+    sed -i "s/^\([[:space:]]*secret[[:space:]]*=[[:space:]]*\)REDACTED[[:space:]]*$/\1$s/" "$1/clients.conf"
+    grep -q "$s" "$1/clients.conf" || die "could not set the localhost secret in clients.conf"
+    info "new localhost client secret in clients.conf (the stock one is not kept)"
+}
+
+fr_eap_ocsp() { # fr_eap_ocsp STAGED_EAP URL|"" : OCSP of a new server (on with a responder URL, else off)
+    python3 - "$1" "$2" <<'PY'
+import re, sys
+p, url = sys.argv[1:3]
+t = open(p).read()
+m = re.search(r"^([ \t]*)ocsp[ \t]*\{[^\n]*\n(.*?)^\1\}", t, re.M | re.S)
+if not m:
+    sys.exit("%s: ocsp { } not found" % p)
+body = m.group(2)
+body, n = re.subn(r"^([ \t]*)enable[ \t]*=.*$", r"\g<1>enable = " + ("yes" if url else "no"), body, count=1, flags=re.M)
+if url:
+    body, k = re.subn(r"^([ \t]*)url[ \t]*=.*$", lambda x: x.group(1) + 'url = "%s"' % url, body, count=1, flags=re.M)
+    n += k - 1
+if n != 1:
+    sys.exit("%s: enable/url not found in ocsp { }" % p)
+open(p, "w").write(t[:m.start(2)] + body + t[m.end(2):])
+PY
+}
+
+# eap_certs MODE CERT KEY CA NAME : EAP certificates of a new server in certs/site (the paths
+# mods-available/eap uses). Kept when all three files exist; "existing" installs the given
+# files; "self-signed" makes a throwaway ECDSA P-384 CA and server certificate and destroys the
+# CA key, so no client certificate can be issued from it: replace them (RUNBOOK section 13.4).
+eap_certs() {
+    local mode=$1 cert=$2 key=$3 ca=$4 name=$5 d=$RA_RADDB/certs/site n=0 f tmp
+    for f in ca.pem radius.pem radius.key; do [[ -s $d/$f ]] && n=$((n + 1)); done
+    if (( n == 3 )); then info "EAP certificates in $d: kept"; return 0; fi
+    (( n == 0 )) || { bad "$d has only some of ca.pem, radius.pem and radius.key: complete or remove them"; return 1; }
+    install -d -o root -g freerad -m 0750 "$d"
+    case $mode in
+        existing)
+            [[ -r $cert && -r $key && -r $ca ]] || { bad "EAP certificate files not readable: eap_cert '$cert', eap_key '$key', eap_ca '$ca'"; return 1; }
+            [[ $(openssl x509 -in "$cert" -noout -pubkey 2>/dev/null | openssl sha256) == "$(openssl pkey -in "$key" -pubout 2>/dev/null | openssl sha256)" ]] \
+                || { bad "EAP certificate $cert does not match the key $key"; return 1; }
+            openssl x509 -in "$ca" -noout 2>/dev/null || { bad "eap_ca $ca is not a PEM certificate"; return 1; }
+            install -o root -g freerad -m 0640 "$cert" "$d/radius.pem"
+            install -o root -g freerad -m 0640 "$key" "$d/radius.key"
+            install -o root -g freerad -m 0640 "$ca" "$d/ca.pem"
+            ok "EAP certificates installed in $d from $cert, $key and $ca" ;;
+        self-signed)
+            tmp=$(mktemp -d)
+            printf 'basicConstraints = critical, CA:FALSE\nkeyUsage = critical, digitalSignature\nextendedKeyUsage = serverAuth\nsubjectAltName = DNS:%s\n' \
+                "$name" > "$tmp/ext"
+            if ! { openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-384 -sha384 -nodes -days 825 \
+                       -subj "/CN=radius-admin EAP CA $name" -addext "basicConstraints=critical,CA:TRUE,pathlen:0" \
+                       -addext "keyUsage=critical,keyCertSign,cRLSign" -keyout "$tmp/ca.key" -out "$tmp/ca.pem" \
+                   && openssl req -new -newkey ec -pkeyopt ec_paramgen_curve:P-384 -sha384 -nodes \
+                       -subj "/CN=$name" -keyout "$tmp/radius.key" -out "$tmp/radius.csr" \
+                   && openssl x509 -req -in "$tmp/radius.csr" -CA "$tmp/ca.pem" -CAkey "$tmp/ca.key" -set_serial "0x$(openssl rand -hex 16)" \
+                       -sha384 -days 825 -extfile "$tmp/ext" -out "$tmp/radius.pem"; } >/dev/null 2>&1; then
+                rm -rf "$tmp"; bad "could not create self-signed EAP certificates"; return 1
+            fi
+            install -o root -g freerad -m 0640 "$tmp/ca.pem" "$d/ca.pem"
+            install -o root -g freerad -m 0640 "$tmp/radius.pem" "$d/radius.pem"
+            install -o root -g freerad -m 0640 "$tmp/radius.key" "$d/radius.key"
+            shred -u "$tmp/ca.key" 2>/dev/null || rm -f "$tmp/ca.key"
+            rm -rf "$tmp"
+            warn "self-signed EAP certificates created in $d for $name: EAP-TLS clients cannot sign in until you replace them with your CA's (RUNBOOK section 13.4)" ;;
+        *) bad "eap_tls must be self-signed or existing (got '$mode')"; return 1 ;;
+    esac
+}
+
 install_app_code() {
     local tmp
     tmp=$(mktemp -d "$OPT/.app.XXXXXX")
@@ -890,6 +1028,52 @@ install_app_config() {
     fi
 }
 
+# fr_install_staged WORK : install the staged FreeRADIUS files into $RA_RADDB and set the enabled
+# modules and virtual servers (freeradius phase, step 4)
+fr_install_staged() {
+    local work=$1 f rel dst m
+    while IFS= read -r -d '' f; do
+        rel=${f#"$work"/}
+        dst=$RA_RADDB/$rel
+        install -d -o root -g freerad -m 0750 "$(dirname "$dst")"
+        if [[ -e $dst ]]; then
+            # keep existing ownership/mode of files we replace
+            install -o "$(stat -c %u "$dst")" -g "$(stat -c %g "$dst")" -m "$(stat -c %a "$dst")" "$f" "$dst"
+        else
+            install -o root -g freerad -m 0640 "$f" "$dst"
+        fi
+    done < <(find "$work" -type f -print0)
+    for rel in policy.d/radius-admin radius-admin-clients.conf; do
+        chown root:freerad "$RA_RADDB/$rel"; chmod 0640 "$RA_RADDB/$rel"
+    done
+    ok "installed FreeRADIUS configuration files"
+
+    while read -r m; do
+        m=${m%%#*}; m=${m//[[:space:]]/}
+        [[ -z $m ]] && continue
+        [[ $m =~ ^[A-Za-z0-9_.-]+$ ]] || { warn "ignoring odd module name '$m'"; continue; }
+        if [[ -L $RA_RADDB/mods-enabled/$m ]]; then rm -f "$RA_RADDB/mods-enabled/$m"; info "disabled module $m"; fi
+    done < "$SRC/freeradius/modules-to-disable.txt"
+    if [[ -L $RA_RADDB/sites-enabled/inner-tunnel ]]; then
+        rm -f "$RA_RADDB/sites-enabled/inner-tunnel"; info "removed sites-enabled/inner-tunnel"
+    fi
+    [[ -L $RA_RADDB/mods-enabled/sql ]] || ln -s ../mods-available/sql "$RA_RADDB/mods-enabled/sql"
+    # the policy looks up directory groups with ldap and ldap_user (a stock raddb leaves it off)
+    [[ -L $RA_RADDB/mods-enabled/ldap ]] || ln -s ../mods-available/ldap "$RA_RADDB/mods-enabled/ldap"
+    # the virtual servers behind EAP-TTLS and PEAP (802.1X with a username and password);
+    # PEAP's EAP-MSCHAPv2 needs the mschap module (earlier releases disabled it)
+    [[ -L $RA_RADDB/sites-enabled/radius-admin-inner ]] \
+        || ln -s ../sites-available/radius-admin-inner "$RA_RADDB/sites-enabled/radius-admin-inner"
+    [[ -L $RA_RADDB/sites-enabled/radius-admin-peap ]] \
+        || ln -s ../sites-available/radius-admin-peap "$RA_RADDB/sites-enabled/radius-admin-peap"
+    # the password check of device admin logins that need a second factor (SPEC section 29);
+    # it only receives requests while a Duo provider is enabled (listener in the clients file)
+    [[ -L $RA_RADDB/sites-enabled/radius-admin-mfa-primary ]] \
+        || ln -s ../sites-available/radius-admin-mfa-primary "$RA_RADDB/sites-enabled/radius-admin-mfa-primary"
+    [[ -L $RA_RADDB/mods-enabled/mschap ]] || ln -s ../mods-available/mschap "$RA_RADDB/mods-enabled/mschap"
+    if [[ -d $RA_RADDB/policy.d ]]; then chmod o-w "$RA_RADDB/policy.d"; fi
+}
+
 phase_freeradius() {
     hdr "Phase freeradius"
     detect_fr
@@ -899,7 +1083,12 @@ phase_freeradius() {
     psql_su -d radius -At -c 'SELECT 1 FROM ui.access_rule LIMIT 1' >/dev/null 2>&1 \
         || die "database radius not initialised (run --phase postgres)"
     local nrules; nrules=$(psql_su -d radius -At -c 'SELECT count(*) FROM ui.access_rule')
-    (( nrules > 0 )) || die "ui.access_rule is empty -- run the migrate phase first (--phase migrate --confirm-migrate); refusing to install a policy that rejects every EAP user"
+    access_rules_check "$nrules"
+    local blank=0
+    if fr_blank; then
+        blank=1
+        info "new server: FreeRADIUS is configured from scratch (no directory yet; EAP certificates from the answers or self-signed)"
+    fi
 
     # 1. full backup of the current configuration (this tarball IS the rollback)
     local tarball=$RA_BACKUP_DIR/freeradius-$TS.tar.gz
@@ -912,8 +1101,20 @@ phase_freeradius() {
     trap 'rm -rf "$work"' RETURN
     (cd "$SRC/freeradius" && find . -type f ! -path './diffs/*' ! -name 'modules-to-disable.txt' -print0 \
         | xargs -0 -I{} install -D -m 0600 {} "$work/{}")
+    if (( blank )) || ldap_is_off "$RA_RADDB/mods-available/ldap"; then
+        ldap_directory_off "$work/mods-available/ldap" || die "could not prepare mods-available/ldap; nothing changed"
+    fi
+    if (( blank )); then
+        fr_localhost_secret "$work"
+        fr_eap_ocsp "$work/mods-available/eap" "$( (( OCSP_ON )) && printf '%s' "$RA_OCSP_URL")" \
+            || die "could not set OCSP in mods-available/eap; nothing changed"
+    fi
     carry_over_secrets "$work" || die "could not carry over secrets; nothing changed"
-    ldap_bind_check "$work/mods-available/ldap"
+    if ldap_is_off "$work/mods-available/ldap"; then
+        warn "no directory configured: EAP-TLS and directory accounts are rejected until mods-available/ldap is set up (RUNBOOK section 13.4)"
+    else
+        ldap_bind_check "$work/mods-available/ldap"
+    fi
 
     # 3. render policy + clients from the database (as the app would)
     install_app_code || true
@@ -932,47 +1133,13 @@ phase_freeradius() {
     install -o radius-admin -g radius-admin -m 0600 "$rdir/clients" "$STAGING/clients"
     rm -rf "$rdir"
 
-    # 4. install
-    local f rel dst
-    while IFS= read -r -d '' f; do
-        rel=${f#"$work"/}
-        dst=$RA_RADDB/$rel
-        install -d -o root -g freerad -m 0750 "$(dirname "$dst")"
-        if [[ -e $dst ]]; then
-            # keep existing ownership/mode of files we replace
-            install -o "$(stat -c %u "$dst")" -g "$(stat -c %g "$dst")" -m "$(stat -c %a "$dst")" "$f" "$dst"
-        else
-            install -o root -g freerad -m 0640 "$f" "$dst"
-        fi
-    done < <(find "$work" -type f -print0)
-    for rel in policy.d/radius-admin radius-admin-clients.conf; do
-        chown root:freerad "$RA_RADDB/$rel"; chmod 0640 "$RA_RADDB/$rel"
-    done
-    ok "installed FreeRADIUS configuration files"
-
-    local m
-    while read -r m; do
-        m=${m%%#*}; m=${m//[[:space:]]/}
-        [[ -z $m ]] && continue
-        [[ $m =~ ^[A-Za-z0-9_.-]+$ ]] || { warn "ignoring odd module name '$m'"; continue; }
-        if [[ -L $RA_RADDB/mods-enabled/$m ]]; then rm -f "$RA_RADDB/mods-enabled/$m"; info "disabled module $m"; fi
-    done < "$SRC/freeradius/modules-to-disable.txt"
-    if [[ -L $RA_RADDB/sites-enabled/inner-tunnel ]]; then
-        rm -f "$RA_RADDB/sites-enabled/inner-tunnel"; info "removed sites-enabled/inner-tunnel"
+    # 4. install (a new server first gets its EAP certificates; the tarball above removes them again)
+    if (( blank )); then
+        eap_certs "${ANS[eap_tls]:-${SITE[eap_tls]:-self-signed}}" "${ANS[eap_cert]:-${SITE[eap_cert]:-}}" \
+            "${ANS[eap_key]:-${SITE[eap_key]:-}}" "${ANS[eap_ca]:-${SITE[eap_ca]:-}}" "$RA_SERVER_NAME" \
+            || die "EAP certificates not installed; nothing else in $RA_RADDB changed"
     fi
-    [[ -L $RA_RADDB/mods-enabled/sql ]] || ln -s ../mods-available/sql "$RA_RADDB/mods-enabled/sql"
-    # the virtual servers behind EAP-TTLS and PEAP (802.1X with a username and password);
-    # PEAP's EAP-MSCHAPv2 needs the mschap module (earlier releases disabled it)
-    [[ -L $RA_RADDB/sites-enabled/radius-admin-inner ]] \
-        || ln -s ../sites-available/radius-admin-inner "$RA_RADDB/sites-enabled/radius-admin-inner"
-    [[ -L $RA_RADDB/sites-enabled/radius-admin-peap ]] \
-        || ln -s ../sites-available/radius-admin-peap "$RA_RADDB/sites-enabled/radius-admin-peap"
-    # the password check of device admin logins that need a second factor (SPEC section 29);
-    # it only receives requests while a Duo provider is enabled (listener in the clients file)
-    [[ -L $RA_RADDB/sites-enabled/radius-admin-mfa-primary ]] \
-        || ln -s ../sites-available/radius-admin-mfa-primary "$RA_RADDB/sites-enabled/radius-admin-mfa-primary"
-    [[ -L $RA_RADDB/mods-enabled/mschap ]] || ln -s ../mods-available/mschap "$RA_RADDB/mods-enabled/mschap"
-    if [[ -d $RA_RADDB/policy.d ]]; then chmod o-w "$RA_RADDB/policy.d"; fi
+    fr_install_staged "$work"
 
     # 5. validate; on failure restore the tarball (the running daemon is untouched)
     if fr_check "$RA_RADDB"; then
@@ -1191,7 +1358,11 @@ phase_nginx() {
     if ! openssl verify -CAfile "$ETC/tls/client-ca.pem" -untrusted "$crt" "$crt" >/dev/null 2>&1; then
         warn "server certificate does not verify against the site CA bundle (wrong issuer or missing intermediate in server.crt?)"
     fi
-    getent hosts "$RA_OCSP_HOST" >/dev/null || die "$RA_OCSP_HOST does not resolve; nginx would refuse ssl_ocsp_responder"
+    if (( OCSP_ON )); then
+        getent hosts "$RA_OCSP_HOST" >/dev/null || die "$RA_OCSP_HOST does not resolve; nginx would refuse ssl_ocsp_responder"
+    else
+        info "no OCSP responder configured: portal client certificates are not checked for revocation"
+    fi
 
     # nginx resolves the OCSP responder when it starts; start after the network and retry
     # on failure, so a short DNS outage at boot or during an apt upgrade does not leave it down
@@ -1200,9 +1371,9 @@ phase_nginx() {
         systemctl daemon-reload
     fi
 
-    local tmp; tmp=$(mktemp)
-    sed -e "s#@LISTEN_IP@#$ip#g" -e "s#@SERVER_NAME@#$RA_SERVER_NAME#g" -e "s#@ADMIN_NET@#$RA_ADMIN_NET#g" \
-        -e "s#@RESOLVER@#$res#g" -e "s#@OCSP_URL@#$RA_OCSP_URL#g" "$HERE/nginx/radius-admin.conf" > "$tmp"
+    local tmp ocsp=""; tmp=$(mktemp)
+    (( OCSP_ON )) && ocsp=$RA_OCSP_URL
+    render_nginx_site "$HERE/nginx/radius-admin.conf" "$tmp" "$ip" "$RA_SERVER_NAME" "$RA_ADMIN_NET" "$res" "$ocsp"
     if grep -v '^[[:space:]]*#' "$tmp" | grep -qE '@[A-Z_]+@'; then
         die "unrendered placeholder in nginx config: $(grep -v '^[[:space:]]*#' "$tmp" | grep -oE '@[A-Z_]+@' | sort -u | tr '\n' ' ')"
     fi

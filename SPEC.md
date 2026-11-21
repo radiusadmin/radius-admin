@@ -712,6 +712,22 @@ CSV columns (header row required, exact names, any order tolerated by name):
   takes the same unattended; `--print-answers` validates and prints only. New phase `site` writes
   `/etc/radius-admin/site.yaml` (root 0640) and the certificate; `bootstrap` creates the first
   admin. With a CSR the run stops until the issued certificate is installed.
+- **New server** (install.sh `fr_blank`: no `policy.d/radius-admin` and no SQLite database): the
+  `freeradius` phase needs nothing from the stock FreeRADIUS files. Empty `ui.access_rule` only
+  warns (it still refuses while a SQLite database exists). `mods-available/ldap` without a
+  directory (`ldap_directory_off`): marker comment `radius-admin: directory not configured`,
+  `password = ''`, `server = 'ldaps://directory.invalid'`, main pool `start = 0`, `min = 0`;
+  `carry_over_secrets` then keeps no live LDAP setting, `ldap_bind_check` is skipped, and updates
+  re-apply this while the live file has the marker. EAP certificates in `certs/site/`
+  (`eap_certs`): kept if all three exist; answers `eap_tls: existing` (`eap_cert`, `eap_key`,
+  `eap_ca`; key must match) or `self-signed` (default: ECDSA P-384 CA + server certificate, SAN =
+  server name, EKU serverAuth, 825 days, CA key destroyed), root:freerad 0640. A random 48-hex
+  localhost secret replaces a missing or stock `testing123` one. EAP `ocsp { enable }` = yes with
+  the run's OCSP responder, else no. `mods-enabled/ldap` is linked when missing.
+- **OCSP responder** (`ocsp_url`: answers, `RA_OCSP_URL`, `site.yaml`, the installed nginx site;
+  else none): without one the nginx site is rendered without `ssl_ocsp` (`render_nginx_site`),
+  the nginx phase skips the name check, `--print-settings` shows `ocsp_url: none (default)` and
+  `preflight.sh --ocsp-url ""` reports it as info.
 - **Crypto mode at install** (`fips`): the first install writes `require_fips = true|false` into
   `radius-admin.conf` (`render_app_conf`). FIPS mode is refused (the run stops before any phase)
   unless `/proc/sys/crypto/fips_enabled` is 1. When `radius-admin.conf` exists its `require_fips`

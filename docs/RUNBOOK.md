@@ -1451,7 +1451,7 @@ the rollback option is no longer needed.
 ### 13.1 Interactive install and answers file
 
 `sudo ./deploy/install.sh` with no options asks for the server name, management subnet,
-portal address, switch networks (where the monitor may send SNMP and CoA, §6.3), DNS resolvers, portal certificate, first administrator and crypto mode (standard by default, FIPS mode on request: §3), shows a summary and
+portal address, switch networks (where the monitor may send SNMP and CoA, §6.3), DNS resolvers, portal certificate, first administrator, crypto mode (standard by default, FIPS mode on request: §3), the 802.1X (EAP) certificate of a new server and an OCSP responder (§13.4), shows a summary and
 asks for confirmation. Unattended: `--answers FILE` (format in `deploy/answers.sh`);
 `--print-answers` only checks and prints. The answers are kept in `/etc/radius-admin/site.yaml`
 (root 0640); re-run later with `--answers /etc/radius-admin/site.yaml`.
@@ -1501,3 +1501,45 @@ CoA to RadSec clients still goes over UDP to the client's CoA port.
 4. Test in a private window with an account in a mapped group. Refusals are in the Audit log
    (`auth.login`, `method: saml`, with the reason).
 5. Keep at least one local administrator with MFA as break-glass access.
+
+### 13.4 A new server: directory, EAP certificates and OCSP
+
+On a new server (FreeRADIUS never set up by radius-admin and no SQLite database to migrate) the
+`freeradius` phase installs a working configuration that rejects every 802.1X user until you
+configure it. It needs nothing from the stock FreeRADIUS files:
+
+- **Access rules** may be empty: a warning says that every 802.1X user is rejected until you add
+  rules in the portal. (With a SQLite database present the phase still refuses and asks for the
+  `migrate` phase first.)
+- **Directory: not configured.** `mods-available/ldap` gets the line
+  `#  radius-admin: directory not configured`, an empty password, the server
+  `ldaps://directory.invalid` and a connection pool that does not connect at start. FreeRADIUS
+  starts. Directory lookups fail, so EAP-TLS and directory accounts are rejected, while local
+  accounts, PEAP/TTLS with local users and MAB work. Updates keep this state while the marker line
+  is there.
+- **EAP certificates** in `/etc/freeradius/certs/site/` (`radius.pem`, `radius.key`, `ca.pem`):
+  the installer asks whether you have them (answers `eap_tls: existing` with `eap_cert`, `eap_key`
+  and `eap_ca`, the CA that issues client certificates). If you don't, it makes **self-signed**
+  ones: a throwaway ECDSA P-384 CA signs the server certificate for the server name, then its key
+  is destroyed. Replace them: no client certificate can chain to that CA. Files already in
+  `certs/site/` are kept.
+- **localhost client secret**: a random one replaces the stock `testing123`.
+- **OCSP** for EAP-TLS and portal client certificates: only with a responder (answers `ocsp_url`,
+  or `RA_OCSP_URL` in the environment). Without one, EAP OCSP is off and the nginx site has no
+  `ssl_ocsp` lines. Preflight checks the responder's name only when one is set.
+
+**Set up the directory later** (by hand until the portal's Setup step exists):
+
+1. In `/etc/freeradius/mods-available/ldap` set `server`, `port`, `identity`, `password`,
+   `base_dn` and, in `tls { }`, `ca_file` (the CA of your domain controllers). Test the login with
+   the same values first:
+   `LDAPTLS_CACERT=<ca_file> ldapwhoami -x -H ldaps://dc01.example.net -D '<identity>' -W`.
+2. Delete the line `#  radius-admin: directory not configured`.
+3. `sudo ./deploy/install.sh --phase freeradius --restart-freeradius`. The phase now carries your
+   settings over, tests the bind and starts the connection pool as shipped. Updates keep them.
+
+**Replace the EAP certificates**: install your server certificate (leaf), its key and the CA
+bundle for client certificates as `radius.pem`, `radius.key` and `ca.pem` in
+`/etc/freeradius/certs/site/` (root:freerad 0640). Optionally turn on `ocsp { enable = yes, url = … }`
+in `mods-available/eap`. Then restart FreeRADIUS. Run `--phase nginx` as well, so that the portal
+trusts the same CA for client certificates (`/etc/radius-admin/tls/client-ca.pem`).

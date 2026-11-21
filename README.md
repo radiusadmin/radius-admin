@@ -144,7 +144,9 @@ FreeRADIUS when you click **Apply**. More detail: [SPEC.md](SPEC.md) and
    ```
 2. **Install.** Run the installer with no options and answer the questions: server name,
    management subnet, portal address, DNS resolvers, portal certificate (self-signed to start,
-   a CSR for your CA, or existing files) and the first administrator:
+   a CSR for your CA, or existing files), the first administrator, the crypto mode (standard by
+   default; FIPS mode on a FIPS host), the 802.1X (EAP) server certificate (your files, or
+   self-signed to replace later) and an optional OCSP responder:
    ```bash
    sudo ./deploy/install.sh
    ```
@@ -158,12 +160,16 @@ FreeRADIUS when you click **Apply**. More detail: [SPEC.md](SPEC.md) and
    resolver: "192.0.2.53"
    tls: self-signed
    admin_username: netadmin
+   eap_tls: self-signed
    ```
    ```bash
    sudo ./deploy/install.sh --answers site.yaml --print-answers   # check only
    sudo ./deploy/install.sh --answers site.yaml
    ```
-   The installer keeps your answers in `/etc/radius-admin/site.yaml` for later runs.
+   The installer keeps your answers in `/etc/radius-admin/site.yaml` for later runs. On a new
+   server, FreeRADIUS starts without a directory and rejects every 802.1X user until you add
+   access rules and set up the directory
+   ([RUNBOOK §13.4](docs/RUNBOOK.md#134-a-new-server-directory-eap-certificates-and-ocsp)).
 3. **Sign in.** Browse from the management subnet to `https://<server name>/`, sign in with the
    one-time password the installer printed, choose your own password and set up two-factor
    authentication.
@@ -192,10 +198,10 @@ allow TCP 2083 from those clients.
 
 Being a young project, some parts are still to come:
 
-- The installer expects the FreeRADIUS certificates under `/etc/freeradius/certs/site/`.
-  Generating the whole FreeRADIUS configuration is the next phase.
+- The directory (LDAP/AD) of a new server is set up by hand in `mods-available/ldap`; a portal
+  Setup step for the directory and certificates comes with the generated FreeRADIUS
+  configuration, the next phase.
 - The bundled FreeRADIUS package is built for Ubuntu 24.04 (amd64); Debian 12 follows.
-- The nginx phase expects the site CA bundle and an OCSP responder for client-certificate MFA.
 - Vendor profiles: Cisco Catalyst 1200/1300 is the tested switch family today.
 
 ## Licence
