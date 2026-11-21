@@ -156,6 +156,33 @@ live_nft() {
     [[ -n $v ]] && printf '%s\n' "$v"
 }
 
+# FIPS mode (require_fips in radius-admin.conf). Standard mode is the default; FIPS mode is an
+# explicit choice at the first install (answers "fips: on", --fips) and needs a host whose kernel
+# runs in FIPS mode. An update never changes the live setting.
+RA_APP_CONF=${RA_APP_CONF:-/etc/radius-admin/radius-admin.conf}
+RA_FIPS_ENABLED_FILE=${RA_FIPS_ENABLED_FILE:-/proc/sys/crypto/fips_enabled}
+kernel_fips() { [[ $(cat "$RA_FIPS_ENABLED_FILE" 2>/dev/null) == 1 ]]; }
+live_fips() { # live_fips -> prints on|off from the installed radius-admin.conf, or fails
+    [[ -r $RA_APP_CONF ]] || return 1
+    local v
+    v=$(awk -F= '/^[[:space:]]*\[/ { s = $0; gsub(/[][[:space:]]/, "", s) }
+        s == "app" && $1 ~ /^[[:space:]]*require_fips[[:space:]]*$/ { v = $2; gsub(/[[:space:]]/, "", v); print tolower(v); exit }' \
+        "$RA_APP_CONF")
+    case $v in
+        true|yes|1|on) echo on ;;
+        false|no|0|off) echo off ;;
+        "") echo on ;;   # key absent: the app's built-in default (config.py) is require_fips = true
+        *) return 1 ;;
+    esac
+}
+# render_app_conf EXAMPLE DST SERVER_NAME on|off: radius-admin.conf for a first install
+render_app_conf() {
+    local v=false
+    [[ $4 == on ]] && v=true
+    sed -e "s|^# server_name = .*|server_name = $3|" -e "s|^require_fips = .*|require_fips = $v|" "$1" > "$2"
+    grep -qx "require_fips = $v" "$2"
+}
+
 # DNS servers usable by nginx `resolver` (IPv4, real upstreams preferred over the stub).
 detect_resolvers() {
     local r=""

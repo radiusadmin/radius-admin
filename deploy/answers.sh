@@ -13,9 +13,12 @@
 #   tls_cert: /path/server.crt            tls: existing only (leaf first, then intermediates)
 #   tls_key: /path/server.key             tls: existing only
 #   admin_username: admin                 first portal administrator (created with a one-time password)
+#   fips: off                             off (standard mode, the default) | on (FIPS mode: needs a
+#                                         host whose kernel runs in FIPS mode). Written to
+#                                         require_fips on the first install; an update keeps the live value
 # shellcheck shell=bash
 
-ANS_KEYS=(server_name admin_net listen_ip switch_nets resolver tls tls_cert tls_key admin_username)
+ANS_KEYS=(server_name admin_net listen_ip switch_nets resolver tls tls_cert tls_key admin_username fips)
 declare -A ANS=()
 
 ans_load() { # ans_load FILE [ARRAY]: into ANS, or the associative ARRAY (site.yaml as installed:
@@ -80,6 +83,7 @@ ans_defaults() {
     : "${ANS[resolver]:=$(detect_resolvers 2>/dev/null || true)}"
     : "${ANS[tls]:=self-signed}"
     : "${ANS[admin_username]:=admin}"
+    : "${ANS[fips]:=off}"
 }
 
 _ask() { # _ask KEY "Question" -> reads stdin (a terminal, or a pipe in tests)
@@ -105,6 +109,8 @@ ans_interactive() {
         _ask tls_key "Private key file"
     fi
     _ask admin_username "First administrator username"
+    say "  Crypto mode: off = standard mode; on = FIPS mode (the host kernel must run in FIPS mode)"
+    _ask fips "FIPS mode (on/off)"
 }
 
 ans_validate() {
@@ -130,6 +136,7 @@ ans_validate() {
         *) die "tls must be self-signed, csr or existing (got '${ANS[tls]:-}')" ;;
     esac
     _ans_py user "${ANS[admin_username]:-}" || die "admin_username must be 2-64 characters: lowercase letters, digits, . _ -"
+    [[ ${ANS[fips]:-} == on || ${ANS[fips]:-} == off ]] || die "fips must be on or off (got '${ANS[fips]:-}')"
 }
 
 ans_print() {

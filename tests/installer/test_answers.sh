@@ -17,6 +17,9 @@ LOCAL_IP=$(ip -o -4 addr show scope global | awk '{split($4, a, "/"); print a[1]
 LOCAL_IP=${LOCAL_IP:-127.0.0.1}
 # no installed monitor unit to take switch networks from (tests below point it at a file)
 export RA_SNMP_UNIT=$W/no-such-unit
+# crypto mode: a host whose kernel is not in FIPS mode, and no installed radius-admin.conf
+echo 0 > "$W/fips_enabled"
+export RA_FIPS_ENABLED_FILE=$W/fips_enabled RA_APP_CONF=$W/no-such-radius-admin.conf
 
 good() {
     cat > "$W/a.yaml" <<EOF
@@ -61,6 +64,63 @@ bad "line that is not key: value" "just text"
 bad "switch network with host bits" "switch_nets: 198.51.100.7/24"
 bad "/0 switch network" "switch_nets: \"192.0.2.0/24 0.0.0.0/0\""
 bad "switch networks with shell characters" "switch_nets: \"192.0.2.0/24;reboot\""
+bad "crypto mode other than on/off" "fips: maybe"
+
+# crypto mode: standard mode by default; FIPS mode only on a host whose kernel runs in FIPS
+# mode; the installed require_fips always wins (an update never changes it)
+good
+grep -qx 'fips: off' <<<"$out" && pass "standard mode is the default (fips: off)" || fail "fips default: $out"
+echo 'fips: on' >> "$W/a.yaml"
+if "$INSTALL" --answers "$W/a.yaml" --print-answers >"$W/out" 2>&1; then
+    fail "FIPS mode accepted on a host whose kernel is not in FIPS mode"
+elif grep -q "kernel is not in FIPS mode" "$W/out"; then pass "FIPS mode refused on a non-FIPS host, with a clear message"
+else fail "FIPS refusal message: $(tail -1 "$W/out")"; fi
+good
+"$INSTALL" --answers "$W/a.yaml" --fips --print-answers >/dev/null 2>&1 \
+    && fail "--fips accepted on a non-FIPS host" || pass "--fips refused on a non-FIPS host"
+"$INSTALL" --answers "$W/a.yaml" --fips --standard-mode --print-answers >/dev/null 2>&1 \
+    && fail "--fips with --standard-mode accepted" || pass "--fips and --standard-mode exclude each other"
+echo 1 > "$W/fips_on"
+grep -qx 'fips: on' <(RA_FIPS_ENABLED_FILE=$W/fips_on "$INSTALL" --answers "$W/a.yaml" --fips --print-answers 2>&1) \
+    && pass "--fips accepted on a host whose kernel runs in FIPS mode" || fail "--fips on a FIPS host"
+echo 'fips: on' >> "$W/a.yaml"
+grep -qx 'fips: off' <("$INSTALL" --answers "$W/a.yaml" --standard-mode --print-answers 2>&1) \
+    && pass "--standard-mode overrides the answers" || fail "--standard-mode ignored"
+printf '[app]\nrequire_fips = false\n' > "$W/live-off.conf"
+lo=$(RA_APP_CONF=$W/live-off.conf RA_FIPS_ENABLED_FILE=$W/fips_on "$INSTALL" --answers "$W/a.yaml" --print-answers 2>&1)
+grep -qx "fips: off" <<<"$lo" && grep -q "ignored: this server is installed with fips: off" <<<"$lo" \
+    && pass "answers on an installed server keep its require_fips (standard mode)" || fail "live standard mode not kept: $lo"
+good
+printf '[app]\nrequire_fips = true\n' > "$W/live-on.conf"
+grep -qx 'fips: on' <(RA_APP_CONF=$W/live-on.conf "$INSTALL" --answers "$W/a.yaml" --print-answers 2>&1) \
+    && pass "answers on an installed server keep its require_fips (FIPS mode)" || fail "live FIPS mode not kept"
+
+# preflight: in standard mode the FIPS checks never block; in FIPS mode they do
+pf_fips_fails() { grep -E '\[FAIL\].*(FIPS|fips|_hashlib)' "$1"; }
+good
+"$INSTALL" --answers "$W/a.yaml" --phase preflight -y --skip-preflight >"$W/pf.out" 2>&1
+if grep -q '== Crypto mode ==' "$W/pf.out" && grep -q 'standard mode' "$W/pf.out" && ! pf_fips_fails "$W/pf.out" >/dev/null; then
+    pass "standard-mode answers: preflight on a non-FIPS host has no FIPS failures"
+else fail "standard-mode preflight: $(pf_fips_fails "$W/pf.out" || tail -3 "$W/pf.out")"; fi
+"$ROOT/deploy/preflight.sh" --fips-mode on >"$W/pf.out" 2>&1
+pf_fips_fails "$W/pf.out" | grep -q 'kernel FIPS mode OFF' \
+    && pass "FIPS-mode preflight on a non-FIPS host blocks" || fail "FIPS-mode preflight did not block"
+RA_APP_CONF=$W/live-on.conf "$ROOT/deploy/preflight.sh" >"$W/pf.out" 2>&1
+pf_fips_fails "$W/pf.out" | grep -q 'kernel FIPS mode OFF' \
+    && pass "preflight without --fips-mode follows the installed require_fips" || fail "preflight ignored the live require_fips"
+
+# radius-admin.conf for a first install: require_fips from the chosen mode
+(
+    # shellcheck source=../../deploy/lib.sh
+    . "$ROOT/deploy/lib.sh"
+    ex=$ROOT/deploy/etc/radius-admin.conf.example
+    render_app_conf "$ex" "$W/c.conf" radius.example.net off || exit 1
+    grep -qx 'require_fips = false' "$W/c.conf" && grep -qx 'server_name = radius.example.net' "$W/c.conf" || exit 1
+    RA_APP_CONF=$W/c.conf; [[ $(live_fips) == off ]] || exit 1
+    render_app_conf "$ex" "$W/c.conf" radius.example.net on || exit 1
+    grep -qx 'require_fips = true' "$W/c.conf" && [[ $(live_fips) == on ]] || exit 1
+    [[ $(grep -c '^require_fips' "$W/c.conf") == 1 ]]
+) && pass "radius-admin.conf written with require_fips for the chosen mode" || fail "render_app_conf / live_fips"
 
 # switch networks (where the monitor may send SNMP and CoA): default admin_net, a list
 # in the answers, else what the installed unit allows, and --switch-nets on the command line
@@ -98,11 +158,12 @@ grep -qx 'switch_nets: 203.0.113.0/24' \
     || pass "--print-answers needs --answers or --interactive"
 
 # interactive: answers piped to the questions; Enter keeps the defaults
-out=$(printf 'portal.example.net\n198.51.100.0/24\n198.51.100.7\n\n198.51.100.53\n\nops-admin\n' \
+out=$(printf 'portal.example.net\n198.51.100.0/24\n198.51.100.7\n\n198.51.100.53\n\nops-admin\n\n' \
       | "$INSTALL" --interactive --print-answers 2>&1)
 if grep -qx 'server_name: portal.example.net' <<<"$out" && grep -qx 'admin_net: 198.51.100.0/24' <<<"$out" \
     && grep -qx 'switch_nets: 198.51.100.0/24' <<<"$out" \
-    && grep -qx 'tls: self-signed' <<<"$out" && grep -qx 'admin_username: ops-admin' <<<"$out"; then
+    && grep -qx 'tls: self-signed' <<<"$out" && grep -qx 'admin_username: ops-admin' <<<"$out" \
+    && grep -qx 'fips: off' <<<"$out"; then
     pass "interactive questions take typed answers and defaults"
 else fail "interactive: $out"; fi
 

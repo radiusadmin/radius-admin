@@ -4,7 +4,11 @@
 # settings exclusively from the root-owned /etc/radius-admin/helper.conf.
 
 [app]
-require_fips = true
+# false = standard mode (the default); true = FIPS mode, chosen at the first install
+# (install.sh --fips / answers "fips: on") on a host whose kernel runs in FIPS mode.
+# The app then refuses to start unless the kernel, OpenSSL and Python all report FIPS mode.
+# Updates never change this setting.
+require_fips = false
 db_dsn = dbname=radius host=/var/run/postgresql user=radius_admin
 key_file = /etc/radius-admin/keys/data.key
 helper_socket = /run/radius-admin-helper.sock

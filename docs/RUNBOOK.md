@@ -16,8 +16,8 @@ Contents: 1 Prerequisites · 2 Plan the maintenance window · 3 Install step by 
 
 | Item | How to check |
 |---|---|
-| Kernel FIPS on | `cat /proc/sys/crypto/fips_enabled` → `1` |
-| Ubuntu Pro FIPS stream | `pro status` (see SECURITY.md §1 about `fips-updates` vs `fips`) |
+| Kernel FIPS on (FIPS mode only) | `cat /proc/sys/crypto/fips_enabled` → `1` |
+| Ubuntu Pro FIPS stream (FIPS mode only) | `pro status` (see SECURITY.md §1 about `fips-updates` vs `fips`) |
 | Internal apt mirror reachable | `apt-get update` |
 | Packages available | `apt-cache policy postgresql nginx python3-flask python3-psycopg2 gunicorn python3-cryptography python3-qrcode nftables` |
 | FreeRADIUS unit + binary | new server: nothing to do, the release bundle carries `packages/radius-admin-freeradius_*.deb` (§1.2). Existing server: `systemctl list-unit-files 'freeradius*' 'radiusd*'`; `command -v radiusd freeradius` |
@@ -125,10 +125,20 @@ needed, a second one. Allow 2 hours including verification.
 
 Every phase is idempotent and can be re-run. `install.sh --help` lists options.
 
+**Crypto mode (choose before the first install).** Standard mode is the default. FIPS mode is an
+explicit choice: answers key `fips: on`, the last interactive question, or `install.sh --fips`
+(`--standard-mode` or `fips: off` choose standard mode explicitly). FIPS mode is refused unless
+the host's kernel already runs in FIPS mode (`/proc/sys/crypto/fips_enabled` = 1: Ubuntu Pro,
+`pro enable fips-updates`, reboot). The first install writes the choice as `require_fips` in
+`/etc/radius-admin/radius-admin.conf`; later runs and updates never change it (an option or answer
+that differs is ignored with a warning), and `install.sh --print-settings` shows the mode in use.
+Preflight treats its FIPS checks as blocking only in FIPS mode (`preflight.sh --fips-mode on|off`,
+default: the installed `require_fips`, else standard mode).
+
 ### 3.0 Before the window
 
 ```bash
-sudo ./deploy/preflight.sh
+sudo ./deploy/preflight.sh                # FIPS mode: sudo ./deploy/preflight.sh --fips-mode on
 sudo ./deploy/make-csr.sh                 # ECDSA P-384; add --ip <management-IP> if wanted; --rsa for RSA-3072
 cat /etc/radius-admin/tls/server.csr      # submit to pki.example.net (TLS Web Server template)
 # when issued (leaf first, then Example-IssuingCA):
@@ -291,7 +301,7 @@ other admins in the UI (Admins page) — each gets their own account; do not sha
 systemctl status freeradius radius-admin radius-admin-helper.socket nginx postgresql@16-main radius-admin-firewall
 ss -lunp | grep -E ':1812|:1813'                  # radiusd
 ss -ltnp | grep -E ':443|:80 |:5432'              # only nginx on <management-IP>:443
-sudo -u radius-admin env RADIUS_ADMIN_CONFIG=/etc/radius-admin/radius-admin.conf PYTHONPATH=/opt/radius-admin/app python3 -m radius_admin.cli check-fips
+sudo -u radius-admin env RADIUS_ADMIN_CONFIG=/etc/radius-admin/radius-admin.conf PYTHONPATH=/opt/radius-admin/app python3 -m radius_admin.cli check-fips   # FIPS mode
 nft list table inet radius_admin
 curl -sI https://radius.example.net/login | head -n 5     # from an admin PC: 200 + HSTS
 curl -m 5 https://radius.example.net/                      # from a NON-admin subnet: must time out
@@ -1389,7 +1399,7 @@ migration (new switch-admin passwords, MAB devices) exists only in PostgreSQL.
 | `400 The SSL certificate error` | the browser presented a client certificate that is revoked, expired, or **OCSP could not be checked** (responder `pki.example.net:8080` unreachable or DNS failing). nginx fails closed. Check `/var/log/nginx/radius-admin.error.log`. Workaround: use a browser profile without the certificate and sign in with TOTP. |
 | nginx won't start: `host not found in OCSP responder` | `pki.example.net` must resolve at nginx start; fix DNS / `--resolver` |
 | `502 Bad Gateway` | `systemctl status radius-admin`; `journalctl -u radius-admin`; socket perms `ls -l /run/radius-admin/` (srwxrwx--- radius-admin:radius-admin-web); `id www-data` must list radius-admin-web (restart nginx after adding) |
-| App refuses to start: FIPS | `check-fips`; `/proc/sys/crypto/fips_enabled`; never set `require_fips = false` in production |
+| App refuses to start: FIPS | FIPS mode only: `check-fips`; `/proc/sys/crypto/fips_enabled`; do not set `require_fips = false` on a server installed in FIPS mode |
 | "helper unavailable" | `systemctl status radius-admin-helper.socket`; `ls -l /run/radius-admin-helper.sock` (root:radius-admin 0660) |
 | "helper misconfigured" | `journalctl -t radius-admin-helper`; `/etc/radius-admin/helper.conf` must be root-owned, not group/world-writable, keys valid |
 | Validate fails | output shows the radiusd error and line; most often custom policy syntax; fix and re-validate. "forbidden construct" = the policy uses `$INCLUDE`, `$ENV`, `$TEMPLATE`, `%{exec:}`, `Exec-Program`, backticks, an interpreter xlat or a numeric attribute alias (`Attr-<n>`); use attribute names instead |
@@ -1441,7 +1451,7 @@ the rollback option is no longer needed.
 ### 13.1 Interactive install and answers file
 
 `sudo ./deploy/install.sh` with no options asks for the server name, management subnet,
-portal address, switch networks (where the monitor may send SNMP and CoA, §6.3), DNS resolvers, portal certificate and first administrator, shows a summary and
+portal address, switch networks (where the monitor may send SNMP and CoA, §6.3), DNS resolvers, portal certificate, first administrator and crypto mode (standard by default, FIPS mode on request: §3), shows a summary and
 asks for confirmation. Unattended: `--answers FILE` (format in `deploy/answers.sh`);
 `--print-answers` only checks and prints. The answers are kept in `/etc/radius-admin/site.yaml`
 (root 0640); re-run later with `--answers /etc/radius-admin/site.yaml`.
