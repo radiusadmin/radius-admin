@@ -119,11 +119,27 @@ make_src 9.9.9; request 1.2
 out=$(bash "$INSTALL" "$W/request.json" "$W/build.tgz" 2>&1)
 [[ $? -ne 0 && $out == *"invalid version"* ]] && pass "an invalid version is refused" || fail "version: $out"
 
-# remove: keeps a copy of the configuration, runs Duo's uninstaller, drops the drop-in
+# remove: keeps a copy of the configuration without its secrets, runs Duo's uninstaller, drops the drop-in
+cat > "$RA_DUO_DIR/conf/authproxy.cfg" <<'CFG'
+; radius-admin: test
+[radius_client]
+secret=TestOnlySecret0001
+[radius_server_auto]
+ikey=DIAAAAAAAAAAAAAAAAAA
+skey=TestOnlySecret0002TestOnlySecret00020000
+radius_secret_1=TestOnlySecret0003
+[ad_client]
+service_account_password=TestOnlySecret0004
+CFG
 out=$(bash "$REMOVE" 2>&1)
 [[ $? -eq 0 && ! -e $RA_DUO_DIR && ! -e $RA_SYSTEMD_DIR/duoauthproxy.service.d ]] && pass "remove runs the uninstaller and drops the drop-in" \
     || fail "remove: $out"
 ls "$RA_BACKUP_DIR"/duoauthproxy-authproxy.cfg-* >/dev/null 2>&1 && pass "remove keeps a copy of the configuration" || fail "config copy"
+kept=$(cat "$RA_BACKUP_DIR"/duoauthproxy-authproxy.cfg-* 2>/dev/null)
+[[ $kept == *"ikey=DIAAAAAAAAAAAAAAAAAA"* && $kept == *"skey= REDACTED"* && $kept == *"radius_secret_1= REDACTED"* \
+   && $kept == *"service_account_password= REDACTED"* && $kept != *TestOnlySecret* ]] \
+    && [[ $(stat -c %a "$RA_BACKUP_DIR"/duoauthproxy-authproxy.cfg-*) == 600 ]] \
+    && pass "the kept copy has no secrets" || fail "kept copy: $kept"
 mkdir -p "$RA_DUO_DIR"
 out=$(bash "$REMOVE" 2>&1)
 [[ $? -ne 0 && $out == *"not installed by radius-admin"* && -d $RA_DUO_DIR ]] && pass "a Duo install radius-admin did not make is left alone" \

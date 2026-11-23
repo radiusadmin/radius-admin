@@ -14,9 +14,12 @@ release, so previews sort after it.
   accounts.
 - **Duo: a failed install no longer leaves the proxy stopped.** The installer starts the proxy it
   stopped again when Duo's installer fails.
-- **Old copies of provider secrets are removed.** The portal's history of applied files (which
+- **Provider secrets no longer pile up in clear.** The portal's history of applied files (which
   includes Duo's configuration with its secret key) now keeps the same 50 sets as the helper's
-  backups instead of growing without limit.
+  backups instead of growing without limit, and seals its provider files (Duo's configuration and
+  the private keys of managed certificates) with the data key; copies from earlier versions are
+  sealed by the next apply. Removing Duo keeps its configuration with the secrets replaced by
+  `REDACTED`.
 
 ## 0.3.0 - 2026-11-20
 

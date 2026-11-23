@@ -1670,7 +1670,8 @@ unreachable). The portal pages that drive this follow.
   starts with `; radius-admin` (an applied configuration), otherwise left stopped.
 - **Removal** (`integrations/duo/remove.sh`, `radius-admin-integration-install --remove duo`,
   unit `radius-admin-integration-remove@.service`): only an install with `.radius-admin`; the
-  configuration is copied to `/var/backups/radius-admin/duoauthproxy-authproxy.cfg-<time>` (0600),
+  configuration is copied to `/var/backups/radius-admin/duoauthproxy-authproxy.cfg-<time>` (0600)
+  with the value of every key containing `skey`, `secret`, `password` or `_key` replaced by `REDACTED`,
   the service stopped, Duo's `uninstall --no-prompt` run, the drop-in removed.
 - **Outcome audit.** The dispatcher records `integration.install` / `integration.remove` (result
   done, removed or failed; version; message; the actor from the state) with
@@ -1724,7 +1725,11 @@ unreachable). The portal pages that drive this follow.
   a rollback to a set without a Duo file leaves the applied Duo copy, like the helper. The history
   (`applied/history/<backup_id>/`) keeps the newest `services.APPLIED_HISTORY_KEEP` (50, the helper's
   default `keep_backups`) sets; older ones, with the provider secrets they hold, are removed after
-  each apply and rollback.
+  each apply and rollback. In `applied/` and its history the provider files are sealed with the
+  data key (`ra-sealed-v1:` + base64 of the AES-256-GCM blob, additional data
+  `radius-admin:applied:<file name>`); plain copies of earlier versions are read as they are and
+  sealed by the next apply or rollback, and a copy that cannot be opened (data key replaced) counts
+  as missing. The staged copies the helper reads stay plain.
 - **Page** `/integrations/duo` (viewers: state; operators: test; admin + step-up: everything else):
   state (installed version, catalog-checked or Unverified, service running and listening, provider
   on/off, last install or removal), live progress and the install log (`/integrations/duo/status`,

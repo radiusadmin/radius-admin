@@ -1,5 +1,6 @@
 """Domain services shared by views and the CLI: settings, rendering, pending state,
 staging files, user/account operations."""
+import base64
 import datetime
 import functools
 import os
@@ -8,6 +9,7 @@ import shutil
 import tempfile
 import zoneinfo
 
+from cryptography.exceptions import InvalidTag
 from flask import current_app, g
 
 from . import db, vendors
@@ -338,12 +340,37 @@ def staging_dir():
     return current_app.config["RA"]["staging_dir"]
 
 
-def _put_provider_files(d, providers):
-    """Write the provider files into d and remove those not given (SPEC section 29.2)."""
+# The app's own copies of provider files (applied/ and applied/history/) hold Duo's secret key
+# and the private keys of managed certificates: they are sealed with the data key (AES-256-GCM,
+# additional data names the file). Only the staged copies the helper reads stay plain.
+_SEALED_PREFIX = "ra-sealed-v1:"
+_SEALED_AAD = b"radius-admin:applied:"
+
+
+def _seal(name, text, datakey=None):
+    blob = _datakey(datakey).encrypt(text.encode("utf-8"), _SEALED_AAD + name.encode("ascii"))
+    return _SEALED_PREFIX + base64.b64encode(blob).decode("ascii") + "\n"
+
+
+def _unseal(name, raw, datakey=None):
+    """The text of a sealed copy; a plain one (written before sealing) as it is; None when it
+    cannot be opened (the data key was replaced): then it counts as missing."""
+    if not raw.startswith(_SEALED_PREFIX):
+        return raw
+    try:
+        blob = base64.b64decode(raw[len(_SEALED_PREFIX):].strip(), validate=True)
+        return _datakey(datakey).decrypt(blob, _SEALED_AAD + name.encode("ascii")).decode("utf-8")
+    except (ValueError, InvalidTag):
+        return None
+
+
+def _put_provider_files(d, providers, sealed=False, datakey=None):
+    """Write the provider files into d and remove those not given (SPEC section 29.2); sealed
+    for the app's own copies."""
     for name in PROVIDER_FILES:
         path = os.path.join(d, name)
         if name in providers:
-            _write_0600(path, providers[name])
+            _write_0600(path, _seal(name, providers[name], datakey) if sealed else providers[name])
         else:
             try:
                 os.unlink(path)
@@ -351,15 +378,39 @@ def _put_provider_files(d, providers):
                 pass
 
 
-def _get_provider_files(d):
+def _get_provider_files(d, sealed=False, datakey=None):
     out = {}
     for name in PROVIDER_FILES:
         try:
             with open(os.path.join(d, name), encoding="utf-8") as fh:
-                out[name] = fh.read()
+                text = fh.read()
         except OSError:
-            pass
+            continue
+        if sealed:
+            text = _unseal(name, text, datakey)
+        if text is not None:
+            out[name] = text
     return out
+
+
+def _seal_plain_copies(d, datakey=None):
+    """Seal provider files that an earlier version left plain in applied/ and its history."""
+    dirs = [d]
+    h = os.path.join(d, "history")
+    try:
+        dirs += [os.path.join(h, n) for n in os.listdir(h) if _HISTORY_ID_RE.fullmatch(n)]
+    except FileNotFoundError:
+        pass
+    for x in dirs:
+        for name in PROVIDER_FILES:
+            path = os.path.join(x, name)
+            try:
+                with open(path, encoding="utf-8") as fh:
+                    text = fh.read()
+            except OSError:
+                continue
+            if not text.startswith(_SEALED_PREFIX):
+                _write_0600(path, _seal(name, text, datakey))
 
 
 def write_staging(policy, clients, base=None, providers=None):
@@ -389,7 +440,7 @@ def applied_dir(base=None):
     return os.path.join(base or staging_dir(), "applied")
 
 
-def read_applied(base=None):
+def read_applied(base=None, datakey=None):
     """Copy of the last successfully applied files, kept by the app (see apply view)."""
     d = applied_dir(base)
     out = {}
@@ -399,7 +450,7 @@ def read_applied(base=None):
                 out[name] = fh.read()
         except OSError:
             out[name] = None
-    out["providers"] = _get_provider_files(d)
+    out["providers"] = _get_provider_files(d, sealed=True, datakey=datakey)
     return out
 
 
@@ -419,40 +470,41 @@ def _prune_history(d):
         shutil.rmtree(os.path.join(h, n), ignore_errors=True)
 
 
-def save_applied(policy, clients, base=None, backup_id=None, providers=None):
+def save_applied(policy, clients, base=None, backup_id=None, providers=None, datakey=None):
     """Record what is now live. The helper's backup <backup_id> holds the files that
     were live BEFORE this apply, so the previous applied copy is archived under
     applied/history/<backup_id>/ for a later rollback to that backup."""
     d = applied_dir(base)
     os.makedirs(d, mode=0o700, exist_ok=True)
-    prev = read_applied(base)
+    prev = read_applied(base, datakey)
     if backup_id and prev["policy"] is not None and prev["clients"] is not None:
         h = os.path.join(d, "history", backup_id)
         os.makedirs(h, mode=0o700, exist_ok=True)
         _write_0600(os.path.join(h, "policy"), prev["policy"])
         _write_0600(os.path.join(h, "clients"), prev["clients"])
-        _put_provider_files(h, prev["providers"])
+        _put_provider_files(h, prev["providers"], sealed=True, datakey=datakey)
     _write_0600(os.path.join(d, "policy"), policy)
     _write_0600(os.path.join(d, "clients"), clients)
     if providers is not None:
-        _put_provider_files(d, providers)
+        _put_provider_files(d, providers, sealed=True, datakey=datakey)
     _prune_history(d)
+    _seal_plain_copies(d, datakey)
 
 
-def restore_applied_from_history(backup_id, base=None, new_backup_id=None, certs_restored=False):
+def restore_applied_from_history(backup_id, base=None, new_backup_id=None, certs_restored=False, datakey=None):
     """After a successful rollback: the archived copy becomes the applied copy.
     Returns (policy, clients) or None when no archived copy exists (then the
     applied copy is removed because it no longer reflects what is live)."""
     d = applied_dir(base)
     # The helper backs up the files it replaces during a rollback too; keep the
     # matching applied copy so that backup can itself be rolled back to later.
-    prev = read_applied(base)
+    prev = read_applied(base, datakey)
     if new_backup_id and prev["policy"] is not None and prev["clients"] is not None:
         nh = os.path.join(d, "history", new_backup_id)
         os.makedirs(nh, mode=0o700, exist_ok=True)
         _write_0600(os.path.join(nh, "policy"), prev["policy"])
         _write_0600(os.path.join(nh, "clients"), prev["clients"])
-        _put_provider_files(nh, prev["providers"])
+        _put_provider_files(nh, prev["providers"], sealed=True, datakey=datakey)
         _prune_history(d)
     h = os.path.join(d, "history", backup_id)
     try:
@@ -472,12 +524,13 @@ def restore_applied_from_history(backup_id, base=None, new_backup_id=None, certs
     _write_0600(os.path.join(d, "clients"), clients)
     # The helper does not put Duo's own sample back on a rollback (SPEC section 29.2): an
     # archived set without a Duo file leaves the applied Duo copy as it is.
-    old = _get_provider_files(h)
-    cur = _get_provider_files(d)
+    old = _get_provider_files(h, sealed=True, datakey=datakey)
+    cur = _get_provider_files(d, sealed=True, datakey=datakey)
     if certs_restored and "certificates" not in old:
         # the helper put back certificate files from before the portal managed them (SPEC 30)
         cur.pop("certificates", None)
-    _put_provider_files(d, dict(cur, **old))
+    _put_provider_files(d, dict(cur, **old), sealed=True, datakey=datakey)
+    _seal_plain_copies(d, datakey)
     return policy, clients
 
 

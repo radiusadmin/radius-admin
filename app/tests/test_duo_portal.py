@@ -213,8 +213,11 @@ def test_duo_config_staged_and_applied(app, browser, superconn, logged_in, idir)
         assert "home_server radius_admin_mfa_duo" in fh.read()
     row = q(superconn, "SELECT providers_sha256 FROM ui.apply_log WHERE action='apply' ORDER BY id DESC LIMIT 1")[0][0]
     assert row and len(row) == 64
-    with open(os.path.join(staging, "applied", "provider-duo")) as fh:
-        assert fh.read() == staged
+    with open(os.path.join(staging, "applied", "provider-duo")) as fh:     # sealed with the data key
+        assert secrets["skey"] not in fh.read()
+    with app.app_context():
+        from radius_admin import services
+        assert services.read_applied(staging)["providers"]["provider-duo"] == staged
     # nothing pending afterwards; turning Duo off removes its file from the next staging
     with app.test_request_context():
         from radius_admin import services

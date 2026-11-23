@@ -492,8 +492,10 @@ tokens and RADIUS secrets are never logged; the helper redacts `secret = …` an
 - **Remote servers** receive the device admin's password protected only by RADIUS's MD5-based
   User-Password hiding (exception 1.1-1); use them on a trusted network. They are not offered in
   FIPS mode.
-- **Break-glass.** Exempt local accounts (at most 10) never need a second factor; the rules page
-  warns when there is none. Exemptions and rule changes are audited (`integration.*`).
+- **Break-glass.** Exempt local accounts (at most 10) never need a second factor. The local rule
+  cannot be turned on without one unless the admin confirms it (audited as `no_exempt_confirmed`):
+  an unreachable provider makes FreeRADIUS reject these logins, so devices do not fall back to
+  their own accounts. Exemptions and rule changes are audited (`integration.*`).
 - **Live decision.** `radius_admin_mfa_hex` gets the user name and the client shortname as hex only
   (rule 2); the bench injection cases cover it.
 - **Provider builds** (section 29.1). A build is installed only when its SHA-256 matches an entry of
@@ -507,12 +509,17 @@ tokens and RADIUS secrets are never logged; the helper redacts `secret = …` an
   install unit checks it again and runs only the release's root-owned installer. The provider id is
   the only thing the request chooses; file names, URLs, services and ports are fixed in the helper.
 - **Duo pages** (section 29.3). Every change needs an admin with step-up and is audited; the
-  secret key is write-only and never shown or logged; the apply page masks Duo's secrets. Only the
+  secret key is write-only and never shown or logged; the apply page masks Duo's secrets. The
+  rendered configuration is plain only in the staging directory the helper reads (0700, files
+  0600); the app's copies of applied files (`applied/` and the last 50 sets in `applied/history/`)
+  seal it with the data key (AES-256-GCM, bound to the file name). Only the
   upload path accepts large requests (129 MiB in the app, 130 MiB in nginx); the uploaded file is
   only stored, and the root helper decides whether it may be installed.
 - **Duo install** (section 29.2). Duo's source is unpacked with Python's tarfile `data` filter and
   built by a dedicated unprivileged user; the tree is made root-owned and read-only before Duo's
   installer runs as root, so nothing the build user can change afterwards runs with privileges.
+  A proxy the install stopped is started again when the install fails. Removal keeps a copy of the
+  configuration with every secret replaced by `REDACTED`.
   The proxy runs as `duo_authproxy_svc` under a radius-admin systemd drop-in (ProtectSystem=strict,
   write access only to its log, run and conf directories and its secret store). Its configuration
   holds the Duo secret key (owner: the service user, 0640) and is written only by the helper from a
@@ -665,7 +672,8 @@ exception 8).
 
 - Private keys of the 802.1X server certificate and the portal certificate, uploaded or made on
   the server, are stored in PostgreSQL encrypted with the data key (AES-256-GCM), like TOTP seeds.
-  They are written in clear only to the app's staging directory (radius-admin 0700, files 0600) and
+  They are written in clear only to the app's staging directory (radius-admin 0700, files 0600;
+  the app's copies of applied files are sealed with the data key) and
   by the root helper to their targets (`certs/site/radius.key` root:freerad 0640,
   `/etc/radius-admin/tls/server.key` root 0600). Audit records, the Apply diff and `cert_status`
   never contain key material; the diff shows a key fingerprint.
