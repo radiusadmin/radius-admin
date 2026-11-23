@@ -3,7 +3,7 @@
 {% block title %}Authentication {{ r.id }}{% endblock %}
 {% block content %}
 <header class="page-head">
-  <div><h1>{% if r.reply == 'Access-Accept' %}Accepted{% elif r.reply == 'Access-Reject' %}Rejected{% else %}{{ r.reply }}{% endif %}: <span class="mono">{{ r.username }}</span></h1>
+  <div><h1>{% if r.reply == 'Access-Accept' %}Accepted{% elif r.reply == 'Access-Reject' %}Rejected{% else %}{{ r.reply }}{% endif %}: {% if r.authmethod == 'mab' and mab and mab.description %}{{ mab.description }}{% else %}<span class="mono">{{ r.username }}</span>{% endif %}</h1>
   <p class="lede">{{ r.authdate|dt }} · {{ r.authmethod or 'other' }}{% if client %} · {{ client.name }}{% endif %}{% if r.nasportid %} port <span class="mono">{{ r.nasportid }}</span>{% endif %}</p></div>
   <div class="head-actions"><a class="btn btn-quiet" href="{{ list_url('logs.auth_log') }}">Back to log</a></div>
 </header>
@@ -27,6 +27,7 @@
   <dl class="kv">
     <dt>Result</dt><dd>{% if r.reply == 'Access-Accept' %}<span class="tag tag-ok">Accept</span>{% else %}<span class="tag tag-danger">{{ r.reply or '—' }}</span>{% endif %}</dd>
     <dt>Time</dt><dd>{{ r.authdate|dt }}</dd>
+    {% if r.authmethod == 'mab' and mab and mab.description %}<dt>Device</dt><dd>{{ mab.description }}</dd>{% endif %}
     <dt>User-Name</dt><dd class="mono">{{ r.username }}</dd>
     <dt>Method</dt><dd>{{ {'eap-tls': '802.1X certificate (EAP-TLS)', 'ttls-pap': '802.1X username and password (EAP-TTLS, local user)', 'ttls-ldap': '802.1X username and password (EAP-TTLS, directory account)', 'peap': '802.1X username and password (PEAP-MSCHAPv2, local user)', 'peap-ldap': '802.1X username and password (PEAP-MSCHAPv2, directory account)', 'mab': 'MAC authentication bypass', 'pap-admin': 'Device admin login (local account)', 'admin-ldap': 'Device admin login (directory account)', 'pap-admin+mfa': 'Device admin login with a second factor (local account)', 'admin-ldap+mfa': 'Device admin login with a second factor (directory account)', 'other': 'Other / not reached the site policy'}.get(r.authmethod, r.authmethod or '—') }}</dd>
     {% if r.authmethod in ('pap-admin+mfa', 'admin-ldap+mfa') %}<dt>Second factor</dt><dd>{% if mfa_provider %}{{ mfa_provider.label }} <span class="mono small muted">{{ mfa_provider.id }}</span><span class="cell-sub">The provider the second-factor rule named at the time of this login.</span>{% else %}<span class="muted">Provider not known</span>{% endif %}</dd>{% endif %}

@@ -20,6 +20,9 @@ release, so previews sort after it.
   or as the default.
 
 ### Changed
+- **Auth log names MAB devices.** A MAB login from a registered device shows the device's
+  description, with the MAC under it, in the list and on the record. The "User / device" filter
+  also searches MAB descriptions.
 - **Duo: one button disables and removes it.** "Disable and remove Duo" turns the provider off,
   applies that and removes the proxy, after one confirmation. When a second-factor rule uses Duo,
   the page names it and the rule is turned off in the same action once you tick it. If something

@@ -665,7 +665,9 @@ CSV columns (header row required, exact names, any order tolerated by name):
   Quoted SNMP values spanning lines (-Ox wraps hex at 16 bytes) are joined; hourly housekeeping (mab_pending
   30 d, coa_request 90 d, snmp_test 7 d, resolved alerts 400 d).
 - UI: Sessions (`views/sessions.py`; accounting coverage per switch; CoA queue + result page; reworked in section 24),
-  auth-log detail (`/auth-log/<id>`, `insight.py` reason hints, cert expiry, group decode, NAS→client),
+  auth-log detail (`/auth-log/<id>`, `insight.py` reason hints, cert expiry, group decode, NAS→client;
+  `authmethod = 'mab'` rows show the `mab_device.description` of the station MAC when it is not empty,
+  in the list and the record, and the list's user filter also matches it),
   Alerts (+ settings, admin + step-up; SMTP password AES-256-GCM, AAD `radius-admin/alert_settings/smtp`),
   MAB expiry / vendor (`oui.py`, package `ieee-data`) / unknown-device queue with one-click approve and
   a `mab_default_vlan` setting, Reports (`views/reports.py`: CSV with formula neutralisation + print

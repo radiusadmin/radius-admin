@@ -5,7 +5,7 @@
 <header class="page-head"><div><h1>Authentication log</h1>
 <p class="lede">Every RADIUS accept and reject recorded by FreeRADIUS. Select a time for the full record: reject reason, certificate, AD groups and the matching access rule. Passwords are never stored.</p></div></header>
 <form class="filters wrap" method="get" role="search">
-  <div><label for="user">User / host</label><input id="user" name="user" value="{{ f.user }}"></div>
+  <div><label for="user">User / device</label><input id="user" name="user" value="{{ f.user }}"></div>
   <div><label for="nas">NAS address</label><input id="nas" name="nas" value="{{ f.nas }}" class="mono"></div>
   <div><label for="mac">Station MAC</label><input id="mac" name="mac" value="{{ f.mac }}" class="mono"></div>
   <div><label for="reply">Result</label><select id="reply" name="reply"><option value="">Any</option>{% for v in ['Access-Accept', 'Access-Reject'] %}<option {{ 'selected' if f.reply == v else '' }}>{{ v }}</option>{% endfor %}</select></div>
@@ -21,7 +21,7 @@
   <tbody>{% for r in rows %}
   <tr><td class="nowrap"><a href="{{ url_for('logs.auth_detail', aid=r.id) }}" title="Details">{{ r.authdate|dtc }}</a></td>
     <td>{% if r.reply == 'Access-Accept' %}<span class="tag tag-ok">Accept</span>{% elif r.reply == 'Access-Reject' %}<span class="tag tag-danger">Reject</span>{% else %}{{ r.reply or '—' }}{% endif %}</td>
-    <td class="mono clip">{{ r.username }}</td><td>{{ r.authmethod or '—' }}</td>
+    {% if r.device %}<td class="clip">{{ r.device }}<span class="cell-sub mono">{{ r.username }}</span></td>{% else %}<td class="mono clip">{{ r.username }}</td>{% endif %}<td>{{ r.authmethod or '—' }}</td>
     <td>{% if r.client %}{{ r.client.name }}{% else %}<span class="mono">{{ r.nas or '—' }}</span>{% endif %}{% if r.nasportid %}<span class="cell-sub mono">{{ r.nasportid }}</span>{% endif %}</td>
     <td class="mono mac">{{ r.callingstationid|mac if r.callingstationid else '' }}</td>
     <td class="num">{{ r.vlan or '' }}</td>
