@@ -191,13 +191,13 @@ def keep_traversable(paths, stop_evt):
         stop_evt.wait(0.1)
 
 
-def start_radiusd(prefix, raddb, logname):
+def start_radiusd(prefix, raddb, logname, env=None):
     traverse_ok(prefix, raddb)
     log = open(logname, "w")
     # -X is "-sfxx -l stdout"; drop -s: TLS (RadSec) listeners need the thread pool,
     # which is also how production runs.
     p = subprocess.Popen([os.path.join(prefix, "sbin", "radiusd"), "-fxx", "-l", "stdout", "-d", raddb],
-                         stdout=log, stderr=subprocess.STDOUT)
+                         stdout=log, stderr=subprocess.STDOUT, env=env)
     for _ in range(100):
         time.sleep(0.2)
         with open(logname) as fh:
@@ -1168,6 +1168,108 @@ def db_down_cases(eapol_test, bench, prefix):
             time.sleep(0.2)
 
 
+# ----------------------------------------------------------------------------- LDAPS library
+SLAPD_URL = "ldaps://127.0.0.1:636/"
+
+
+def restart_slapd(bench, extra=()):
+    """slapd with the bench config plus `extra` lines after TLSProtocolMin (as a daemon)."""
+    conf = os.path.join(bench, "slapd", "slapd.conf")
+    base = conf + ".base"
+    if not os.path.exists(base):
+        with open(conf) as fh, open(base, "w") as out:
+            out.write(fh.read())
+    with open(base) as fh:
+        lines = fh.read().splitlines(True)
+    with open(conf, "w") as out:
+        for ln in lines:
+            out.write(ln)
+            if ln.startswith("TLSProtocolMin"):
+                out.writelines(x + "\n" for x in extra)
+    subprocess.run(["pkill", "-f", "slapd -f %s/slapd" % bench])
+    for _ in range(50):
+        if sh(["pgrep", "-f", "slapd -f %s/slapd" % bench]).returncode != 0:
+            break
+        time.sleep(0.1)
+    subprocess.run(["slapd", "-f", conf, "-h", SLAPD_URL], check=True)
+    for _ in range(50):
+        if ":636 " in sh(["ss", "-Hltn"]).stdout:
+            return
+        time.sleep(0.1)
+    raise RuntimeError("slapd did not listen on 636")
+
+
+def ldap_tls_cases(prefix, bench, raddb):
+    """rlm_ldap's LDAPS runs in the system OpenSSL (the private OpenLDAP build of
+    tools/lib/openldap-build.sh, SPEC section 15), and tls_min_version is enforced."""
+    # 1. at run time, rlm_ldap's TLS functions bind to libssl, nothing to GnuTLS or the system libldap
+    d = tempfile.mkdtemp(prefix="ld-bind-", dir=bench)
+    logname = os.path.join(bench, "radiusd-ldap-bindings.log")
+    p = start_radiusd(prefix, raddb, logname, env=dict(os.environ, LD_DEBUG="bindings",
+                                                       LD_DEBUG_OUTPUT=os.path.join(d, "b")))
+    try:
+        time.sleep(2)
+    finally:
+        stop(p)
+    binds = []
+    for f in os.listdir(d):
+        with open(os.path.join(d, f), errors="replace") as fh:
+            binds += [ln for ln in fh if re.search(r"binding file \S*/rlm_ldap\.so ", ln)]
+    to_ssl = sorted({m.group(1) for ln in binds
+                     for m in [re.search(r" to \S*/libssl\.so\.3 .*`(SSL_\w+)'", ln)] if m})
+    other = [ln.strip() for ln in binds if re.search(r" to \S*(gnutls|/libldap[.-]|/liblber[.-])", ln)]
+    with open(logname) as fh:
+        bound = "Bind successful" in fh.read()
+    record("LDAPS: rlm_ldap binds to the directory with its TLS in the system libssl (SSL_CTX_new, SSL_connect)",
+           bound and "SSL_CTX_new" in to_ssl and "SSL_connect" in to_ssl, "bind ok %s, libssl: %s" % (bound, to_ssl[:8]))
+    record("LDAPS: nothing in rlm_ldap binds to GnuTLS or the system libldap/liblber", not other and bool(binds),
+           "%d bindings; %s" % (len(binds), other[:3]))
+    subprocess.run(["rm", "-rf", d])
+
+    # 2. tls_min_version: against a TLS 1.2-only directory "1.2" binds and "1.3" does not
+    ldap = os.path.join(raddb, "mods-available", "ldap")
+    with open(ldap) as fh:
+        orig = fh.read()
+    st = os.stat(ldap)
+
+    def attempt(minv):
+        t = orig.replace('tls_min_version = "1.2"', 'tls_min_version = "%s"' % minv, 1)
+        with open(ldap, "w") as fh:
+            fh.write(t)
+        os.chown(ldap, st.st_uid, st.st_gid)
+        os.chmod(ldap, st.st_mode & 0o7777)
+        lg = os.path.join(bench, "radiusd-ldap-min%s.log" % minv)
+        with open(lg, "w") as log:
+            rp = subprocess.Popen([os.path.join(prefix, "sbin", "radiusd"), "-fxx", "-l", "stdout", "-d", raddb],
+                                  stdout=log, stderr=subprocess.STDOUT)
+        try:
+            for _ in range(40):
+                time.sleep(0.25)
+                with open(lg) as fh:
+                    txt = fh.read()
+                if "Bind successful" in txt or rp.poll() is not None or "Ready to process requests" in txt:
+                    break
+            time.sleep(1)
+        finally:
+            stop(rp)
+        with open(lg) as fh:
+            return "Bind successful" in fh.read()
+
+    try:
+        restart_slapd(bench, ["TLSCipherSuite NORMAL:-VERS-ALL:+VERS-TLS1.2"])
+        ok12 = attempt("1.2")
+        ok13 = attempt("1.3")
+        record("LDAPS: tls_min_version \"1.2\" binds to a TLS 1.2-only directory", ok12)
+        record("LDAPS: tls_min_version \"1.3\" refuses a TLS 1.2-only directory (the setting is enforced)",
+               ok12 and not ok13, "1.2 bound %s, 1.3 bound %s" % (ok12, ok13))
+    finally:
+        with open(ldap, "w") as fh:
+            fh.write(orig)
+        os.chown(ldap, st.st_uid, st.st_gid)
+        os.chmod(ldap, st.st_mode & 0o7777)
+        restart_slapd(bench)
+
+
 # ----------------------------------------------------------------------------- RadSec
 # radsecproxy (Ubuntu package, bench only) plays the access point: radclient/eapol_test
 # talk UDP to it and it forwards over RadSec (TLS, TCP 2083) to radiusd with the given
@@ -1468,6 +1570,7 @@ def main():
             record("EAP-TLS cases (eapol_test not given) - NOT RUN", False)
         stop(rad)
         rad = None
+        ldap_tls_cases(a.prefix, bench, raddb)
         sql_args_audit(os.path.join(bench, "radiusd-base.log"))
         postauth_checks()
     finally:

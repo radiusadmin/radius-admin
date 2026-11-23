@@ -25,3 +25,21 @@ fr_fetch_verified() {
         || { echo "FreeRADIUS $FR_VERSION: signature does not verify with key $FR_KEY_FPR" >&2; exit 1; }
     echo "FreeRADIUS $FR_VERSION: signature OK ($FR_KEY_FPR)"
 }
+
+# The radius-admin patches applied to the release (SPEC section 15), in order. Each one says why
+# and when to drop it. Shared by the package and the bench build so the bench tests what ships.
+FR_PATCH_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/../package/freeradius/patches" && pwd)
+
+# fr_apply_patches SRCDIR : apply every FR_PATCH_DIR/*.patch to the unpacked release in SRCDIR
+# (patch -p1, refusing fuzz). Sets FR_PATCHES (file names) for the SOURCE note. Exits on failure.
+fr_apply_patches() {
+    local src=$1 p
+    FR_PATCHES=()
+    for p in "$FR_PATCH_DIR"/*.patch; do
+        [[ -e $p ]] || continue
+        patch -d "$src" -p1 --forward --batch --fuzz=0 --quiet < "$p" \
+            || { echo "FreeRADIUS $FR_VERSION: patch ${p##*/} does not apply" >&2; exit 1; }
+        FR_PATCHES+=("${p##*/}")
+        echo "FreeRADIUS $FR_VERSION: applied ${p##*/}"
+    done
+}

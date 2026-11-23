@@ -24,7 +24,8 @@ curl -fsSL https://freeradius.org/pgp/packages@freeradius.org | gpg --import
 gpg --verify freeradius-server-3.2.10.tar.gz.sig freeradius-server-3.2.10.tar.gz
 # into a private prefix, with rlm_ldap linked against the private OpenSSL-based OpenLDAP build
 # that the package uses (deb-src needed for `apt-get source openldap`); this is what
-# tools/ci/build-freeradius.sh does:
+# tools/ci/build-freeradius.sh does. The bench's LDAPS checks fail for a FreeRADIUS whose
+# rlm_ldap links the system (GnuTLS) libldap:
 #   tools/ci/build-freeradius.sh $PREFIX /opt/ci-src
 # eapol_test (wpa 2.10 source, `apt-get source wpa`): in wpa_supplicant/
 #   cp defconfig .config; enable CONFIG_EAPOL_TEST=y; comment out CONFIG_CTRL_IFACE_DBUS*

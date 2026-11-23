@@ -75,6 +75,17 @@ grep -qx "ExecStart=$P/sbin/radiusd -f \$FREERADIUS_OPTIONS" "$W/x/usr/lib/syste
 grep -q "$FR_KEY_FPR" "$W/x$P/share/doc/radius-admin-freeradius/SOURCE" 2>/dev/null \
     && pass "source note names the upstream signing key" || fail "SOURCE note"
 
+# the radius-admin patches: each one listed in SOURCE with its hash and shipped next to it
+missing=""
+for p in "$ROOT"/tools/package/freeradius/patches/*.patch; do
+    [[ -e $p ]] || continue
+    f=${p##*/}
+    grep -q "^  $f  sha256 $(sha256sum "$p" | cut -d' ' -f1)$" "$W/x$P/share/doc/radius-admin-freeradius/SOURCE" \
+        && cmp -s "$p" "$W/x$P/share/doc/radius-admin-freeradius/patches/$f" || missing+=" $f"
+done
+[[ -z $missing ]] && pass "every radius-admin patch is listed in SOURCE (with its SHA-256) and shipped" \
+    || fail "patches missing or different in the package:$missing"
+
 # rlm_ldap and ra-ldapwhoami: the private OpenLDAP build, TLS by the system OpenSSL (SPEC 15)
 olv=$(sed -n 's/^OpenLDAP client libraries \([^ ]*\) .*/\1/p' "$W/x$P/share/doc/radius-admin-freeradius/SOURCE")
 [[ -n $olv ]] && grep -q 'with-tls=openssl' "$W/x$P/share/doc/radius-admin-freeradius/SOURCE" \

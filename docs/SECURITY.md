@@ -49,6 +49,30 @@ record them in the SSP.
 | Update signatures (ECDSA P-384, SHA-384) | root helper (`update_install`), release job | `openssl dgst -sha384 -verify` / `-sign` | OpenSSL FIPS provider (approved); verified the same way in both modes |
 | Bundled FreeRADIUS package integrity | installer (`fr-package`) | `sha384sum`; the upstream source signature is checked with `gpg` at build time | not a FIPS function (supply-chain integrity). The `.sha384` travels in the same bundle, so it detects damage, not tampering: that comes from the bundle's SHA-256 checked by `update.sh --sha256` (the push script passes it) until releases carry a signed manifest |
 
+**FreeRADIUS and the FIPS provider.** The rows above that name FreeRADIUS (EAP-TLS/TTLS, rlm_pap
+PBKDF2, LDAPS, and RadSec) hold for the bundled `radius-admin-freeradius` package from 3.2.10-3 only
+(LDAPS and EAP-TTLS were checked on the lab VM; PBKDF2 and RadSec use the same OpenSSL library
+context in radiusd and were not tested separately).
+Upstream FreeRADIUS 3.2.10 (`tls_global_init` in `src/main/tls.c`, unchanged on `v3.2.x`) always sets
+the default property `-fips` and loads OpenSSL's *default* provider, so on a FIPS kernel radiusd
+still takes every algorithm from the non-validated default provider. This was seen on an Ubuntu
+24.04 Pro `fips-updates` lab VM: no `fips.so` in the process, and rlm_ldap completed handshakes
+using ChaCha20-Poly1305 and X25519. The bundled package carries a patch
+(`tools/package/freeradius/patches/0001-tls-fips-provider-in-fips-mode.patch`, SPEC §15). In FIPS
+mode (kernel `fips_enabled = 1`, or OpenSSL already configured for FIPS) radiusd loads only the
+`fips` and `base` providers, sets `fips=yes`, refuses to start without the FIPS provider, and logs
+`(TLS) FIPS mode: OpenSSL providers base, fips, default property fips=yes`. On the same lab VM,
+radiusd then maps `fips.so`; LDAPS and EAP-TTLS/PAP work (64-byte MSK); and servers or clients
+offering only ChaCha20-Poly1305 or only X25519 are refused (`no shared cipher` / no handshake).
+Standard mode is unchanged. The only non-FIPS code left is EAP-FAST's TLS 1.0 PRF
+(`mppe_keys.c`, its own context), which radius-admin does not enable. MD4, MD5 and DES come from
+`--enable-fips-workaround`'s own code (exceptions 1, 2 and 8). A side effect: in FIPS mode
+radiusd refuses a password-protected private key whose encryption uses parameters the FIPS
+provider rejects (for example the stock `certs/bootstrap` test key: "invalid salt length").
+radius-admin writes unencrypted EC P-384 keys, so only a carried-over `private_key_password`
+setup can be affected. With the distribution's `freeradius` package or an own build, radiusd does
+**not** use the FIPS provider at all.
+
 The app refuses to start (and the CLI refuses to run) when `require_fips = true` unless
 `/proc/sys/crypto/fips_enabled == 1` and `_hashlib.get_fips_mode() == 1`. The dashboard
 and the helper's `status` show FIPS state. No pip packages and no non-OpenSSL crypto
@@ -87,7 +111,8 @@ fingerprints (`hashlib`).
    libssl and nothing to GnuTLS), so this exception does not apply to it. radiusd still maps
    `libgnutls` because the system `libldap.so.2` comes in through libpq, which uses it for nothing
    radius-admin configures. Fixes for that libldap arrive as distribution updates; the package is
-   rebuilt and released within 14 days of a high or critical one. With the bundled package,
+   rebuilt and released within 14 days of a high or critical one. The FreeRADIUS bench checks this at
+   run time on every CI run (`LD_DEBUG=bindings`). With the bundled package,
    `tls_min_version` is enforced (a TLS 1.2-only server is refused with `"1.3"`), but
    `cipher_list` has no effect either: FreeRADIUS 3.2.10 sets it after creating the TLS context
    (`ldap.c`), so the suites come from the system OpenSSL policy (in FIPS mode, approved suites
@@ -99,7 +124,8 @@ fingerprints (`hashlib`).
      exchange; stand-alone `ldapsearch` rejects it with `TLS: could not set cipher list`).
      The LDAPS cipher suites are therefore GnuTLS defaults, negotiated with whatever the
      DC offers — see mitigations (a) and (b).
-   * `tls_min_version = "1.2"` is set; its enforcement through GnuTLS was **not verified**.
+   * `tls_min_version = "1.2"` is set and enforced (the bench refuses a TLS 1.2-only directory
+     with `"1.3"`, with GnuTLS as with OpenSSL).
    * radiusd warns that mixing GnuTLS (libldap) and OpenSSL in one process may cause
      crashes.
    Mitigations (recommended a + b):
