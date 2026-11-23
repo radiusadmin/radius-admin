@@ -1372,6 +1372,14 @@ in `/etc/radius-admin/update.env`.
 `sudo /opt/radius-admin-src/current/deploy/update.sh --rollback`. A server installed from a
 checkout has no previous release to roll back to until its first update.
 
+**Client shared secrets and rollback.** From 0.3.1 the RADIUS client shared secrets are stored
+encrypted with the data key; the installer encrypts existing ones in its app phase. A rollback or
+downgrade with `update.sh` to a release that cannot read them first writes them back in plain
+(`unseal-client-secrets`) and stops, installing nothing, if that fails. Installing an older
+release by other means (its `install.sh` directly) skips that step: run
+`sudo -u radius-admin env RADIUS_ADMIN_CONFIG=/etc/radius-admin/radius-admin.conf
+PYTHONPATH=/opt/radius-admin/app python3 -m radius_admin.cli unseal-client-secrets` first.
+
 **Check a build by hand** (for example before uploading it to an offline server):
 
 ```bash

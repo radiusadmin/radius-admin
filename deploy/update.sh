@@ -49,7 +49,7 @@
 set -Eeuo pipefail
 umask 022
 
-BASE=/opt/radius-admin-src
+BASE=${RA_UPDATE_BASE:-/opt/radius-admin-src}
 REL=$BASE/releases
 KEEP=5
 
@@ -106,6 +106,25 @@ run_install() { # run_install RELEASE_DIR PHASE...
     "$dir/deploy/install.sh" "${args[@]}" -y "${PASS[@]}"
 }
 
+# RADIUS client shared secrets are sealed at rest from the release that added
+# `seal-client-secrets` on (SPEC section 3.2). Before a release that cannot read them starts (a
+# rollback or a downgrade), the installed one writes them back in plain; that release's app
+# phase leaves them so, and the next newer release seals them again.
+RA_OPT=${RA_OPT:-/opt/radius-admin}
+RA_ETC=${RA_ETC:-/etc/radius-admin}
+RA_APP_USER=${RA_APP_USER:-radius-admin}
+secrets_for() { # secrets_for RELEASE_DIR
+    if grep -q '"seal-client-secrets"' "$1/app/radius_admin/cli.py" 2>/dev/null; then return 0; fi
+    if ! grep -q '"unseal-client-secrets"' "$RA_OPT/app/radius_admin/cli.py" 2>/dev/null; then return 0; fi
+    info "$(basename "$1") does not read sealed client secrets: writing them back in plain"
+    local out
+    out=$(runuser -u "$RA_APP_USER" -- env -i PATH=/usr/bin:/bin LANG=C.UTF-8 \
+        "RADIUS_ADMIN_CONFIG=$RA_ETC/radius-admin.conf" "PYTHONPATH=$RA_OPT/app" PYTHONDONTWRITEBYTECODE=1 \
+        "${RA_PYTHON:-/usr/bin/python3}" -m radius_admin.cli unseal-client-secrets 2>&1) \
+        || die "could not write the client shared secrets back ($out); nothing was installed"
+    info "$out"
+}
+
 if [[ $MODE == list ]]; then list_releases; exit 0; fi
 
 if [[ $MODE == rollback ]]; then
@@ -119,6 +138,7 @@ if [[ $MODE == rollback ]]; then
     say "Roll back the web UI from $(basename "${cur:-none}") to $(basename "$prev")."
     say "Database changes are additive and stay in place; FreeRADIUS is not touched."
     confirm "Continue?" || die "cancelled"
+    secrets_for "$prev"
     run_install "$prev" app
     ln -sfn "$prev" "$BASE/current"
     say ""; say "Rolled back to $(basename "$prev")."
@@ -225,6 +245,7 @@ if ! confirm "Install?"; then
     die "cancelled (nothing changed)"
 fi
 
+secrets_for "$new"
 if ! run_install "$new" "${phases[@]}"; then
     rm -rf "$new"   # never offer a failed release to --rollback; the uploaded package is kept
     say ""

@@ -8,7 +8,7 @@ import re
 import psycopg2
 import pytest
 
-from conftest import APP_DSN, BASE_URL, ORIGIN, Browser, fresh_code
+from conftest import APP_DSN, BASE_URL, ORIGIN, Browser, client_secrets, fresh_code, only_secret
 
 HELPER = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
                       "helper", "radius-admin-helper")
@@ -53,8 +53,10 @@ def do_import(b, text, **kw):
 
 
 def clients(superconn):
-    return {r[0]: r[1:] for r in q(superconn, "SELECT name, ipaddr, secret, enabled, key_status, key_scope,"
-                                              " dot1x_ports, require_ma FROM ui.radius_client")}
+    """{name: (ipaddr, shared secret (opened), enabled, key_status, key_scope, dot1x_ports, require_ma)}"""
+    sec = client_secrets(superconn)
+    return {r[0]: (r[1], sec[r[0]]) + r[2:] for r in q(superconn, "SELECT name, ipaddr, enabled, key_status,"
+                                                       " key_scope, dot1x_ports, require_ma FROM ui.radius_client")}
 
 
 # ------------------------------------------------------------- parsing
@@ -132,7 +134,7 @@ def test_new_clients_each_secret_type(app, browser, superconn, logged_in):
     from radius_admin import services
     conn = psycopg2.connect(APP_DSN)
     try:
-        _, rendered = services.render_all(conn)
+        _, rendered = services.render_all(conn, app.config["RA_DATA_KEY"])     # like cli render
     finally:
         conn.close()
     assert "sw-plain" in rendered and "sw-enc" not in rendered and "sw-none" not in rendered
@@ -363,8 +365,8 @@ def test_enable_refused_without_key(browser, superconn, logged_in):
     # generating a key (step-up still fresh) sets key_status ok and allows enabling
     r = browser.post("/clients/%d/edit" % cid, dict(form, secret_mode="generate"))
     assert r.status_code == 200
-    row = q(superconn, "SELECT key_status, enabled, length(secret) FROM ui.radius_client")[0]
-    assert row == ("ok", True, 32)
+    row = q(superconn, "SELECT key_status, enabled FROM ui.radius_client")[0]
+    assert row == ("ok", True) and len(only_secret(superconn)) == 32
 
 
 def test_edit_dot1x_and_scope(browser, superconn, logged_in):
@@ -408,7 +410,7 @@ def _load_helper():
     return mod
 
 
-def test_imported_clients_pass_helper_grammar(browser, superconn, logged_in):
+def test_imported_clients_pass_helper_grammar(app, browser, superconn, logged_in):
     helper = _load_helper()
     logged_in("operator")
     secret_odd = "A1!#$%&'()*+,-./:;<=>?@[]^_`{|}~z"
@@ -421,7 +423,7 @@ def test_imported_clients_pass_helper_grammar(browser, superconn, logged_in):
     from radius_admin import services
     conn = psycopg2.connect(APP_DSN)
     try:
-        _, rendered = services.render_all(conn)
+        _, rendered = services.render_all(conn, app.config["RA_DATA_KEY"])     # like cli render
     finally:
         conn.close()
     assert helper.check_clients(rendered.encode("utf-8")) == 3

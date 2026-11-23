@@ -20,6 +20,13 @@ release, so previews sort after it.
   the clients file with the RADIUS shared secrets, Duo's configuration and the private keys of
   managed certificates. Copies from earlier versions are sealed by the next apply. Removing Duo keeps its configuration with the secrets replaced by
   `REDACTED`.
+- **RADIUS client shared secrets are encrypted in the database.** They are stored with the data
+  key (AES-256-GCM) instead of in clear; the update encrypts the existing ones, nothing has to be
+  entered again, and the clients file FreeRADIUS reads is unchanged. Rolling back with
+  `update.sh --rollback` (or downgrading) writes them back in clear first, so the older release
+  keeps working.
+- **No secrets left in the staging directory.** The files staged for the helper (clients file,
+  Duo's configuration, certificate private keys) are removed as soon as the helper has read them.
 
 ## 0.3.0 - 2026-11-20
 

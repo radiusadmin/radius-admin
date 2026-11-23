@@ -8,7 +8,7 @@ from .. import certs as certmod, db, helper_client
 from ..crypto import sha256_hex
 from ..flashing import flash
 from ..security import cfg, login_required, role_required, stepup_required
-from ..services import (policy_format_upgrade, providers_sha256, read_applied, render_all,
+from ..services import (clear_staging, policy_format_upgrade, providers_sha256, read_applied, render_all,
                         render_provider_files, restore_applied_from_history, save_applied, write_staging)
 from . import ev
 
@@ -133,7 +133,10 @@ def validate():
     except Exception as e:
         flash("The configuration could not be rendered: %s" % e, "error")
         return redirect(url_for("apply.index"))
-    resp = _call("validate")
+    try:
+        resp = _call("validate")
+    finally:
+        clear_staging(policy, clients, providers)
     ok = bool(resp.get("ok"))
     _log_apply("validate", ok, resp.get("message"), sha256_hex(policy), sha256_hex(clients),
                providers_sha=providers_sha256(providers))
@@ -164,8 +167,11 @@ def apply():
     staged_duo, staged_certs = providers.get("provider-duo"), providers.get("certificates")
     prev = read_applied()["providers"]
     # a certificate change may also reload the portal: give the helper the longer time
-    resp = _call("apply", duo_change=(staged_duo is not None and staged_duo != prev.get("provider-duo"))
-                 or (staged_certs is not None and staged_certs != prev.get("certificates")))
+    try:
+        resp = _call("apply", duo_change=(staged_duo is not None and staged_duo != prev.get("provider-duo"))
+                     or (staged_certs is not None and staged_certs != prev.get("certificates")))
+    finally:
+        clear_staging(policy, clients, providers)
     ok = bool(resp.get("ok"))
     # Trust the hashes we staged; flag a mismatch reported by the helper.
     hp, hc = resp.get("policy_sha256"), resp.get("clients_sha256")

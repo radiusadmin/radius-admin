@@ -96,9 +96,9 @@ radius-admin/
 | Web socket group | `radius-admin-web`; `www-data` is a member |
 | App code | `/opt/radius-admin/` (root:root 0755) |
 | App config | `/etc/radius-admin/radius-admin.conf` (root:radius-admin 0640), INI format |
-| Key file | `/etc/radius-admin/keys/data.key` 32 random bytes (radius-admin:radius-admin 0400) — AES-256-GCM key for TOTP secrets |
+| Key file | `/etc/radius-admin/keys/data.key` 32 random bytes (radius-admin:radius-admin 0400) — AES-256-GCM key for secrets at rest (TOTP, client shared secrets, provider and SNMP/SMTP credentials, certificate keys, applied-file copies) |
 | Gunicorn socket | `/run/radius-admin/app.sock` (dir radius-admin:radius-admin-web 0750) |
-| Staging dir | `/var/lib/radius-admin/staging/` (radius-admin:radius-admin 0700) files `policy`, `clients` |
+| Staging dir | `/var/lib/radius-admin/staging/` (radius-admin:radius-admin 0700) files `policy`, `clients` (and the provider files), present only while the helper validates or applies them: the app removes them once the helper answered, unless another apply staged newer ones |
 | Helper | `/usr/local/libexec/radius-admin/radius-admin-helper` (root 0755) |
 | Helper socket | `/run/radius-admin-helper.sock` root:radius-admin 0660, systemd socket activated, Accept=yes |
 | Helper work | `/var/lib/radius-admin-helper/` (root 0700): `backups/<UTC ts>/`, `validate/`, `state.json`, lock file |
@@ -217,7 +217,10 @@ ui.login_attempt(id bigserial PK, ip inet, username text, success boolean, at ti
 ui.radius_client(
   id serial PK, name text UNIQUE NOT NULL CHECK (name ~ '^[A-Za-z0-9._-]{1,63}$'),
   ipaddr text NOT NULL,                   -- IPv4/IPv6 address or CIDR, validated in app
-  secret text NOT NULL,                   -- RADIUS shared secret (must be cleartext for RADIUS)
+  secret text NOT NULL,                   -- '' once sealed; a plain value (older release, script) wins
+  secret_enc bytea,                       -- sql/103: the shared secret, AES-256-GCM with the data key
+                                          -- (additional data radius-admin:radius_client:secret); the app
+                                          -- opens it to render the clients file, for CoA and reveal
   require_ma text NOT NULL DEFAULT 'auto' CHECK (require_ma IN ('yes','no','auto')),
   limit_proxy_state text NOT NULL DEFAULT 'auto' CHECK (limit_proxy_state IN ('yes','no','auto')),
   nas_type text NOT NULL DEFAULT 'other', description text NOT NULL DEFAULT '',
@@ -239,6 +242,15 @@ ui.audit_log(id bigserial PK, at timestamptz NOT NULL DEFAULT now(), actor text,
   action text NOT NULL, object_type text, object_id text, detail jsonb, success boolean NOT NULL,
   prev_hash text NOT NULL, hash text NOT NULL)
 ```
+
+Client shared secrets at rest (sql/103-client-secrets.sql): the portal and the client import
+write `secret_enc` (and `secret` = ''); `python3 -m radius_admin.cli seal-client-secrets`, run at
+the end of the installer's app phase, seals every plain `secret` (audit `client.secrets_seal`).
+`update.sh` (rollback and install) runs the installed release's `unseal-client-secrets` (audit
+`client.secrets_unseal`) before it starts a release whose CLI has no `seal-client-secrets`, and
+installs nothing when that fails; a sealed secret it cannot open stops it with nothing changed.
+A sealed secret that the data key cannot open: rendering refuses for an enabled client, reveal
+refuses, and the edit page requires a new secret.
 radius_admin: full DML on ui.* EXCEPT ui.audit_log where it has only SELECT, INSERT
 (+ sequence usage). A trigger on ui.audit_log raises on UPDATE/DELETE/TRUNCATE.
 Audit hash: `hash = sha256_hex(prev_hash + canonical_json(row fields except id/hash))`,
