@@ -16,10 +16,9 @@ release, so previews sort after it.
   stopped again when Duo's installer fails.
 - **Provider secrets no longer pile up in clear.** The portal's history of applied files (which
   includes Duo's configuration with its secret key) now keeps the same 50 sets as the helper's
-  backups instead of growing without limit, and seals its copies of the clients file (the RADIUS
-  shared secrets) and the provider files (Duo's configuration, the private keys of managed
-  certificates) with the data key; copies from earlier versions are
-  sealed by the next apply. Removing Duo keeps its configuration with the secrets replaced by
+  backups instead of growing without limit, and seals every file it keeps with the data key: the policy,
+  the clients file with the RADIUS shared secrets, Duo's configuration and the private keys of
+  managed certificates. Copies from earlier versions are sealed by the next apply. Removing Duo keeps its configuration with the secrets replaced by
   `REDACTED`.
 
 ## 0.3.0 - 2026-11-20

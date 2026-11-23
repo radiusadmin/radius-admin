@@ -145,6 +145,37 @@ def test_plain_clients_copies_are_sealed_and_a_replaced_key_drops_them(tmp_path)
     assert services.restore_applied_from_history("20261101T000000Z", base=base, datakey=other) is None
 
 
+POLICY = "radius_admin_marker_TestOnlyPolicy {\n\tnoop\n}\n"
+
+
+def test_policy_copies_are_sealed(tmp_path):
+    """Every file the app keeps of an apply is sealed, the policy included."""
+    base, key = str(tmp_path), _key()
+    services.save_applied(POLICY, CLIENTS, base=base, providers={}, datakey=key)
+    services.save_applied(POLICY + "# 2\n", CLIENTS, base=base, backup_id="20261102T000000Z", providers={},
+                          datakey=key)
+    found = []
+    for root, _dirs, files in os.walk(services.applied_dir(base)):
+        for f in files:
+            with open(os.path.join(root, f), encoding="utf-8") as fh:
+                text = fh.read()
+            found.append(f)
+            assert text.startswith("ra-sealed-v1:") and "TestOnlyPolicy" not in text, (root, f)
+    assert found.count("policy") == 2
+    assert services.read_applied(base, key)["policy"] == POLICY + "# 2\n"
+    assert services.restore_applied_from_history("20261102T000000Z", base=base, datakey=key) == (POLICY, CLIENTS)
+    # a plain policy of an earlier version is read as it is, then sealed
+    with open(os.path.join(services.applied_dir(base), "policy"), "w") as fh:
+        fh.write(POLICY)
+    assert services.read_applied(base, key)["policy"] == POLICY
+    services.save_applied(POLICY, CLIENTS, base=base, backup_id="20261103T000000Z", providers={}, datakey=key)
+    for root, _dirs, files in os.walk(services.applied_dir(base)):
+        for f in files:
+            with open(os.path.join(root, f), encoding="utf-8") as fh:
+                assert "TestOnlyPolicy" not in fh.read(), (root, f)
+    assert services.read_applied(base, _key())["policy"] is None
+
+
 def test_a_replaced_data_key_makes_sealed_copies_count_as_missing(tmp_path):
     base = str(tmp_path)
     services.save_applied("p\n", "c\n", base=base, providers={"provider-duo": DUO}, datakey=_key())

@@ -1725,13 +1725,13 @@ unreachable). The portal pages that drive this follow.
   a rollback to a set without a Duo file leaves the applied Duo copy, like the helper. The history
   (`applied/history/<backup_id>/`) keeps the newest `services.APPLIED_HISTORY_KEEP` (50, the helper's
   default `keep_backups`) sets; older ones, with the provider secrets they hold, are removed after
-  each apply and rollback. In `applied/` and its history the clients file (every RADIUS shared secret) and the provider
-  files are sealed with the
+  each apply and rollback. In `applied/` and its history every file (policy, clients file with every RADIUS shared secret,
+  provider files) is sealed with the
   data key (`ra-sealed-v1:` + base64 of the AES-256-GCM blob, additional data
   `radius-admin:applied:<file name>`); plain copies of earlier versions are read as they are and
   sealed by the next apply or rollback, and a copy that cannot be opened (data key replaced) counts
-  as missing (a clients copy that cannot be opened means no archived set for that backup). The
-  staged copies the helper reads stay plain; the policy holds no secrets and is not sealed.
+  as missing (a policy or clients copy that cannot be opened means no archived set for that backup). The
+  staged copies the helper reads stay plain.
 - **Page** `/integrations/duo` (viewers: state; operators: test; admin + step-up: everything else):
   state (installed version, catalog-checked or Unverified, service running and listening, provider
   on/off, last install or removal), live progress and the install log (`/integrations/duo/status`,
