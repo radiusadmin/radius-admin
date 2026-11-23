@@ -511,3 +511,21 @@ def test_secret_key_behind_change_once_set(app, browser, superconn, logged_in, i
     d = re.search(r'<details class="secret-change"([^>]*)>(.*?)</details>', browser.text(r), re.S)
     assert d and "open" in d.group(1) and "Secret key must be" in d.group(2)
     assert stored() == "T" * 40
+
+
+def test_upload_is_one_button_with_javascript(browser, superconn, logged_in, idir):
+    """With JavaScript, one "Upload a build…" button picks the file and uploads it (the build only
+    goes to Ready to install); without it, the file field and the Upload button as before."""
+    admin(browser, superconn, logged_in)
+    body = browser.text(browser.get("/integrations/duo"))
+    form = re.search(r'<form method="post" action="/integrations/duo/upload"[^>]*>(.*?)</form>', body, re.S).group(1)
+    assert re.search(r'<button type="button" class="btn js-only" data-pick-file="build"[^>]*>Upload a build…</button>', form)
+    assert 'class="nojs-only"' in form and '<button class="btn" type="submit">Upload</button>' in form
+    static = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "radius_admin", "static")
+    css, js = (open(os.path.join(static, n)).read() for n in ("app.css", "app.js"))
+    assert ".js .nojs-only" in css and "data-pick-file" in js
+
+
+def test_state_banner_keeps_its_distance(browser, superconn, logged_in, idir):
+    static = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "radius_admin", "static")
+    assert re.search(r"\.kv \+ \.flash[^{]*\{[^}]*margin-top", open(os.path.join(static, "app.css")).read())

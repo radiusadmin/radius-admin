@@ -499,6 +499,7 @@ pre.diff span { display: block; padding: 0 1.25rem; white-space: pre; min-height
 .kv { display: grid; grid-template-columns: max-content 1fr; gap: .4rem 1.25rem; margin: 0; }
 .kv dt { font-weight: 600; color: var(--ink-soft); }
 .kv dd { margin: 0; overflow-wrap: anywhere; }
+.kv + .flash, .kv + p.warn-text { margin-top: .9rem; }   /* a banner under a list of values */
 .pager { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .5rem 1rem; margin-top: 1rem; }
 .pager-count { margin: 0; font-size: .85rem; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
 .pager-pages { display: flex; flex-wrap: wrap; align-items: center; gap: .25rem; margin: 0; padding: 0; list-style: none; }
@@ -803,6 +804,7 @@ table.rules-table td { overflow-wrap: anywhere; }
 /* -------------------------------------------------------------- session actions (bulk bar, row state) */
 .js-only { display: none; }
 .js .js-only { display: revert; }
+.js .nojs-only { display: none; }
 .check-cell { width: 1%; padding-right: 0; }
 .check-cell input { display: block; width: 1.05rem; height: 1.05rem; margin: 0; accent-color: var(--focus); }
 .bulk-bar {

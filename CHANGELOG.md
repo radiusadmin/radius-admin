@@ -20,6 +20,9 @@ release, so previews sort after it.
   or as the default.
 
 ### Changed
+- **Duo page: one button uploads a build.** "Upload a build…" picks Duo's source build and
+  uploads it in one step (it goes to Ready to install; installing stays a separate step). Without
+  JavaScript the page keeps the file field and the Upload button.
 - **Duo: one button disables and removes it.** "Disable and remove Duo" turns the provider off,
   applies that and removes the proxy, after one confirmation. When a second-factor rule uses Duo,
   the page names it and the rule is turned off in the same action once you tick it. If something
@@ -38,6 +41,13 @@ release, so previews sort after it.
   remote MFA server shows its shared secret the same way.
 
 ### Fixed
+- **Re-authentication from a result page.** After the Duo check (or another result shown in
+  place), an action that asked you to confirm your identity first ended in "Method Not Allowed"
+  again. You now come back to the Duo page, or to the dashboard when there is no page to return to.
+- **Duo test push: a refusal before any push no longer blocks a retry.** When Duo refuses a user
+  before sending anything (for example no access to the application), the page now says "Refused
+  by Duo before any push" instead of "Denied", and you can try again at once; the 30-second wait
+  only follows a push that was sent.
 - **Licence tool: issuing from the web page works.** `licence-tool.py serve` refused every form
   as a "cross-site request": its no-referrer policy made browsers send `Origin: null`.
 - **Re-authentication no longer ends in "Method Not Allowed".** When an action such as Remove

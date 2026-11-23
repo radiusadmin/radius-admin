@@ -311,23 +311,36 @@ def stepup_required(view):
     return wrapped
 
 
+def _answers_get(path):
+    """True when `path` (a safe local path) is a page: a route that answers GET. A POST result
+    shown at the action's own address (e.g. /integrations/duo/test) is not."""
+    from werkzeug.exceptions import HTTPException
+    from werkzeug.routing import RequestRedirect
+    try:
+        current_app.url_map.bind(request.host).match(urlsplit(path).path, method="GET")
+    except RequestRedirect:
+        return True
+    except HTTPException:
+        return False
+    return True
+
+
 def _stepup_return():
     """Where a POST bounced to step-up comes back to: the form's return_to, else the page the form
-    was on (Referer naming this host), else the action's own path only when it also answers GET
-    (a POST-only action would end in 405 after the re-authentication). None: the dashboard."""
-    nxt = safe_next(request.form.get("return_to"))
-    if nxt:
-        return nxt
+    was on (Referer naming this host), else the action's own path; each only when it is a page that
+    answers GET (a POST-only address, such as a POST result shown in place, would end in 405 after
+    the re-authentication). None: the dashboard."""
+    candidates = [request.form.get("return_to")]
     ref = request.headers.get("Referer")
     if ref:
         parts = urlsplit(ref)
         if parts.netloc.lower() == request.host.lower():
-            nxt = safe_next(parts.path + ("?" + parts.query if parts.query else ""))
-            if nxt:
-                return nxt
-    rule = request.url_rule
-    if rule is not None and "GET" in (rule.methods or ()):
-        return request.path
+            candidates.append(parts.path + ("?" + parts.query if parts.query else ""))
+    candidates.append(request.path)
+    for c in candidates:
+        nxt = safe_next(c)
+        if nxt and _answers_get(nxt):
+            return nxt
     return None
 
 

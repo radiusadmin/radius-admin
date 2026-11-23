@@ -1,4 +1,4 @@
-{% macro csrf() %}<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">{% endmacro %}
+{% macro csrf(return_to=None) %}<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">{% if return_to %}<input type="hidden" name="return_to" value="{{ return_to }}">{% endif %}{% endmacro %}
 
 {# Pages whose saved changes only reach FreeRADIUS after "Apply changes" say so once,
    under the title. Everywhere else saving takes effect right away, so nothing is shown. #}

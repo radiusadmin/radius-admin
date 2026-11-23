@@ -23,7 +23,7 @@ def test_push_sent_and_shown(browser, superconn, logged_in, idir):
     body = browser.text(r)
     assert r.status_code == 200 and "Approved" in body and "Success. Logging you in..." in body
     assert pushes(browser)[-1] == {"action": "integration_push_test", "id": "duo", "username": "alice"}
-    assert audit(superconn, "integration.push_test")[-1] == {"username": "alice", "result": "allow"}
+    assert audit(superconn, "integration.push_test")[-1] == {"username": "alice", "result": "allow", "pushed": True}
     assert 'id="duo-push"' in body and 'action="/integrations/duo/push-test#duo-push"' in body
 
 
@@ -66,3 +66,16 @@ def test_operator_cannot_push(browser, superconn, logged_in, idir):
     assert "Send a test push" not in browser.text(browser.get("/integrations/duo"))
     r = browser.post("/integrations/duo/push-test", {"username": "alice"}, csrf_page="/integrations/duo")
     assert r.status_code in (302, 403) and pushes(browser) == []
+
+
+def test_a_refusal_before_any_push_says_so(browser, superconn, logged_in, idir):
+    applied(browser, superconn, logged_in)
+    helper_of(browser).push = {"result": "deny", "pushed": False,
+                               "status_msg": "Your account does not have access to this application."}
+    body = browser.text(browser.post("/integrations/duo/push-test", {"username": "jdoe"},
+                                     csrf_page="/integrations/duo"))
+    assert "Refused by Duo before any push" in body and "does not have access" in body
+    helper_of(browser).push = {"result": "allow", "pushed": False, "status_msg": "Bypass user"}
+    body = browser.text(browser.post("/integrations/duo/push-test", {"username": "eve"},
+                                     csrf_page="/integrations/duo"))
+    assert "Allowed by Duo without a push" in body

@@ -140,7 +140,7 @@ def test_push_approved(duo):
     assert len(sig) == 128                                                # SHA-512, never SHA-1
     text = json.dumps(r)
     assert SETTINGS["skey"] not in text and SETTINGS["ikey"] not in text
-    assert set(r) == {"ok", "action", "message", "result", "status_msg"}
+    assert set(r) == {"ok", "action", "message", "result", "status_msg", "pushed"} and r["pushed"] is True
 
 
 @pytest.mark.parametrize("user,result,calls", [("bob", "deny", 2), ("carol", "timeout", 2),
@@ -149,6 +149,7 @@ def test_push_outcomes(duo, user, result, calls):
     e, fake = duo
     r = push(e, user)
     assert r["ok"] is True and r["result"] == result and len(fake.requests) == calls
+    assert r["pushed"] is (calls == 2)                    # only the auth call sends a push
 
 
 def test_duo_refusal_is_an_error_result(duo):
@@ -175,12 +176,24 @@ def test_rate_limit(duo):
     state = os.path.join(e.work, "push-test.json")
     with open(state) as fh:
         assert "alice" not in fh.read()                                    # names are not kept
-    # ten per hour overall
+    # ten requests to Duo an hour overall, pushes or not
     now = time.time()
     with open(state, "w") as fh:
-        json.dump({"sent": [[now - 100 - i, "x%d" % i] for i in range(10)]}, fh)
+        json.dump({"tries": [[now - 100 - i, "x%d" % i, False] for i in range(10)]}, fh)
     r = push(e, "eve")
     assert r["ok"] is False and "10 test pushes an hour" in r["message"]
+
+
+def test_a_refusal_before_any_push_does_not_hold_up_a_retry(duo):
+    """Duo refused before sending a push (not enrolled, no access): nothing reached the phone,
+    so the per-user wait does not start; the attempt still counts toward the hourly cap."""
+    e, fake = duo
+    for _ in range(2):
+        r = push(e, "dave")
+        assert r["ok"] is True and r["result"] == "not_enrolled" and r["pushed"] is False
+    state = os.path.join(e.work, "push-test.json")
+    with open(state) as fh:
+        assert len(json.load(fh)["tries"]) == 2
 
 
 def test_needs_an_applied_configuration(duo):
