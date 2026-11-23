@@ -53,6 +53,11 @@ ol_build() {
     install -D -m 0755 "$OL_SRCDIR/clients/tools/ldapwhoami" "$prefix/bin/ldapwhoami"
     [[ -f $prefix/lib/libldap.a && -f $prefix/lib/liblber.a && -f $prefix/include/ldap.h ]] \
         || _ol_die "libraries or headers missing in $prefix"
+    # FreeRADIUS' configure links "-L<prefix>/lib -lldap" to find ldap_init; the static libldap.a
+    # alone does not resolve (it needs liblber and OpenSSL), and without this the check fell back
+    # to the system libldap or, with no libldap-dev, left rlm_ldap out. A linker script named
+    # libldap.so pulls in the archives and OpenSSL.
+    printf 'GROUP ( %s %s -lssl -lcrypto )\n' "$prefix/lib/libldap.a" "$prefix/lib/liblber.a" > "$prefix/lib/libldap.so"
     ol_check_elf "$prefix/bin/ldapwhoami"
 }
 
@@ -68,6 +73,8 @@ ol_fr_fix_makefile() {
     local mk=$1/src/modules/rlm_ldap/all.mk prefix=$2
     [[ -f $mk ]] || _ol_die "$mk missing (rlm_ldap not configured?)"
     grep -q "^SRC_CFLAGS.*$prefix/include" "$mk" || _ol_die "rlm_ldap is not configured with $prefix/include"
+    grep -q "^TGT_LDLIBS.*-L$prefix/lib" "$mk" \
+        || _ol_die "rlm_ldap's configure did not link the private libldap in $prefix/lib ($(grep '^TGT_LDLIBS' "$mk"))"
     sed -i "s#^TGT_LDLIBS.*#TGT_LDLIBS := $prefix/lib/libldap.a $prefix/lib/liblber.a -lssl -lcrypto#" "$mk"
     grep -qx "TGT_LDLIBS := $prefix/lib/libldap.a $prefix/lib/liblber.a -lssl -lcrypto" "$mk" \
         || _ol_die "could not set the rlm_ldap libraries in $mk"
