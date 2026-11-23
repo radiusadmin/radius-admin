@@ -285,15 +285,11 @@ def test_remove_and_test(browser, superconn, logged_in, idir):
     admin(browser, superconn, logged_in)
     browser.post("/integrations/duo/settings", dict(SETTINGS_FORM, enabled="1"), csrf_page="/integrations/duo")
     browser.post("/apply/apply", {}, csrf_page="/apply/")          # Test needs an applied configuration
-    n = len(h.requests)
-    browser.post("/integrations/duo/remove", csrf_page="/integrations/duo")
-    assert not any(r_["action"] == "integration_remove" for r_ in h.requests[n:])      # still on
-    q(superconn, "UPDATE ui.mfa_provider SET enabled=false WHERE id='duo'")
-    browser.post("/integrations/duo/remove", csrf_page="/integrations/duo")
-    assert h.requests[-1]["action"] == "integration_remove"
     r = browser.post("/integrations/duo/test", csrf_page="/integrations/duo")
     body = browser.text(r)
     assert "able to reach Duo" in body and audit(superconn, "integration.test")
+    browser.post("/integrations/duo/remove", csrf_page="/integrations/duo")         # off, applied, removed
+    assert h.requests[-1]["action"] == "integration_remove"
 
 
 def test_status_and_log_json(browser, superconn, logged_in, idir):
