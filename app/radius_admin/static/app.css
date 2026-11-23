@@ -401,6 +401,43 @@ fieldset { border: 1px solid var(--line); border-radius: var(--radius-s); paddin
 legend { font-weight: 600; font-size: .9rem; padding: 0 .3rem; }
 label.check { display: flex; align-items: center; gap: .5rem; margin: .3rem 0; font-weight: 400; line-height: 1.4; }
 label.check input { width: 1.05rem; height: 1.05rem; margin: 0; flex: none; accent-color: var(--steel-700); }
+/* on/off switch (_macros.switch): the checkbox itself is drawn as the track, its ::before as the
+   knob, so focus, Space and the screen-reader state stay those of the real input */
+.toggle-field { display: flex; flex-wrap: wrap; align-items: center; gap: .35rem .75rem; margin-top: .6rem; }
+.toggle-label { font-weight: 600; font-size: .9rem; }
+.toggle-switch { display: inline-flex; align-items: center; gap: .55rem; cursor: pointer; }
+.toggle-switch input[role=switch] { appearance: none; -webkit-appearance: none; position: relative; flex: none;
+  width: 2.6rem; height: 1.45rem; margin: 0; border-radius: 999px; cursor: pointer;
+  background: var(--steel-300); border: 1px solid var(--steel-500); transition: background-color .15s, border-color .15s; }
+.toggle-switch input[role=switch]::before { content: ""; position: absolute; top: 50%; left: .15rem;
+  width: 1.05rem; height: 1.05rem; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.35);
+  transform: translateY(-50%); transition: transform .15s; }
+.toggle-switch input[role=switch]:checked { background: var(--teal); border-color: var(--teal); }
+.toggle-switch input[role=switch]:checked::before { transform: translate(1.1rem, -50%); }
+.toggle-switch input[role=switch]:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.toggle-switch input[role=switch]:disabled { opacity: .55; cursor: not-allowed; }
+.toggle-switch:has(input:disabled) { cursor: not-allowed; }
+.toggle-state { font-weight: 600; min-width: 4.5rem; }
+.toggle-state .switch-on, .toggle-switch input:checked ~ .toggle-state .switch-off { display: none; }
+.toggle-switch input:checked ~ .toggle-state .switch-on { display: inline; color: var(--teal); }
+.toggle-switch input:not(:checked) ~ .toggle-state .switch-off { color: var(--ink-soft); }
+.toggle-reason { flex-basis: 100%; margin: 0; color: var(--amber); }
+.toggle-field > .small.muted, .toggle-field > .field-error { flex-basis: 100%; margin: 0; }
+@media (prefers-reduced-motion: reduce) { .toggle-switch input[role=switch], .toggle-switch input[role=switch]::before { transition: none; } }
+@media (forced-colors: active) {
+  .toggle-switch input[role=switch] { border-color: ButtonText; background: ButtonFace; }
+  .toggle-switch input[role=switch]::before { background: ButtonText; box-shadow: none; }
+  .toggle-switch input[role=switch]:checked { background: Highlight; border-color: Highlight; }
+  .toggle-switch input[role=switch]:checked::before { background: HighlightText; }
+}
+/* a stored secret: "Secret key: set", the input behind "Change secret key" (_macros.secret_field) */
+.secret-field { margin-top: .6rem; }
+.secret-state { margin: 0 0 .25rem; }
+.secret-name { font-weight: 600; font-size: .9rem; }
+.secret-change > summary { cursor: pointer; color: var(--focus); font-size: .9rem; width: max-content; }
+.secret-change[open] { display: flex; flex-direction: column; gap: .35rem; }
+.secret-change > label { font-weight: 600; font-size: .9rem; margin-top: .4rem; }
+.secret-change > .small.muted, .secret-change > .field-error { margin: 0; }
 /* labels sit at the top, controls align at the bottom even when one label wraps */
 .grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: .75rem; margin-top: .6rem; align-items: end; }
 .grid-2 > div { display: flex; flex-direction: column; justify-content: flex-end; min-width: 0; }

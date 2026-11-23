@@ -312,6 +312,27 @@ def _duo_files():
     return [n for _, n in sorted(found, reverse=True)]
 
 
+def _duo_enable_block(duo, build=None):
+    """Why Duo cannot be turned on now, or None (SPEC section 29.3)."""
+    if not duo.get("installed"):
+        return "Install the Duo Authentication Proxy first."
+    if _fips():
+        if build is None:
+            cat = _helper("integration_catalog")
+            build = ig.build_check(duo.get("installed"), cat.get("entries") if cat.get("ok") else [])
+        if not build["fips_capable"]:
+            return ("FIPS mode: the installed build is not FIPS-capable in the signed catalog."
+                    " Install a FIPS-capable build first.")
+    return None
+
+
+def _duo_disable_block():
+    """Why Duo cannot be turned off now, or None: an enabled second-factor rule names it."""
+    if _policy_uses(ig.DUO_ID):
+        return "A second-factor rule uses Duo. Change the rule first."
+    return None
+
+
 def _duo_page(test=None, preflight=None, errors=None, status_code=200):
     from ..integration_fetch import read_status
     key = current_app.config["RA_DATA_KEY"]
@@ -326,13 +347,19 @@ def _duo_page(test=None, preflight=None, errors=None, status_code=200):
     p = ig.get_provider(ig.DUO_ID)
     secrets = ig.duo_secrets(key, p) if p is not None else {}
     state = duo.get("state") or {}
+    if p is not None and p["enabled"]:
+        switch_lock = _duo_disable_block()
+    elif not st.get("ok"):
+        switch_lock = "The helper is not reachable, so the install state is unknown."
+    else:
+        switch_lock = _duo_enable_block(duo, build)
     return render_template(
         "integrations/duo.html", helper_ok=bool(st.get("ok")), helper_message=st.get("message", ""),
         duo=duo, build=build, state=state, running=state.get("state") in _INTEGRATION_ACTIVE, catalog=entries,
         catalog_serial=cat.get("serial", 0) if cat.get("ok") else None, catalog_message=cat.get("message", ""),
         fetch=read_status(cfg()["integration_dir"], "duo"), files=_duo_files(), provider=p,
         has_skey=bool(secrets.get("skey")), in_use=ig.DUO_ID in ig.providers_in_use(), test=test,
-        preflight=preflight, errors=errors or {}, fips=_fips(), factors=unlang().DUO_FACTORS,
+        switch_lock=switch_lock, preflight=preflight, errors=errors or {}, fips=_fips(), factors=unlang().DUO_FACTORS,
         upload_mib=ig.UPLOAD_MAX // (1024 * 1024)), status_code
 
 
@@ -504,16 +531,9 @@ def duo_settings():
                  else "api_host" if "API hostname" in msg else "failmode" if "Fail mode" in msg else "factors")
         errors[field] = msg
     duo = ((_helper("integration_status").get("integrations") or {}).get("duo") or {})
-    if enabled and not duo.get("installed"):
-        errors["enabled"] = "Install the Duo Authentication Proxy first."
-    elif enabled and _fips():
-        cat = _helper("integration_catalog")
-        if not ig.build_check(duo.get("installed"), cat.get("entries") if cat.get("ok") else [])["fips_capable"]:
-            errors["enabled"] = ("FIPS mode: the installed build is not FIPS-capable in the signed catalog."
-                                 " Install a FIPS-capable build first.")
-    if not enabled and p["enabled"] and ig.DUO_ID in {r["provider_id"] for r in db.query(
-            "SELECT provider_id FROM ui.mfa_policy WHERE enabled AND provider_id IS NOT NULL")}:
-        errors["enabled"] = "A second-factor rule uses Duo. Change the rule first."
+    block = _duo_enable_block(duo) if enabled else _duo_disable_block() if p["enabled"] else None
+    if block:
+        errors["enabled"] = block
     if errors:
         return _duo_page(errors=errors, status_code=400)
     if skey:

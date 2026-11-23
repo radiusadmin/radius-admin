@@ -21,7 +21,7 @@
     <dt>Service</dt>
     <dd>{% if duo.installed and duo.installed.version %}{{ m.onoff(duo.service_active, 'Running', 'Stopped') }}{% if duo.listening %} <span class="small muted">listening on 127.0.0.1:18120</span>{% elif duo.service_active %} <span class="small warn-text">not listening yet</span>{% endif %}{% else %}—{% endif %}</dd>
     <dt>Provider</dt>
-    <dd>{% if provider %}{{ m.onoff(provider.enabled, 'On', 'Off') }}{% if in_use %} <span class="small muted">chosen in the second-factor rules</span>{% endif %}{% else %}Not set up{% endif %}</dd>
+    <dd>{% if provider %}{{ m.onoff(provider.enabled) }}{% if in_use %} <span class="small muted">chosen in the second-factor rules</span>{% endif %}{% else %}Not set up{% endif %}</dd>
     {% if fips %}<dt>FIPS mode</dt><dd>Only builds the signed catalog lists as FIPS-capable can be installed; Duo runs with fips_mode and fail mode secure.</dd>{% endif %}
   </dl>
   {% if fips and duo.installed and duo.installed.version and not build.fips_capable %}<p class="flash flash-error" role="alert">FIPS mode: this build is not FIPS-capable in the signed catalog{% if duo.installed.fips is not sameas true %} or was installed before FIPS mode was turned on{% endif %}. Duo cannot be turned on or applied until a FIPS-capable build is installed.</p>{% endif %}
@@ -129,10 +129,7 @@
     <label for="ikey">Integration key</label>
     <input id="ikey" name="ikey" value="{{ s.ikey or '' }}" maxlength="40" class="mono" autocomplete="off"{{ m.described(errors, 'ikey') }}>
     {{ m.field_error(errors, 'ikey') }}
-    <label for="skey">Secret key</label>
-    <input id="skey" name="skey" type="password" maxlength="64" autocomplete="new-password" aria-describedby="skey-hint{{ ' skey-error' if errors.skey else '' }}"{{ ' aria-invalid=true' if errors.skey else '' }}>
-    <p id="skey-hint" class="small muted">{% if has_skey %}A secret key is set; leave empty to keep it. {% endif %}Stored encrypted; written only into Duo's configuration file.</p>
-    {{ m.field_error(errors, 'skey') }}
+    {{ m.secret_field(errors, 'skey', 'Secret key', has_skey, "Stored encrypted; written only into Duo's configuration file.", 64) }}
     <label for="api_host">API hostname</label>
     <input id="api_host" name="api_host" value="{{ s.api_host or '' }}" maxlength="64" class="mono" placeholder="api-xxxxxxxx.duosecurity.com" autocomplete="off"{{ m.described(errors, 'api_host') }}>
     {{ m.field_error(errors, 'api_host') }}
@@ -149,8 +146,8 @@
       {% for f in factors %}<label class="check"><input type="checkbox" name="factors" value="{{ f }}" {{ 'checked' if f in chosen else '' }}> {{ {'auto': 'Automatic (push, else phone call)', 'push': 'Push to the Duo Mobile app', 'phone': 'Phone call', 'passcode': 'Passcode (typed after the password with a comma)'}[f] }}</label>{% endfor %}
       {{ m.field_error(errors, 'factors') }}
     </fieldset>
-    <label class="check"><input type="checkbox" name="enabled" value="1" {{ 'checked' if provider and provider.enabled else '' }}{{ m.described(errors, 'enabled') }}> On (FreeRADIUS can send logins to Duo; choose it in the <a href="{{ url_for('integrations.policy') }}">second-factor rules</a>)</label>
-    {{ m.field_error(errors, 'enabled') }}
+    {{ m.switch('enabled', 'Duo provider', provider and provider.enabled, locked=switch_lock, errors=errors) }}
+    <p class="small muted">Enabled: FreeRADIUS can send logins to Duo once it is chosen in the <a href="{{ url_for('integrations.policy') }}">second-factor rules</a>.</p>
     <div class="actions"><button type="submit" class="btn btn-primary">Save</button></div>
   </form>
 </section>

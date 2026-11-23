@@ -15,6 +15,14 @@ release, so previews sort after it.
   names the switch sends in RADIUS (`Gi1/0/5` → `GigabitEthernet1/0/5`). Choose it per client
   or as the default.
 
+### Changed
+- **Duo page: an Enabled / Disabled switch and hidden stored secrets.** The Duo provider is turned
+  on and off with a switch that shows its state; when it cannot be changed (Duo not installed, or a
+  second-factor rule uses it) the switch is greyed out with the reason next to it, instead of an
+  error after Save. Once a secret key is stored the page shows "Secret key: set" with a "Change
+  secret key" link to enter a new one; saving without it keeps the stored key. The edit form of a
+  remote MFA server shows its shared secret the same way.
+
 ### Fixed
 - **Second factor: no silent device lockout.** Requiring a second factor for local device admins
   now needs an exempt break-glass account, or an explicit confirmation that there is none: while the
