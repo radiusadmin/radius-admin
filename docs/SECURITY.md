@@ -269,7 +269,10 @@ Operator controls:
   `radius-admin-helper` syslog streams to the SIEM as the independent record (§5).
 * **Residual risk — helper as root**: the helper runs as root with a reduced
   capability bounding set and `ProtectSystem=strict` (writable: `/etc/freeradius`,
-  its work dir). It cannot drop to an unprivileged user entirely because it must
+  its work dir, the portal's TLS files, and, with Duo installed, only `conf/` of
+  `/opt/duoauthproxy`; Duo's programs and log stay read-only to it). Duo's connectivity tool runs as a
+  transient unit of its own with `CAP_SYS_PTRACE` (to recognise the running proxy on its port),
+  write access to Duo's `log/` only and the usual protections; the helper itself never gets ptrace. It cannot drop to an unprivileged user entirely because it must
   restart FreeRADIUS and install files owned by root.
 
 ### 2.x Live access rules and settings (database on the authentication path)

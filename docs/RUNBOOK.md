@@ -1586,7 +1586,7 @@ configure it. It needs nothing from the stock FreeRADIUS files:
 
 ### 13.5 Certificates in the console
 
-**Network access → Certificates** shows the installed certificates (subject, issuer, expiry, key
+**Settings → Certificates** shows the installed certificates (subject, issuer, expiry, key
 type, fingerprint) and lets an administrator (with step-up) change them. Nothing is installed until
 **Apply changes**; the Apply page lists what changes, with private keys only as fingerprints.
 

@@ -36,10 +36,11 @@ def rendered_clients(app):
         return services.render_all()[1]
 
 
-def cli_config(app, tmp_path):
+def cli_config(app, tmp_path, staging=None):
     p = tmp_path / "ra.conf"
     p.write_text("[app]\nrequire_fips = false\ndb_dsn = %s\nkey_file = %s\nlog_syslog = false\n"
-                 "pbkdf2_iterations = 1000\n" % (APP_DSN, app.config["RA"]["key_file"]))
+                 "pbkdf2_iterations = 1000\n" % (APP_DSN, app.config["RA"]["key_file"])
+                 + ("staging_dir = %s\n" % staging if staging else ""))
     return str(p)
 
 
@@ -174,3 +175,46 @@ def test_clear_staging_leaves_a_newer_staged_file(app, tmp_path):
             fh.write("c2\n")
         services.clear_staging("p1\n", "c1\n", {"provider-duo": "d1\n"}, base=base)
     assert sorted(os.listdir(base)) == ["clients"]
+
+
+# ------------------------------------------------------------------ what an older release left behind
+def test_upgrade_cleans_what_an_older_release_left_in_staging(app, superconn, tmp_path, capsys, monkeypatch):
+    """An older release kept the last staged files and plain applied copies (shared secrets, Duo's
+    key, private keys): the install step removes the staged ones and seals the copies at once."""
+    from radius_admin import cli
+    st = tmp_path / "st"
+    hist = st / "applied" / "history" / "20261101T000000Z"
+    hist.mkdir(parents=True)
+    (st / "imports").mkdir()
+    clients = 'client sw1 {\n\tsecret = "%s"\n}\n' % SECRET
+    files = {"policy": "policy v1\n", "clients": clients, "provider-duo": "; radius-admin\nskey=%s\n" % SECRET}
+    for d in (st, st / "applied", hist):
+        for name, text in files.items():
+            (d / name).write_text(text)
+    monkeypatch.delenv("SUDO_USER", raising=False)
+    monkeypatch.delenv("USER", raising=False)
+    assert cli.main(["--config", cli_config(app, tmp_path, st), "seal-staging"]) == 0
+    assert "removed 3 staged file(s), sealed 6 applied copy file(s)" in capsys.readouterr().out
+    assert sorted(p.name for p in st.iterdir()) == ["applied", "imports"]          # staged files gone
+    for d in (st / "applied", hist):
+        for name in files:
+            text = (d / name).read_text()
+            assert text.startswith("ra-sealed-v1:") and SECRET not in text, (d, name)
+    got = services.read_applied(str(st), app.config["RA_DATA_KEY"])
+    assert got["policy"] == files["policy"] and got["clients"] == clients
+    assert got["providers"] == {"provider-duo": files["provider-duo"]}
+    assert q(superconn, "SELECT actor, detail->>'removed', detail->>'sealed' FROM ui.audit_log"
+                        " WHERE action = 'config.staging_sealed'") == [("installer", "3", "6")]
+    # nothing left to do the second time: no audit record
+    assert cli.main(["--config", cli_config(app, tmp_path, st), "seal-staging"]) == 0
+    assert "removed 0 staged file(s), sealed 0 applied copy file(s)" in capsys.readouterr().out
+    assert q(superconn, "SELECT count(*) FROM ui.audit_log WHERE action = 'config.staging_sealed'") == [(1,)]
+
+
+def test_install_steps_are_audited_as_the_installer(app, superconn, tmp_path, monkeypatch):
+    from radius_admin import cli
+    plain_client(superconn)
+    monkeypatch.delenv("SUDO_USER", raising=False)
+    monkeypatch.delenv("USER", raising=False)       # the installer runs the CLI with env -i
+    assert cli.main(["--config", cli_config(app, tmp_path), "seal-client-secrets"]) == 0
+    assert q(superconn, "SELECT actor FROM ui.audit_log WHERE action = 'client.secrets_seal'") == [("installer",)]
