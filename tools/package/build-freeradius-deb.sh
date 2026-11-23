@@ -10,8 +10,9 @@
 #        (defaults: <repo>/packages, /var/tmp/radius-admin-frpkg)
 # Writes OUTDIR/radius-admin-freeradius_<version>_<arch>.deb with a .sha384 next to it, and
 # the upstream source with its signature in OUTDIR/source/ (GPLv2: ship the source with
-# the binaries). FR_PKG_RELEASE=N sets the package revision (default 2: 1 used the
-# distribution's GnuTLS libldap).
+# the binaries). FR_PKG_RELEASE=N sets the package revision (default 3: 1 used the
+# distribution's GnuTLS libldap, 2 had no patches). The patches in
+# tools/package/freeradius/patches/ are applied to the release (fr_apply_patches).
 set -euo pipefail
 export LC_ALL=C
 # the package's file modes must not depend on the caller (CI runners use a permissive umask)
@@ -42,7 +43,7 @@ done
 . /etc/os-release
 DIST=$ID$VERSION_ID
 ARCH=$(dpkg --print-architecture)
-PKGVER=$FR_VERSION-${FR_PKG_RELEASE:-2}~$DIST
+PKGVER=$FR_VERSION-${FR_PKG_RELEASE:-3}~$DIST
 DEB=$OUT/${PKG}_${PKGVER}_$ARCH.deb
 
 fr_fetch_verified "$WORK"
@@ -52,6 +53,7 @@ ol_build "$WORK" "$OLP"
 mkdir -p "$WORK/build" "$WORK/root" "$OUT/source"
 tar -C "$WORK/build" -xzf "$WORK/$FR_TARBALL"
 SRCDIR=$WORK/build/freeradius-server-$FR_VERSION
+fr_apply_patches "$SRCDIR"
 
 # Modules that need libraries this product does not use are switched off, so the package
 # and its dependencies do not change with whatever -dev packages the build host has.
@@ -97,17 +99,20 @@ done < <(find "$ROOT$PREFIX" -type f -print0)
 
 install -D -m 0644 "$HERE/freeradius/freeradius.service" "$ROOT/usr/lib/systemd/system/freeradius.service"
 DOC=$ROOT$PREFIX/share/doc/$PKG
-install -d "$DOC"
+install -d "$DOC" "$DOC/patches"
+for f in "${FR_PATCHES[@]}"; do install -m 0644 "$FR_PATCH_DIR/$f" "$DOC/patches/"; done
 {
     cat "$SRCDIR/COPYRIGHT" "$SRCDIR/LICENSE"
     printf '\n\nOpenLDAP %s client libraries (liblber, libldap), statically linked into\nrlm_ldap.so and libexec/ra-ldapwhoami:\n\n' "$OL_VERSION"
     cat "$OL_SRCDIR/COPYRIGHT" "$OL_SRCDIR/LICENSE"
 } > "$DOC/copyright"
 cat > "$DOC/SOURCE" <<EOF
-FreeRADIUS $FR_VERSION, unmodified upstream release:
+FreeRADIUS $FR_VERSION, upstream release:
   $FR_URL/$FR_TARBALL
   sha256 $(sha256sum "$WORK/$FR_TARBALL" | cut -d' ' -f1)
   signature verified with $FR_KEY_FPR
+radius-admin patches (applied in this order, shipped in share/doc/radius-admin-freeradius/patches/):
+$(for f in "${FR_PATCHES[@]}"; do printf '  %s  sha256 %s\n' "$f" "$(sha256sum "$FR_PATCH_DIR/$f" | cut -d' ' -f1)"; done)
 configure ${cfg[*]}
 
 OpenLDAP client libraries $OL_VERSION (liblber, libldap; static, TLS by the system OpenSSL),
@@ -163,7 +168,8 @@ Conflicts: freeradius
 Installed-Size: $(du -sk --exclude=DEBIAN "$ROOT" | cut -f1)
 Homepage: https://github.com/radiusadmin/radius-admin
 Description: FreeRADIUS $FR_VERSION built for radius-admin
- FreeRADIUS $FR_VERSION from the signed upstream release, built with the FIPS
+ FreeRADIUS $FR_VERSION from the signed upstream release with radius-admin's
+ patches (FIPS mode uses only the OpenSSL FIPS provider), built with the FIPS
  workaround so one build serves standard and FIPS mode. rlm_ldap uses OpenLDAP
  $OL_VERSION built against the system OpenSSL. Installed under
  $PREFIX; the configuration lives in /etc/freeradius, which the
@@ -177,7 +183,8 @@ rm -f "$OUT/${PKG}"_*"_$ARCH.deb" "$OUT/${PKG}"_*"_$ARCH.deb.sha384"
 dpkg-deb --root-owner-group -Zxz --build "$ROOT" "$DEB" >/dev/null
 (cd "$OUT" && sha384sum "$(basename "$DEB")" > "$(basename "$DEB").sha384")
 cp "$WORK/$FR_TARBALL" "$WORK/$FR_TARBALL.sig" "$OUT/source/"
-rm -f "$OUT/source/openldap_"*
+rm -f "$OUT/source/openldap_"* "$OUT/source/"*.patch
+for f in "${FR_PATCHES[@]}"; do cp "$FR_PATCH_DIR/$f" "$OUT/source/"; done
 cp "${OL_SRC_FILES[@]}" "$OUT/source/"
 echo "built $DEB"
 echo "  Depends: $depends"

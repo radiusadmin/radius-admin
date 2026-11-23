@@ -126,7 +126,10 @@ tools/package/make-bundle.sh                            # -> dist/radius-admin-<
 
 The build also needs deb-src entries for the distribution archive: rlm_ldap's OpenLDAP comes
 from `apt-get source openldap` (Ubuntu: `Types: deb deb-src` in
-`/etc/apt/sources.list.d/ubuntu.sources`, then `apt-get update`). When the distribution publishes
+`/etc/apt/sources.list.d/ubuntu.sources`, then `apt-get update`). The package applies the patches in `tools/package/freeradius/patches/`
+(each one says why and when to drop it). When a new FreeRADIUS release includes an equivalent fix,
+remove the patch, bump the release in `tools/lib/fr-release.sh` and check FIPS mode on a lab VM
+again (radiusd logs `(TLS) FIPS mode: OpenSSL providers base, fips, …`). When the distribution publishes
 an openldap security update, rebuild and release the package (target: 14 days for high and
 critical fixes); `SOURCE` and `dpkg -s radius-admin-freeradius` name the openldap version a
 server runs.

@@ -823,7 +823,17 @@ CSV columns (header row required, exact names, any order tolerated by name):
   `packages/source/` carries the openldap `.dsc` and tarballs. The bench build
   (`tools/ci/build-freeradius.sh`) uses the same library and rebuilds a prefix without
   `share/radius-admin-openldap`. The distribution's `freeradius` package keeps GnuTLS (SECURITY.md
-  exception 5); preflight says which TLS library rlm_ldap uses. **Installer:** the directory
+  exception 5); preflight says which TLS library rlm_ldap uses. **Patches (change 2026-11-23,
+  package revision 3):** `tools/package/freeradius/patches/*.patch` are applied in order to the
+  verified release by `fr_apply_patches` (`tools/lib/fr-release.sh`; `patch -p1 --fuzz=0`, a patch
+  that does not apply stops the build), in the package build and in the bench build (which
+  rebuilds when the patch set's hash in `share/radius-admin-openldap` changes). `SOURCE` lists each
+  patch with its SHA-256; the patches ship in `share/doc/radius-admin-freeradius/patches/` and
+  `packages/source/`. Each patch file starts with why it exists and when to drop it. `0001-tls-fips-provider-in-fips-mode`: in FIPS mode
+  (`/proc/sys/crypto/fips_enabled` = 1, or `fips=yes` already set by the OpenSSL configuration)
+  `tls_global_init` loads the `fips` and `base` providers, sets `fips=yes`, never loads the
+  default provider or sets `-fips`, fails when the FIPS provider is missing, and logs the active
+  providers; standard mode is unchanged (SECURITY.md §1). **Installer:** the directory
   login test (`ldap_bind_check`, freeradius phase) uses `ra-ldapwhoami` when the bundled package
   is installed, else ldap-utils' `ldapwhoami` (`ca_file` → `LDAPTLS_CACERT`, else `ca_path` →
   `LDAPTLS_CACERTDIR`; `LDAPTLS_REQCERT=demand`; on "Can't contact" a second run with `-d 1` adds

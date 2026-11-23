@@ -18,8 +18,10 @@ fr_fetch_verified "$SRC"
 cd "$SRC"
 T=$FR_TARBALL
 MARK=$PREFIX/share/radius-admin-openldap
+# rebuilt when the patch set changes too
+PATCHSUM=$(cat "$FR_PATCH_DIR"/*.patch 2>/dev/null | sha256sum | cut -c1-16)
 
-if [[ ! -x $PREFIX/sbin/radiusd || ! -f $MARK ]]; then
+if [[ ! -x $PREFIX/sbin/radiusd || ! -f $MARK ]] || ! grep -q "patches $PATCHSUM" "$MARK"; then
     # deb-src for apt-get source (openldap here, wpa below)
     if [[ -f /etc/apt/sources.list.d/ubuntu.sources ]] && ! grep -q '^Types: deb deb-src$' /etc/apt/sources.list.d/ubuntu.sources; then
         sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/ubuntu.sources
@@ -30,13 +32,14 @@ if [[ ! -x $PREFIX/sbin/radiusd || ! -f $MARK ]]; then
     mapfile -t olargs < <(ol_fr_configure_args "$OLP")
     rm -rf "freeradius-server-$V"
     tar -xzf "$T"
+    fr_apply_patches "$SRC/freeradius-server-$V"
     (cd "freeradius-server-$V" && ./configure --prefix="$PREFIX" --enable-fips-workaround "${olargs[@]}" \
         >../fr-configure.log 2>&1) || { tail -40 fr-configure.log >&2; exit 1; }
     ol_fr_fix_makefile "$SRC/freeradius-server-$V" "$OLP"
     (cd "freeradius-server-$V" && make -j"$(nproc)" >../fr-make.log 2>&1 && make install >../fr-install.log 2>&1) \
         || { tail -40 fr-make.log >&2; exit 1; }
     ol_check_elf "$PREFIX/lib/rlm_ldap.so"
-    echo "openldap $OL_VERSION (static, OpenSSL)" > "$MARK"
+    echo "openldap $OL_VERSION (static, OpenSSL); patches $PATCHSUM: ${FR_PATCHES[*]}" > "$MARK"
 fi
 cat "$MARK"
 "$PREFIX/sbin/radiusd" -v | head -1

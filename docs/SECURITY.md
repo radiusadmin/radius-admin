@@ -49,6 +49,30 @@ record them in the SSP.
 | Update signatures (ECDSA P-384, SHA-384) | root helper (`update_install`), release job | `openssl dgst -sha384 -verify` / `-sign` | OpenSSL FIPS provider (approved); verified the same way in both modes |
 | Bundled FreeRADIUS package integrity | installer (`fr-package`) | `sha384sum`; the upstream source signature is checked with `gpg` at build time | not a FIPS function (supply-chain integrity). The `.sha384` travels in the same bundle, so it detects damage, not tampering: that comes from the bundle's SHA-256 checked by `update.sh --sha256` (the push script passes it) until releases carry a signed manifest |
 
+**FreeRADIUS and the FIPS provider.** The rows above that name FreeRADIUS (EAP-TLS/TTLS, rlm_pap
+PBKDF2, LDAPS, and RadSec) hold for the bundled `radius-admin-freeradius` package from 3.2.10-3 only
+(LDAPS and EAP-TTLS were checked on the lab VM; PBKDF2 and RadSec use the same OpenSSL library
+context in radiusd and were not tested separately).
+Upstream FreeRADIUS 3.2.10 (`tls_global_init` in `src/main/tls.c`, unchanged on `v3.2.x`) always sets
+the default property `-fips` and loads OpenSSL's *default* provider, so on a FIPS kernel radiusd
+still takes every algorithm from the non-validated default provider. This was seen on an Ubuntu
+24.04 Pro `fips-updates` lab VM: no `fips.so` in the process, and rlm_ldap completed handshakes
+using ChaCha20-Poly1305 and X25519. The bundled package carries a patch
+(`tools/package/freeradius/patches/0001-tls-fips-provider-in-fips-mode.patch`, SPEC §15). In FIPS
+mode (kernel `fips_enabled = 1`, or OpenSSL already configured for FIPS) radiusd loads only the
+`fips` and `base` providers, sets `fips=yes`, refuses to start without the FIPS provider, and logs
+`(TLS) FIPS mode: OpenSSL providers base, fips, default property fips=yes`. On the same lab VM,
+radiusd then maps `fips.so`; LDAPS and EAP-TTLS/PAP work (64-byte MSK); and servers or clients
+offering only ChaCha20-Poly1305 or only X25519 are refused (`no shared cipher` / no handshake).
+Standard mode is unchanged. The only non-FIPS code left is EAP-FAST's TLS 1.0 PRF
+(`mppe_keys.c`, its own context), which radius-admin does not enable. MD4, MD5 and DES come from
+`--enable-fips-workaround`'s own code (exceptions 1, 2 and 8). A side effect: in FIPS mode
+radiusd refuses a password-protected private key whose encryption uses parameters the FIPS
+provider rejects (for example the stock `certs/bootstrap` test key: "invalid salt length").
+radius-admin writes unencrypted EC P-384 keys, so only a carried-over `private_key_password`
+setup can be affected. With the distribution's `freeradius` package or an own build, radiusd does
+**not** use the FIPS provider at all.
+
 The app refuses to start (and the CLI refuses to run) when `require_fips = true` unless
 `/proc/sys/crypto/fips_enabled == 1` and `_hashlib.get_fips_mode() == 1`. The dashboard
 and the helper's `status` show FIPS state. No pip packages and no non-OpenSSL crypto

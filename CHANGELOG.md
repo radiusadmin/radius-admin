@@ -20,6 +20,13 @@ release, so previews sort after it.
   or as the default.
 
 ### Changed
+- **FIPS mode: FreeRADIUS uses the OpenSSL FIPS provider.** Upstream FreeRADIUS 3.2.10 loads
+  OpenSSL's default provider even on a FIPS kernel, so EAP, password hashing and LDAPS in radiusd
+  were not using the validated module. The bundled `radius-admin-freeradius` package (3.2.10-3)
+  carries a patch that, in FIPS mode only, loads just the FIPS provider and refuses to start
+  without it. Standard mode is unchanged. A password-protected EAP private key encrypted with
+  parameters the FIPS provider rejects can no longer be read in FIPS mode; radius-admin's own keys
+  are unencrypted and not affected.
 - **LDAPS through OpenSSL with the bundled FreeRADIUS.** The `radius-admin-freeradius` package
   (3.2.10-2) links rlm_ldap against OpenLDAP built from the distribution's own source package
   with OpenSSL, instead of the distribution's GnuTLS libldap, so in FIPS mode the connection to
