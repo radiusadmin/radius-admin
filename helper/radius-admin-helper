@@ -136,6 +136,9 @@ CONFIG_DEFAULTS = {
     "integration_install_unit": "radius-admin-integration-install",
     "integration_remove_unit": "radius-admin-integration-remove",
     "integration_max_mib": "128",
+    # false: install only builds the signed catalog lists, never one checked only against a
+    # SHA-256 the admin entered (that path runs a vendor installer as root on an admin's word)
+    "integration_allow_unlisted": "true",
     "integration_log_dir": "/var/log/radius-admin",
     "duo_dir": "/opt/duoauthproxy",
     # integration_push_test (SPEC section 29.3) talks to Duo's Auth API at the api_host of the
@@ -214,6 +217,10 @@ def load_config(path):
         except ValueError:
             raise HelperError("helper.conf: %s must be an integer" % key)
     cfg["portal_verify_tls"] = cfg["portal_verify_tls"].lower() in ("1", "true", "yes", "on")
+    v = cfg["integration_allow_unlisted"].lower()
+    if v not in ("1", "true", "yes", "on", "0", "false", "no", "off"):
+        raise HelperError("helper.conf: integration_allow_unlisted must be true or false")
+    cfg["integration_allow_unlisted"] = v in ("1", "true", "yes", "on")
     if cfg["duo_api_connect"] and not re.fullmatch(r"127\.0\.0\.1:[0-9]{1,5}", cfg["duo_api_connect"]):
         raise HelperError("helper.conf: duo_api_connect must be 127.0.0.1:PORT (tests only) or empty")
     if cfg["duo_api_cafile"]:
@@ -2543,6 +2550,9 @@ def act_integration_install(cfg, req):
             elif fips:
                 raise HelperError("in FIPS mode only builds that the signed catalog lists as FIPS-capable can be"
                                   " installed; %s is not in the catalog" % name)
+            elif not cfg["integration_allow_unlisted"]:
+                raise HelperError("%s is not in the signed catalog, and this server installs only builds the signed"
+                                  " catalog lists (helper.conf integration_allow_unlisted = false)" % name)
             elif pasted is None:
                 raise HelperError("%s is not in the signed catalog. Its SHA-256 is %s: compare it with the value"
                                   " the vendor publishes and enter it to install the build unverified" % (name, h))

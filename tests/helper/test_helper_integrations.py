@@ -216,6 +216,36 @@ def test_install_unlisted_needs_the_entered_hash(ienv):
     assert istate(ienv)["duo"]["verified"] == "pasted-hash"
 
 
+@pytest.mark.parametrize("value", ["false", "no", "0", "off"])
+def test_install_unlisted_refused_when_turned_off(ienv, value):
+    with open(ienv.conf, "a") as fh:
+        fh.write("integration_allow_unlisted = %s\n" % value)
+    ship(ienv, [entry()])
+    upload(ienv, name="duoauthproxy-6.8.0-src.tgz", data=BUILD + b"other")
+    h = hashlib.sha256(BUILD + b"other").hexdigest()
+    r = ienv.call({"action": "integration_install", "id": "duo", "file": "duoauthproxy-6.8.0-src.tgz",
+                   "sha256": h})
+    assert r["ok"] is False and "only builds the signed catalog lists" in r["message"], r
+    assert "integration_allow_unlisted" in r["message"]
+    assert started(ienv) == [] and not os.path.exists(os.path.join(ienv.work, "integration", "duo"))
+    # a build the catalog lists still installs
+    upload(ienv)
+    r = ienv.call({"action": "integration_install", "id": "duo", "file": NAME})
+    assert r["ok"] and r["verified"] == "catalog", r
+
+
+def test_allow_unlisted_must_be_a_boolean(ienv):
+    with open(ienv.conf) as fh:
+        base = fh.read()
+    with open(ienv.conf, "w") as fh:
+        fh.write(base + "integration_allow_unlisted = true\n")
+    assert ienv.call({"action": "integration_catalog"})["ok"]
+    with open(ienv.conf, "w") as fh:
+        fh.write(base + "integration_allow_unlisted = maybe\n")
+    r = ienv.call({"action": "integration_catalog"})
+    assert r["ok"] is False and "helper misconfigured" in r["message"]
+
+
 def test_install_without_any_catalog_uses_the_entered_hash(ienv):
     upload(ienv)
     r = ienv.call({"action": "integration_install", "id": "duo", "file": NAME,

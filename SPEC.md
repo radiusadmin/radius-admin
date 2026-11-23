@@ -1628,7 +1628,8 @@ installer itself follow in the next step).
   `integration_owner = radius-admin`, created by the installer, 0750), `integration_catalog =
   /opt/radius-admin/integrations/catalog.json`, `integration_fetch_unit`,
   `integration_install_unit`, `integration_max_mib = 128`, `integration_log_dir =
-  /var/log/radius-admin`, `duo_dir = /opt/duoauthproxy`. The helper knows per provider the file
+  /var/log/radius-admin`, `duo_dir = /opt/duoauthproxy`, `integration_allow_unlisted = true`
+  (boolean; `false` = only catalog-listed builds install, see `integration_install`). The helper knows per provider the file
   pattern, the download prefix, its service (`duoauthproxy.service`), its address (127.0.0.1:18120),
   its API host pattern (`api-*.duosecurity.com`) and its build packages; the request only names the id.
 - **Catalog checks** (every action that uses it). The shipped catalog and `.sig` must be
@@ -1655,8 +1656,10 @@ installer itself follow in the next step).
     `integration_max_mib`, and is copied into `<work_dir>/integration/<id>/` (root 0700) while
     hashing (SHA-256). A catalog entry with that hash → `verified: catalog` (size and version must
     match; withdrawn, a non-FIPS entry in FIPS mode, or `min_radius_admin` above the installed build
-    → refused). Not in the catalog: refused in FIPS mode; otherwise refused with the file's SHA-256
-    in the message unless `sha256` equals it → `verified: pasted-hash`. Writes `request.json` (id,
+    → refused). Not in the catalog: refused in FIPS mode, and refused when helper.conf has
+    `integration_allow_unlisted = false` ("… this server installs only builds the signed catalog
+    lists …"); otherwise refused with the file's SHA-256 in the message unless `sha256` equals it →
+    `verified: pasted-hash`. Writes `request.json` (id,
     version, file, sha256, size, verified, fips, catalog_serial), the state (`queued`, actor) and
     starts `<integration_install_unit>@<id>.service`; refused while that unit runs.
   - `integration_log {"id", "offset"?}`: as `update_log`, for the log the state names

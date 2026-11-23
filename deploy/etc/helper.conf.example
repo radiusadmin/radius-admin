@@ -57,6 +57,9 @@ radius_port = 1812
 # integration_install_unit = radius-admin-integration-install
 # integration_remove_unit = radius-admin-integration-remove
 # integration_max_mib = 128
+# false: install only builds the signed catalog lists (no install of a build checked only
+# against a SHA-256 an admin entered; FIPS mode refuses those anyway)
+# integration_allow_unlisted = true
 # integration_log_dir = /var/log/radius-admin
 # duo_dir = /opt/duoauthproxy
 # tests only (leave empty): where integration_push_test connects instead of <api_host>:443, and the
