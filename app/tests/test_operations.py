@@ -276,6 +276,25 @@ def test_auth_log_reason_and_detail(app, browser, superconn, logged_in):
     assert browser.get("/auth-log/999999").status_code == 404
 
 
+def test_auth_log_shows_mab_description(app, browser, superconn, logged_in):
+    q(superconn, "INSERT INTO mab_device (mac, vlan, description) VALUES"
+                 " ('00-1B-0C-00-00-21', 41, 'Lobby printer'), ('00-1B-0C-00-00-22', 41, '')")
+    aid = q(superconn, "INSERT INTO radpostauth (username, reply, authmethod, nasipaddress, callingstationid, vlan)"
+                       " VALUES ('001b0c000021', 'Access-Accept', 'mab', '192.0.2.10', '00-1B-0C-00-00-21', '41'),"
+                       " ('001b0c000022', 'Access-Accept', 'mab', '192.0.2.10', '00-1B-0C-00-00-22', '41'),"
+                       # same MAC through 802.1X: not a MAB login, so no MAB description
+                       " ('host/pc9.example.net', 'Access-Accept', 'eap-tls', '192.0.2.10', '00-1B-0C-00-00-21', '510')"
+                       " RETURNING id")[0][0]
+    logged_in("viewer")
+    page = browser.get("/auth-log").get_data(as_text=True)
+    assert page.count("Lobby printer") == 1                     # the MAB row only
+    assert "001b0c000021" in page and "001b0c000022" in page    # User-Name still shown
+    t = browser.text(browser.get("/auth-log?user=lobby"))       # filter finds the description
+    assert "001b0c000021" in t and "001b0c000022" not in t and "pc9" not in t
+    t = browser.text(browser.get("/auth-log/%d" % aid))
+    assert "Accepted: Lobby printer" in t and "001b0c000021" in t
+
+
 # ======================================================================= sessions + CoA
 def _session(superconn, start_minutes=30, stop=False, csi="3C-22-FB-00-00-01", user="host/pc1.example.net"):
     return q(superconn, "INSERT INTO radacct (acctsessionid, acctuniqueid, username, nasipaddress, nasportid,"

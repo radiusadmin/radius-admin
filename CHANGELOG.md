@@ -20,6 +20,9 @@ release, so previews sort after it.
   or as the default.
 
 ### Changed
+- **Auth log names MAB devices.** A MAB login from a registered device shows the device's
+  description, with the MAC under it, in the list and on the record. The "User / device" filter
+  also searches MAB descriptions.
 - **Duo page: one button uploads a build.** "Upload a build…" picks Duo's source build and
   uploads it in one step (it goes to Ready to install; installing stays a separate step). Without
   JavaScript the page keeps the file field and the Upload button.
