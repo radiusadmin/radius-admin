@@ -1409,6 +1409,11 @@ s.sendall(sys.stdin.buffer.read()); print(s.recv(65536).decode().strip())' 2>&1 
     sealed=$(app_env "$RA_PYTHON" -m radius_admin.cli seal-client-secrets 2>&1) \
         || die "sealing the RADIUS client shared secrets failed: $sealed"
     ok "$sealed"
+    # what an older release left in the staging directory: its last staged files (plain) and its
+    # applied copies (plain until this release seals them)
+    sealed=$(app_env "$RA_PYTHON" -m radius_admin.cli seal-staging 2>&1) \
+        || die "cleaning the staging directory failed: $sealed"
+    ok "staging directory: $sealed"
 }
 
 need_admin_net() {

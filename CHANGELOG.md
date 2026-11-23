@@ -34,7 +34,9 @@ release, so previews sort after it.
   `update.sh --rollback` (or downgrading) writes them back in clear first, so the older release
   keeps working.
 - **No secrets left in the staging directory.** The files staged for the helper (clients file,
-  Duo's configuration, certificate private keys) are removed as soon as the helper has read them.
+  Duo's configuration, certificate private keys) are removed as soon as the helper has read them,
+  and the update removes the ones an older release left and encrypts its copies of applied files
+  right away, not at the next apply.
 
 ## 0.3.0 - 2026-11-20
 

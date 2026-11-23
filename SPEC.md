@@ -245,7 +245,10 @@ ui.audit_log(id bigserial PK, at timestamptz NOT NULL DEFAULT now(), actor text,
 
 Client shared secrets at rest (sql/103-client-secrets.sql): the portal and the client import
 write `secret_enc` (and `secret` = ''); `python3 -m radius_admin.cli seal-client-secrets`, run at
-the end of the installer's app phase, seals every plain `secret` (audit `client.secrets_seal`).
+the end of the installer's app phase, seals every plain `secret` (audit `client.secrets_seal`);
+right after it `seal-staging` removes the staged files an older release left (it kept the last
+ones, in plain) and seals its plain applied copies (audit `config.staging_sealed` with the counts,
+only when it changed something). Both record the actor `installer` (the CLI runs with `env -i`).
 `update.sh` (rollback and install) runs the installed release's `unseal-client-secrets` (audit
 `client.secrets_unseal`) before it starts a release whose CLI has no `seal-client-secrets`, and
 installs nothing when that fails; a sealed secret it cannot open stops it with nothing changed.

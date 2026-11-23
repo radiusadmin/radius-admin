@@ -481,13 +481,14 @@ def _read_sealed(d, name, datakey=None):
 
 
 def _seal_plain_copies(d, datakey=None):
-    """Seal files that an earlier version left plain in applied/ and its history."""
+    """Seal files that an earlier version left plain in applied/ and its history; returns how many."""
     dirs = [d]
     h = os.path.join(d, "history")
     try:
         dirs += [os.path.join(h, n) for n in os.listdir(h) if _HISTORY_ID_RE.fullmatch(n)]
     except FileNotFoundError:
         pass
+    n = 0
     for x in dirs:
         for name in SEALED_FILES:
             path = os.path.join(x, name)
@@ -498,6 +499,8 @@ def _seal_plain_copies(d, datakey=None):
                 continue
             if not text.startswith(_SEALED_PREFIX):
                 _write_0600(path, _seal(name, text, datakey))
+                n += 1
+    return n
 
 
 def write_staging(policy, clients, base=None, providers=None):
@@ -525,6 +528,19 @@ def clear_staging(policy, clients, providers, base=None):
                 os.unlink(path)
         except OSError:
             pass
+
+
+def clean_staging_after_upgrade(base, datakey):
+    """The installer's app phase (cli seal-staging): remove the staged files an older release left
+    (it kept the last ones, in plain) and seal its plain applied copies. Returns (removed, sealed)."""
+    removed = 0
+    for name in ("policy", "clients") + PROVIDER_FILES:
+        path = os.path.join(base, name)
+        if os.path.isfile(path) and not os.path.islink(path):
+            os.unlink(path)
+            removed += 1
+    d = applied_dir(base)
+    return removed, (_seal_plain_copies(d, datakey) if os.path.isdir(d) else 0)
 
 
 def read_staging(base=None):
