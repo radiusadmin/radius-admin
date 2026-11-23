@@ -38,6 +38,8 @@ release, so previews sort after it.
   remote MFA server shows its shared secret the same way.
 
 ### Fixed
+- **Licence tool: issuing from the web page works.** `licence-tool.py serve` refused every form
+  as a "cross-site request": its no-referrer policy made browsers send `Origin: null`.
 - **Re-authentication no longer ends in "Method Not Allowed".** When an action such as Remove
   Duo asked you to confirm your identity first, the portal then sent you to the action's own
   address, which only accepts form posts. It now returns you to the page you were on.
