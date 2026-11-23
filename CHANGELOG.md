@@ -15,6 +15,20 @@ release, so previews sort after it.
   names the switch sends in RADIUS (`Gi1/0/5` → `GigabitEthernet1/0/5`). Choose it per client
   or as the default.
 
+### Fixed
+- **Second factor: no silent device lockout.** Requiring a second factor for local device admins
+  now needs an exempt break-glass account, or an explicit confirmation that there is none: while the
+  provider is unreachable FreeRADIUS rejects these logins, so devices do not fall back to their own
+  accounts.
+- **Duo: a failed install no longer leaves the proxy stopped.** The installer starts the proxy it
+  stopped again when Duo's installer fails.
+- **Provider secrets no longer pile up in clear.** The portal's history of applied files (which
+  includes Duo's configuration with its secret key) now keeps the same 50 sets as the helper's
+  backups instead of growing without limit, and seals every file it keeps with the data key: the policy,
+  the clients file with the RADIUS shared secrets, Duo's configuration and the private keys of
+  managed certificates. Copies from earlier versions are sealed by the next apply. Removing Duo keeps its configuration with the secrets replaced by
+  `REDACTED`.
+
 ## 0.3.0 - 2026-11-20
 
 ### Added

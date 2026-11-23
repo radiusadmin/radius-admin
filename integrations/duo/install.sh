@@ -57,7 +57,20 @@ if ! getent passwd "$BUILD_USER" >/dev/null; then
     useradd --system --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin "$BUILD_USER"
 fi
 B=$(mktemp -d /var/tmp/radius-admin-duo.XXXXXX)
-trap 'rm -rf "$B"' EXIT
+was_active=no
+# A proxy this script stopped is started again when the install fails: while it is down, every
+# login that needs Duo is rejected.
+on_exit() {
+    local rc=$?
+    rm -rf "$B"
+    if (( rc != 0 )) && [[ $was_active == yes ]]; then
+        echo "duo install: the install failed; starting the previous duoauthproxy again" >&2
+        "$SYSTEMCTL" start duoauthproxy.service \
+            || echo "duo install: duoauthproxy did not start: logins that need Duo are rejected until it runs" >&2
+    fi
+    exit "$rc"
+}
+trap on_exit EXIT
 install -m 0644 "$BUILD" "$B/src.tgz"
 install -d -o "$BUILD_USER" -m 0700 "$B/work"
 chmod 0755 "$B"
@@ -81,7 +94,6 @@ chown -R root:root "$B/work"
 chmod -R go-w "$B/work"
 
 echo "== install into $DUO_DIR"
-was_active=no
 if "$SYSTEMCTL" is-active --quiet duoauthproxy.service 2>/dev/null; then
     was_active=yes
     "$SYSTEMCTL" stop duoauthproxy.service

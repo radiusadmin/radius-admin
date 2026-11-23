@@ -1344,6 +1344,12 @@ signed build job is skipped, so there is nothing to approve. Rename
 `## Unreleased` before the merge to `main`, or the run warns "Empty release notes" and the
 release is published without notes.
 
+**CI on promotions.** The package and bench jobs (most of a CI run) record the tree they
+passed on. A run of the same tree within 7 days skips them and links the run that passed, so
+a squash merge into `dev` and the `dev` → `testing` promotion do not repeat what the pull request
+already ran (`tools/ci/tested-tree.py`). Pushes to `main` and runs started by hand
+(Actions → CI → Run workflow) always run every job; use one to force a full run elsewhere.
+
 **On a server.** Settings → **Updates** shows the installed and the latest build on the
 channel, what changed in between, and whether the update restarts FreeRADIUS.
 - **Channel:** main (stable releases) for production; testing and dev for test servers.

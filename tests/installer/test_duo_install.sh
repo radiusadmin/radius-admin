@@ -18,7 +18,7 @@ mkdir -p "$RA_SYSTEMD_DIR" "$W/opt"
 cat > "$W/systemctl" <<EOF
 #!/bin/sh
 echo "\$*" >> "$W/systemctl.log"
-case "\$1" in is-active) exit 1;; esac
+case "\$1" in is-active) [ -e "$W/active" ] && exit 0; exit 1;; esac
 exit 0
 EOF
 chmod 0755 "$W/systemctl"
@@ -44,6 +44,7 @@ MK
 dir=""
 while [ $# -gt 0 ]; do case "$1" in --install-dir) dir=$2; shift;; esac; shift; done
 here=$(cd "$(dirname "$0")" && pwd)
+[ -n "${FAKE_DUO_INSTALL_FAIL:-}" ] && { echo "fake installer failed" >&2; exit 3; }
 mkdir -p "$dir/conf" "$dir/log" "$dir/run"
 cp "$here/built-by" "$dir/built-by"
 [ "$(stat -c %U "$here/install")" = root ] && [ "$(stat -c %U "$here")" = root ] && echo "owner root" > "$dir/owner-check"
@@ -86,6 +87,16 @@ bash "$INSTALL" "$W/request.json" "$W/build.tgz" >/dev/null 2>&1
 grep -q '^restart duoauthproxy.service' "$W/systemctl.log" && pass "with an applied configuration the service restarts" \
     || fail "restart: $(cat "$W/systemctl.log")"
 
+# a running proxy that the install stopped is started again when Duo's installer fails
+touch "$W/active"; : > "$W/systemctl.log"
+out=$(FAKE_DUO_INSTALL_FAIL=1 bash "$INSTALL" "$W/request.json" "$W/build.tgz" 2>&1); rc=$?
+[[ $rc -ne 0 ]] && grep -q '^stop duoauthproxy.service' "$W/systemctl.log" \
+    && [[ $(tail -n 1 "$W/systemctl.log") == "start duoauthproxy.service" && $out == *"starting the previous duoauthproxy"* ]] \
+    && pass "a failed install starts the proxy it stopped" || fail "failed install: rc=$rc $(cat "$W/systemctl.log") $out"
+rm -f "$W/active"; : > "$W/systemctl.log"
+out=$(FAKE_DUO_INSTALL_FAIL=1 bash "$INSTALL" "$W/request.json" "$W/build.tgz" 2>&1)
+! grep -q '^start' "$W/systemctl.log" && pass "a failed install leaves a stopped proxy stopped" || fail "stopped: $(cat "$W/systemctl.log")"
+
 # unsafe archives and failing builds install nothing
 mkdir -p "$W/evil/duoauthproxy-9.9.9-src"; echo x > "$W/evil/duoauthproxy-9.9.9-src/Makefile"; echo x > "$W/evil/other"
 (cd "$W/evil" && tar -czf "$W/build.tgz" duoauthproxy-9.9.9-src other)
@@ -108,11 +119,27 @@ make_src 9.9.9; request 1.2
 out=$(bash "$INSTALL" "$W/request.json" "$W/build.tgz" 2>&1)
 [[ $? -ne 0 && $out == *"invalid version"* ]] && pass "an invalid version is refused" || fail "version: $out"
 
-# remove: keeps a copy of the configuration, runs Duo's uninstaller, drops the drop-in
+# remove: keeps a copy of the configuration without its secrets, runs Duo's uninstaller, drops the drop-in
+cat > "$RA_DUO_DIR/conf/authproxy.cfg" <<'CFG'
+; radius-admin: test
+[radius_client]
+secret=TestOnlySecret0001
+[radius_server_auto]
+ikey=DIAAAAAAAAAAAAAAAAAA
+skey=TestOnlySecret0002TestOnlySecret00020000
+radius_secret_1=TestOnlySecret0003
+[ad_client]
+service_account_password=TestOnlySecret0004
+CFG
 out=$(bash "$REMOVE" 2>&1)
 [[ $? -eq 0 && ! -e $RA_DUO_DIR && ! -e $RA_SYSTEMD_DIR/duoauthproxy.service.d ]] && pass "remove runs the uninstaller and drops the drop-in" \
     || fail "remove: $out"
 ls "$RA_BACKUP_DIR"/duoauthproxy-authproxy.cfg-* >/dev/null 2>&1 && pass "remove keeps a copy of the configuration" || fail "config copy"
+kept=$(cat "$RA_BACKUP_DIR"/duoauthproxy-authproxy.cfg-* 2>/dev/null)
+[[ $kept == *"ikey=DIAAAAAAAAAAAAAAAAAA"* && $kept == *"skey= REDACTED"* && $kept == *"radius_secret_1= REDACTED"* \
+   && $kept == *"service_account_password= REDACTED"* && $kept != *TestOnlySecret* ]] \
+    && [[ $(stat -c %a "$RA_BACKUP_DIR"/duoauthproxy-authproxy.cfg-*) == 600 ]] \
+    && pass "the kept copy has no secrets" || fail "kept copy: $kept"
 mkdir -p "$RA_DUO_DIR"
 out=$(bash "$REMOVE" 2>&1)
 [[ $? -ne 0 && $out == *"not installed by radius-admin"* && -d $RA_DUO_DIR ]] && pass "a Duo install radius-admin did not make is left alone" \
