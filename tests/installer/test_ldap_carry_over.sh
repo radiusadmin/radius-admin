@@ -1,8 +1,10 @@
 #!/bin/bash
 # Upgrades keep the live LDAP connection settings: install.sh's
 # carry_over_secrets merges the live mods-available/ldap into the staged template, and
-# ldap_bind_check tests the bind with the CA file FreeRADIUS will use. Fixtures only (example
-# values in a temporary directory); needs python3, no FreeRADIUS and no directory server.
+# ldap_bind_check tests the bind with the CA file FreeRADIUS will use. fr_package_ldap_check
+# tests the directory login with a new radius-admin-freeradius package's ra-ldapwhoami before
+# the package is installed. Fixtures only (example values in a temporary directory, fake
+# ldapwhoami scripts); needs python3 and dpkg-deb, no FreeRADIUS and no directory server.
 set -uo pipefail
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 INSTALL=$ROOT/deploy/install.sh
@@ -17,8 +19,14 @@ fail() { echo "FAIL: $1"; fails=$((fails + 1)); }
 . "$ROOT/deploy/lib.sh"
 # the two functions under test, as install.sh defines them (install.sh itself runs its phases)
 eval "$(sed -n '/^carry_over_secrets() {/,/^}/p' "$INSTALL")"
-eval "$(sed -n '/^ldap_bind_check() {/,/^}/p' "$INSTALL")"
-declare -F carry_over_secrets ldap_bind_check >/dev/null || { echo "functions not found in $INSTALL"; exit 2; }
+for fn in ldap_bind_check ldap_bind_try ldap_bind_tool ldap_is_off fr_package_ldap_check; do
+    eval "$(sed -n "/^$fn() {/,/^}/p" "$INSTALL")"
+done
+eval "$(grep '^RA_LDAP_OFF_MARK=' "$INSTALL")"
+# install.sh's defaults for what the functions read (no bundled package here, check on)
+export RA_BUNDLED_LDAPWHOAMI=$W/no-bundled-package SKIP_LDAP_CHECK=0
+declare -F carry_over_secrets ldap_bind_check ldap_bind_try ldap_bind_tool ldap_is_off fr_package_ldap_check >/dev/null \
+    || { echo "functions not found in $INSTALL"; exit 2; }
 
 export RA_RADDB=$W/live
 STAGED=$W/staged
@@ -83,6 +91,68 @@ mkdir -p "$RA_RADDB/certs/site" && : > "$RA_RADDB/certs/site/ca.pem"
 out=$(PATH=$W/bin:$PATH ldap_bind_check "$RA_RADDB/mods-available/ldap" 2>&1)
 [[ $out == *"AD bind with the LDAP service account works"* ]] \
     && pass "bind test uses the CA file when it exists" || fail "bind test, CA present: $out"
+
+# 5. ldap_bind_check prefers the bundled package's ra-ldapwhoami (the library rlm_ldap uses)
+# fake tools: FAKE_NEW / FAKE_REF = ok | tls | badcred
+fake() { # fake FILE VAR
+    mkdir -p "$(dirname "$1")"
+    cat > "$1" <<EOF
+#!/bin/sh
+case "\$$2" in
+    ok) echo "dn:CN=RADIUS LDAP Bind,OU=Service Accounts,DC=example,DC=net ($2)"; exit 0 ;;
+    badcred) echo "ldap_bind: Invalid credentials (49)"; exit 49 ;;
+    *) echo "ldap_sasl_bind(SIMPLE): Can't contact LDAP server (-1) additional info: error:0A000086:SSL routines::certificate verify failed"; exit 255 ;;
+esac
+EOF
+    chmod 0755 "$1"
+}
+fake "$W/bin/ldapwhoami" FAKE_REF
+fake "$W/bundled/ra-ldapwhoami" FAKE_NEW
+out=$(FAKE_NEW=ok FAKE_REF=tls RA_BUNDLED_LDAPWHOAMI=$W/bundled/ra-ldapwhoami PATH=$W/bin:$PATH \
+      ldap_bind_check "$RA_RADDB/mods-available/ldap" 2>&1)
+[[ $out == *"AD bind with the LDAP service account works"* ]] \
+    && pass "bind test uses the bundled ra-ldapwhoami when it is installed" || fail "bundled tool not used: $out"
+out=$(FAKE_REF=ok RA_BUNDLED_LDAPWHOAMI=$W/none PATH=$W/bin:$PATH ldap_bind_check "$RA_RADDB/mods-available/ldap" 2>&1)
+[[ $out == *"AD bind with the LDAP service account works"* ]] \
+    && pass "without the bundled package the system ldapwhoami is used" || fail "system tool: $out"
+
+# 6. fr_package_ldap_check: the new package's ra-ldapwhoami, extracted from the .deb
+mkpkg() { # mkpkg NAME [with-tool]
+    local d=$W/pkg-$1
+    rm -rf "$d"; mkdir -p "$d/DEBIAN"
+    printf 'Package: radius-admin-freeradius\nVersion: 3.2.10-2~test\nArchitecture: all\nMaintainer: test <test@example.net>\nDescription: test\n' \
+        > "$d/DEBIAN/control"
+    [[ ${2:-} == with-tool ]] && fake "$d/opt/radius-admin-freeradius/libexec/ra-ldapwhoami" FAKE_NEW
+    dpkg-deb --root-owner-group --build "$d" "$W/$1.deb" >/dev/null
+}
+mkpkg new with-tool
+mkpkg old
+check() { (RA_BUNDLED_LDAPWHOAMI=$W/none PATH=$W/bin:$PATH fr_package_ldap_check "$@") 2>&1; }
+out=$(FAKE_NEW=ok FAKE_REF=ok check "$W/new.deb"); rc=$?
+[[ $rc == 0 && $out == *"logs in to the directory"* ]] \
+    && pass "upgrade check: the new package logs in, install goes ahead" || fail "new ok: rc $rc $out"
+out=$(FAKE_NEW=tls FAKE_REF=ok check "$W/new.deb"); rc=$?
+[[ $rc != 0 && $out == *"works with the FreeRADIUS installed now but not with the new package"* && $out == *"certificate verify failed"* && $out == *"Nothing was changed"* ]] \
+    && pass "upgrade check: refused when only the new package's OpenSSL cannot log in" || fail "new tls, ref ok: rc $rc $out"
+out=$(FAKE_NEW=tls FAKE_REF=tls check "$W/new.deb"); rc=$?
+[[ $rc == 0 && $out == *"inconclusive"* ]] \
+    && pass "upgrade check: directory unreachable for both is a warning, not a stop" || fail "both fail: rc $rc $out"
+out=$(FAKE_NEW=badcred FAKE_REF=ok check "$W/new.deb"); rc=$?
+[[ $rc != 0 && $out == *"rejects the LDAP bind account"* ]] \
+    && pass "upgrade check: a rejected bind account stops the install" || fail "badcred: rc $rc $out"
+out=$(FAKE_NEW=tls FAKE_REF=ok SKIP_LDAP_CHECK=1 check "$W/new.deb"); rc=$?
+[[ $rc == 0 && $out == *"--skip-ldap-check"* ]] \
+    && pass "upgrade check: --skip-ldap-check skips it with a warning" || fail "skip: rc $rc $out"
+out=$(FAKE_NEW=tls FAKE_REF=ok check "$W/old.deb"); rc=$?
+[[ $rc == 0 && $out != *"FAIL"* ]] \
+    && pass "upgrade check: a package without ra-ldapwhoami is not tested" || fail "old package: rc $rc $out"
+cp "$TEMPLATE" "$RA_RADDB/mods-available/ldap"
+printf '\n# %s\n' "$RA_LDAP_OFF_MARK" >> "$RA_RADDB/mods-available/ldap"
+out=$(FAKE_NEW=tls FAKE_REF=ok check "$W/new.deb"); rc=$?
+[[ $rc == 0 ]] && pass "upgrade check: no directory configured, nothing to test" || fail "directory off: rc $rc $out"
+rm -f "$RA_RADDB/mods-available/ldap"
+out=$(FAKE_NEW=tls FAKE_REF=ok check "$W/new.deb"); rc=$?
+[[ $rc == 0 ]] && pass "upgrade check: a new server without mods-available/ldap is not tested" || fail "no ldap file: rc $rc $out"
 
 echo
 if (( fails )); then echo "$fails FAILED"; exit 1; fi

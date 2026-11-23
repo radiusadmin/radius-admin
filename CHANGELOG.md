@@ -26,6 +26,9 @@ release, so previews sort after it.
   the directory uses the OpenSSL FIPS provider. The package also carries `ra-ldapwhoami`, built
   the same way, for testing the directory login. OpenSSL is stricter than GnuTLS: domain
   controllers with SHA-1-signed or small-key certificates, or without TLS 1.2, are refused.
+  Before installing or upgrading the package, the installer logs in to the directory with the
+  new package's library; when only the new library fails, it stops, changes nothing and says
+  why (for example "EE certificate key too weak"). `--skip-ldap-check` installs anyway.
   Servers on the distribution's FreeRADIUS are unchanged.
 - **Auth log names MAB devices.** A MAB login from a registered device shows the device's
   description, with the MAC under it, in the list and on the record. The "User / device" filter

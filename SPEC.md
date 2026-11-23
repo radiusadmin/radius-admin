@@ -816,14 +816,24 @@ CSV columns (header row required, exact names, any order tolerated by name):
   --with-tls=openssl --without-cyrus-sasl --disable-slapd`, static `liblber.a`/`libldap.a`
   linked into `rlm_ldap.so` with `-Wl,--exclude-libs` (radiusd also loads the system
   `libldap.so.2` through libpq; a second shared one would clash by SONAME and symbols). The
-  build fails unless `rlm_ldap.so` and `libexec/ra-ldapwhoami` (`ldapwhoami` built the same way,
-  for the installer's directory test) link `libssl.so.3`, no libldap/liblber/GnuTLS, take no
+  build fails unless `rlm_ldap.so` and `libexec/ra-ldapwhoami` (`ldapwhoami` built the same way)
+  link `libssl.so.3`, no libldap/liblber/GnuTLS, take no
   `ldap_*`/`ber_*` symbol from elsewhere and export none. No SASL binds. `SOURCE` names the
   openldap version and source files, `copyright` adds the OpenLDAP Public License, and
   `packages/source/` carries the openldap `.dsc` and tarballs. The bench build
   (`tools/ci/build-freeradius.sh`) uses the same library and rebuilds a prefix without
   `share/radius-admin-openldap`. The distribution's `freeradius` package keeps GnuTLS (SECURITY.md
-  exception 5); preflight says which TLS library rlm_ldap uses. Modules needing libraries the product does not use (perl, python,
+  exception 5); preflight says which TLS library rlm_ldap uses. **Installer:** the directory
+  login test (`ldap_bind_check`, freeradius phase) uses `ra-ldapwhoami` when the bundled package
+  is installed, else ldap-utils' `ldapwhoami` (`ca_file` → `LDAPTLS_CACERT`, else `ca_path` →
+  `LDAPTLS_CACERTDIR`; `LDAPTLS_REQCERT=demand`; on "Can't contact" a second run with `-d 1` adds
+  libldap's `TLS:` lines to the message). Before `fr-package` installs or upgrades the package
+  (`fr_package_ldap_check`), it extracts the new package's `ra-ldapwhoami` and binds with the
+  live `mods-available/ldap` (skipped without that file, with the "directory not configured"
+  marker, or for a package without the tool): success goes ahead; "Invalid credentials" stops;
+  any other failure stops when the current tool (installed package's `ra-ldapwhoami` or
+  `ldapwhoami`) binds, otherwise it is a warning. `--skip-ldap-check` (install.sh; `update.sh --
+  --skip-ldap-check`) skips it with a warning. Modules needing libraries the product does not use (perl, python,
   mysql, sqlite, redis, rest, …) are configured out, so the package does not depend on the build
   host; the build fails unless `rlm_sql_postgresql`, `rlm_ldap`, `rlm_eap_tls`, `rlm_sql`, `rlm_files`
   and `rlm_pap` were built. Depends are the distribution packages owning the directly linked
