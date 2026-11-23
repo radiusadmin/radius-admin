@@ -333,7 +333,7 @@ def _duo_disable_block():
     return None
 
 
-def _duo_page(test=None, preflight=None, errors=None, status_code=200):
+def _duo_page(test=None, preflight=None, errors=None, status_code=200, applied=None):
     from ..integration_fetch import read_status
     key = current_app.config["RA_DATA_KEY"]
     st = _helper("integration_status")
@@ -359,7 +359,8 @@ def _duo_page(test=None, preflight=None, errors=None, status_code=200):
         catalog_serial=cat.get("serial", 0) if cat.get("ok") else None, catalog_message=cat.get("message", ""),
         fetch=read_status(cfg()["integration_dir"], "duo"), files=_duo_files(), provider=p,
         has_skey=bool(secrets.get("skey")), in_use=ig.DUO_ID in ig.providers_in_use(), test=test,
-        switch_lock=switch_lock, preflight=preflight, errors=errors or {}, fips=_fips(), factors=unlang().DUO_FACTORS,
+        switch_lock=switch_lock, applied=applied, duo_applied=_duo_applied(),
+        pending=pending_state().get("pending", False), preflight=preflight, errors=errors or {}, fips=_fips(), factors=unlang().DUO_FACTORS,
         upload_mib=ig.UPLOAD_MAX // (1024 * 1024)), status_code
 
 
@@ -509,13 +510,8 @@ def duo_install():
     return redirect(url_for("integrations.duo"))
 
 
-@bp.route("/duo/settings", methods=["POST"])
-@role_required("admin")
-@stepup_required
-def duo_settings():
-    key = current_app.config["RA_DATA_KEY"]
-    p = ig.ensure_duo(key)
-    secrets = ig.duo_secrets(key, p)
+def _duo_form(p, secrets):
+    """The Duo settings form, checked: (settings, new secret key or '', enabled, errors)."""
     errors = {}
     s = {"ikey": form_str("ikey", maxlen=40).upper(), "api_host": form_str("api_host", maxlen=64).lower(),
          "failmode": "secure" if _fips() else (form_str("failmode", maxlen=10) or "secure"),
@@ -534,31 +530,117 @@ def duo_settings():
     block = _duo_enable_block(duo) if enabled else _duo_disable_block() if p["enabled"] else None
     if block:
         errors["enabled"] = block
-    if errors:
-        return _duo_page(errors=errors, status_code=400)
+    return s, skey, enabled, errors
+
+
+def _duo_write(key, p, secrets, s, skey, enabled):
     if skey:
         secrets["skey"] = skey
         db.execute("UPDATE ui.mfa_provider SET secrets_enc=%s WHERE id=%s",
                    (ig.encrypt_secrets(key, ig.DUO_ID, secrets), ig.DUO_ID))
     db.execute("UPDATE ui.mfa_provider SET settings=%s::jsonb, enabled=%s, updated_at=now() WHERE id=%s",
                (json.dumps(s), enabled, ig.DUO_ID))
+
+
+@bp.route("/duo/preview", methods=["POST"])
+@role_required("admin")
+@stepup_required
+def duo_preview():
+    """What saving the Duo form would apply (SPEC section 29.3), for the confirmation dialog:
+    computed inside the request's transaction, which is then rolled back (nothing is saved)."""
+    from .apply import _diff, _mask_duo
+    from ..services import pending_breakdown, read_applied, render_provider_files
+    key = current_app.config["RA_DATA_KEY"]
+    g.db_rollback = True
+    p = ig.ensure_duo(key)
+    secrets = ig.duo_secrets(key, p)
+    s, skey, enabled, errors = _duo_form(p, secrets)
+    if errors:
+        return jsonify(ok=False, errors=errors)
+    _duo_write(key, p, secrets, s, skey, enabled)
+    b = pending_breakdown()
+    diff = []
+    if b["duo_file"]:
+        diff = _diff(_mask_duo(read_applied()["providers"].get("provider-duo")),
+                     _mask_duo(render_provider_files().get("provider-duo")), "authproxy.cfg")
+        diff = diff or [("ctx", "(only secrets changed)")]
+    restarts = []
+    if b["duo_file"]:
+        restarts.append("The Duo Authentication Proxy restarts with the new configuration.")
+    if b["pending"]:
+        restarts.append("FreeRADIUS restarts (a few seconds without RADIUS).")
+    return jsonify(ok=True, errors={}, pending=b["pending"], only_duo=b["only_duo"], others=b["others"],
+                   restarts=restarts, diff=diff, enabled=enabled)
+
+
+@bp.route("/duo/settings", methods=["POST"])
+@role_required("admin")
+@stepup_required
+def duo_settings():
+    """Save the Duo settings; with then=apply (only Duo pending) or then=apply_all plus
+    confirm_all (everything pending), also apply them and run the connectivity check. Never a
+    partial apply: otherwise the settings are saved and wait for Apply (SPEC section 29.3)."""
+    from ..services import ApplyRenderError, apply_now, pending_breakdown
+    key = current_app.config["RA_DATA_KEY"]
+    p = ig.ensure_duo(key)
+    secrets = ig.duo_secrets(key, p)
+    s, skey, enabled, errors = _duo_form(p, secrets)
+    if errors:
+        return _duo_page(errors=errors, status_code=400)
+    _duo_write(key, p, secrets, s, skey, enabled)
     changed = {k: {"from": p["settings"].get(k), "to": v} for k, v in s.items() if p["settings"].get(k) != v}
     if p["enabled"] != enabled:
         changed["enabled"] = {"from": p["enabled"], "to": enabled}
     if skey:
         changed["duo_skey_updated"] = True
     ev("integration.configure", object_type="mfa_provider", object_id=ig.DUO_ID, detail=changed)
-    flash("Duo settings saved. Apply changes to send them to the Duo proxy and FreeRADIUS.", "success")
-    return redirect(url_for("integrations.duo"))
+    then = request.form.get("then", "")
+    if then not in ("apply", "apply_all"):
+        flash("Duo settings saved. Apply changes to send them to the Duo proxy and FreeRADIUS.", "success")
+        return redirect(url_for("integrations.duo"))
+    b = pending_breakdown()
+    if not b["pending"]:
+        flash("Duo settings saved. Nothing changed, so there was nothing to apply.", "success")
+        return redirect(url_for("integrations.duo"))
+    if (then == "apply" and not b["only_duo"]) or (then == "apply_all" and not form_bool("confirm_all")):
+        flash("Duo settings saved, not applied. Other changes are pending (%s): review and apply them"
+              " together." % ", ".join(b["others"]) if b["others"] else
+              "Duo settings saved, but not applied: confirm applying everything that is pending.", "error")
+        return redirect(url_for("integrations.duo"))
+    db.commit()           # the settings stay saved whatever the apply does
+    try:
+        ok, resp, output = apply_now("duo")
+    except ApplyRenderError as e:
+        flash("Duo settings saved, but the configuration could not be rendered: %s" % e, "error")
+        return redirect(url_for("integrations.duo"))
+    applied = {"ok": ok, "message": resp.get("message") or "", "rolled_back": bool(resp.get("rolled_back")),
+               "backup_id": resp.get("backup_id") if isinstance(resp.get("backup_id"), str) else None,
+               "output": output if not ok else ""}
+    test = _run_duo_test() if ok and enabled else None
+    return _duo_page(applied=applied, test=test)
 
 
 @bp.route("/duo/test", methods=["POST"])
 @role_required("operator")
 def duo_test():
+    if not _duo_applied():
+        flash("Apply your Duo settings first: until then Duo runs its sample configuration.", "error")
+        return _duo_page()
+    return _duo_page(test=_run_duo_test())
+
+
+def _duo_applied():
+    """True once radius-admin applied a Duo configuration (until then the proxy runs Duo's
+    sample authproxy.cfg, which Test would only report as broken)."""
+    from ..services import read_applied
+    return read_applied()["providers"].get("provider-duo") is not None
+
+
+def _run_duo_test():
     r = _helper("integration_test", timeout=150, id="duo")
     ev("integration.test", success=bool(r.get("ok") and r.get("passed")), object_type="integration", object_id="duo",
        detail={"message": r.get("message", "")[:300]})
-    return _duo_page(test=r)
+    return r
 
 
 @bp.route("/duo/remove", methods=["POST"])

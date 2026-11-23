@@ -16,6 +16,12 @@ release, so previews sort after it.
   or as the default.
 
 ### Changed
+- **Duo: Save applies.** Saving the Duo settings shows what changes (Duo's configuration with
+  secrets hidden, and which services restart), then saves and applies it and runs the connectivity
+  check, all on the Duo page. When other changes are pending too, the dialog lists them and offers
+  to apply everything from there (after a tick) or to save Duo only; it never applies part of
+  them. A failed apply shows the reason. Test asks you to apply your Duo settings first instead
+  of checking Duo's sample configuration.
 - **Duo page: an Enabled / Disabled switch and hidden stored secrets.** The Duo provider is turned
   on and off with a switch that shows its state; when it cannot be changed (Duo not installed, or a
   second-factor rule uses it) the switch is greyed out with the reason next to it, instead of an
@@ -24,6 +30,9 @@ release, so previews sort after it.
   remote MFA server shows its shared secret the same way.
 
 ### Fixed
+- **Re-authentication no longer ends in "Method Not Allowed".** When an action such as Remove
+  Duo asked you to confirm your identity first, the portal then sent you to the action's own
+  address, which only accepts form posts. It now returns you to the page you were on.
 - **Second factor: no silent device lockout.** Requiring a second factor for local device admins
   now needs an exempt break-glass account, or an explicit confirmation that there is none: while the
   provider is unreachable FreeRADIUS rejects these logins, so devices do not fall back to their own

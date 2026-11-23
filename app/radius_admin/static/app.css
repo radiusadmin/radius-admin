@@ -786,6 +786,17 @@ table.rules-table td { overflow-wrap: anywhere; }
 .confirm-dialog h2 { font-size: 1.05rem; line-height: 1.35; margin: 0; overflow-wrap: anywhere; }
 .confirm-dialog p { margin: .5rem 0 0; color: var(--ink-soft); overflow-wrap: anywhere; }
 .confirm-actions { display: flex; justify-content: flex-end; gap: .5rem; margin-top: 1.25rem; flex-wrap: wrap; }
+/* Duo settings: what Save would apply (SPEC section 29.3) */
+.duo-apply-dialog { width: min(40rem, calc(100vw - 2rem)); }
+.duo-apply-dialog [hidden] { display: none; }
+.duo-apply-dialog .dialog-body { padding: 1.25rem 1.25rem 1rem; max-height: calc(100vh - 4rem); overflow-y: auto; }
+.duo-apply-dialog ul { margin: .6rem 0 0; padding-left: 1.2rem; color: var(--ink-soft); }
+.duo-apply-dialog details { margin-top: .6rem; }
+.duo-apply-dialog details summary { cursor: pointer; color: var(--focus); font-size: .9rem; }
+.duo-apply-dialog pre.diff { max-height: 16rem; overflow: auto; margin-top: .4rem; font-size: .8rem; }
+.duo-apply-dialog label.check { margin-top: .6rem; }
+.pending-note { background: var(--amber-bg); border: 1px solid var(--amber-line); border-radius: var(--radius-s);
+  padding: .5rem .8rem; margin: .5rem 0 .75rem; }
 @keyframes ra-dialog-in { from { opacity: 0; transform: translateY(6px) scale(.98); } }
 @media (max-width: 480px) { .confirm-actions .btn { flex: 1 1 auto; } }
 

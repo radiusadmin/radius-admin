@@ -649,3 +649,151 @@ def switch_admins(conn=None):
         " WHERE g.groupname = %s GROUP BY g.username ORDER BY g.username",
         (SWITCH_GROUP,), conn=conn)
     return rows
+
+
+# ------------------------------------------------------------ pending changes by part, apply
+MFA_TAIL_MARK = "\n#\n#  Second-factor providers (SPEC section 29)"
+_TOP_BLOCK = re.compile(r"(?ms)^(\w+)(?: ([^\s{]+))? \{\n.*?^\}\n")
+
+
+def _split_clients(text):
+    """(base, {(kind, name): block}) of a clients file: the part render_clients writes, and
+    the top-level blocks of the second-factor tail (unlang.render_mfa)."""
+    if text is None:
+        return None, {}
+    i = text.find(MFA_TAIL_MARK)
+    if i < 0:
+        return text, {}
+    return text[:i], {(m.group(1), m.group(2) or ""): m.group(0) for m in _TOP_BLOCK.finditer(text[i:])}
+
+
+def _block_provider(key):
+    """The provider id a second-factor block belongs to: the listener and its clients section
+    are Duo's (they exist only with Duo on), home_server/pool/realm name their provider."""
+    u = unlang()
+    kind, name = key
+    if kind == "listen" or name == u.MFA_CLIENTS_SECTION:
+        return "duo"
+    return name[len(u.MFA_REALM_PREFIX):] if name.startswith(u.MFA_REALM_PREFIX) else name
+
+
+def pending_breakdown(conn=None):
+    """What an apply would change, by part (SPEC section 29.3): policy, certificates, the clients
+    file without its second-factor tail ("clients"), the second-factor blocks of providers other
+    than Duo ("mfa", their ids), and Duo ("duo": its blocks or its file; "duo_file": the Duo
+    proxy's configuration). "others" names every part besides Duo; "only_duo" is true when Duo
+    is all that is pending. A pending state this comparison cannot explain (no applied copy, a
+    copy that cannot be opened) counts as another change, so it never looks like "only Duo"."""
+    from . import integrations
+    if conn is None:
+        g.pop("pending_state", None)     # the caller may just have saved something
+    state = pending_state(conn)
+    out = {"pending": bool(state.get("pending")), "policy": False, "certificates": False, "clients": False,
+           "mfa": [], "duo": False, "duo_file": False, "others": [], "only_duo": False}
+    if state.get("error"):
+        out["others"] = ["The configuration cannot be rendered: %s" % state["error"]]
+        return out
+    policy, clients = render_all(conn)
+    providers = render_provider_files(conn)
+    applied = read_applied()
+    out["policy"] = policy != applied["policy"]
+    out["certificates"] = providers.get("certificates") != applied["providers"].get("certificates")
+    base, blocks = _split_clients(clients)
+    old_base, old_blocks = _split_clients(applied["clients"])
+    out["clients"] = base != old_base
+    changed = {_block_provider(k) for k in set(blocks) | set(old_blocks) if blocks.get(k) != old_blocks.get(k)}
+    duo_id = integrations.DUO_ID
+    staged_duo = providers.get("provider-duo")
+    out["duo_file"] = staged_duo is not None and staged_duo != applied["providers"].get("provider-duo")
+    out["duo"] = out["duo_file"] or duo_id in changed
+    out["mfa"] = sorted(changed - {duo_id})
+    labels = []
+    if out["policy"]:
+        labels.append("Policy")
+    if out["certificates"]:
+        labels.append("Certificates")
+    if out["clients"]:
+        labels.append("RADIUS clients")
+    labels += ["Second-factor provider %s" % pid for pid in out["mfa"]]
+    if out["pending"] and not labels and not out["duo"]:
+        labels.append("Changes not in the last applied copy")
+    out["others"] = labels
+    out["only_duo"] = out["pending"] and out["duo"] and not labels
+    return out
+
+
+def helper_wait(duo_change):
+    """Seconds to wait for the helper: helper_timeout, or helper_duo_timeout when the call may also
+    restart the Duo Authentication Proxy (its worst case, both services failing and being restored,
+    is about 180 s with the helper's defaults; SPEC section 29.4)."""
+    c = current_app.config["RA"]
+    return max(c["helper_timeout"], c.get("helper_duo_timeout", 210)) if duo_change else c["helper_timeout"]
+
+
+def call_helper(action, duo_change=False, **kw):
+    from . import helper_client
+    try:
+        return helper_client.call(current_app.config["RA"]["helper_socket"], action,
+                                  timeout=helper_wait(duo_change), **kw)
+    except helper_client.HelperError as e:
+        return {"ok": False, "action": action, "message": str(e)}
+
+
+def log_apply(action, ok, message, policy_sha=None, clients_sha=None, backup_id=None, providers_sha=None):
+    db.execute("INSERT INTO ui.apply_log (actor, action, policy_sha256, clients_sha256, success, message, backup_id,"
+               " providers_sha256) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
+               (g.user["username"], action, policy_sha, clients_sha, ok, (message or "")[:2000], backup_id,
+                providers_sha))
+
+
+class ApplyChanged(Exception):
+    """The configuration changed after the admin reviewed it (the 'expected' token differs)."""
+
+
+class ApplyRenderError(Exception):
+    """The configuration cannot be rendered (stored data the renderer refuses)."""
+
+
+def apply_now(source, expected=None):
+    """Render, stage and apply everything pending through the helper, then log it, keep the
+    applied copy and audit config.apply (detail 'source': the page that asked, 'apply' or 'duo').
+    Shared by the Apply page and the Duo page (SPEC section 29.3). Raises ApplyRenderError when
+    the configuration cannot be rendered, ApplyChanged when `expected` no longer matches.
+    Returns (ok, helper response, radiusd output)."""
+    from .audit import write as audit_write
+    from .security import client_ip
+    try:
+        policy, clients = render_all()
+        providers = render_provider_files()
+    except Exception as e:
+        raise ApplyRenderError(str(e)) from e
+    ph, ch, xh = sha256_hex(policy), sha256_hex(clients), providers_sha256(providers)
+    if expected and expected != ph + ":" + ch + ":" + xh:
+        raise ApplyChanged()
+    write_staging(policy, clients, providers=providers)
+    staged_duo, staged_certs = providers.get("provider-duo"), providers.get("certificates")
+    prev = read_applied()["providers"]
+    # a certificate change may also reload the portal: give the helper the longer time
+    try:
+        resp = call_helper("apply", duo_change=(staged_duo is not None and staged_duo != prev.get("provider-duo"))
+                           or (staged_certs is not None and staged_certs != prev.get("certificates")))
+    finally:
+        clear_staging(policy, clients, providers)
+    ok = bool(resp.get("ok"))
+    # Trust the hashes we staged; flag a mismatch reported by the helper.
+    hp, hc = resp.get("policy_sha256"), resp.get("clients_sha256")
+    if ok and ((hp and hp != ph) or (hc and hc != ch)):
+        resp["message"] = (resp.get("message") or "") + " (warning: helper hash differs from staged hash)"
+    backup_id = resp.get("backup_id") if isinstance(resp.get("backup_id"), str) else None
+    log_apply("apply", ok, resp.get("message"), ph, ch, backup_id, providers_sha=xh)
+    if ok:
+        save_applied(policy, clients, backup_id=backup_id, providers=providers)
+    g.pop("pending_state", None)
+    audit_write("config.apply", success=ok, actor=g.user["username"], actor_ip=client_ip(), object_type="config",
+                detail={"policy_sha256": ph, "clients_sha256": ch, "providers_sha256": xh, "backup_id": backup_id,
+                        "rolled_back": bool(resp.get("rolled_back")), "source": source,
+                        "message": (resp.get("message") or "")[:500]})
+    output = resp.get("output")
+    if isinstance(output, list):
+        output = "\n".join(str(x) for x in output)
+    return ok, resp, output or ""
