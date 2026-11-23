@@ -240,6 +240,11 @@ def _policy_form(providers, client_ids):
             exempt.append(admins[name.lower()])
     if len(exempt) > ig.EXEMPT_MAX:
         errors["exempt"] = "At most %d exempt accounts." % ig.EXEMPT_MAX
+    # When the provider is down, FreeRADIUS rejects these logins (it does not stay silent), so
+    # devices do not fall back to their own accounts: keep a break-glass account, or confirm.
+    if out["local"]["enabled"] and not exempt and "exempt" not in errors and not form_bool("no_exempt_ok"):
+        errors["exempt"] = ("Add a break-glass account here, or confirm below that no local account is exempt:"
+                            " if the provider cannot be reached, every local device admin login is rejected.")
     return out, exempt, errors
 
 
@@ -271,6 +276,8 @@ def policy():
                 db.execute("DELETE FROM ui.mfa_exempt")
                 for name in new_exempt:
                     db.execute("INSERT INTO ui.mfa_exempt (username) VALUES (%s)", (name,))
+            if new["local"]["enabled"] and not new_exempt:
+                changed["no_exempt_confirmed"] = True
             ev("integration.policy", object_type="mfa_policy", detail=changed)
             flash("Second-factor rules saved. They apply to the next device admin login.", "success")
             return redirect(url_for("integrations.index"))

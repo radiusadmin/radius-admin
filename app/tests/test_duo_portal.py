@@ -213,8 +213,11 @@ def test_duo_config_staged_and_applied(app, browser, superconn, logged_in, idir)
         assert "home_server radius_admin_mfa_duo" in fh.read()
     row = q(superconn, "SELECT providers_sha256 FROM ui.apply_log WHERE action='apply' ORDER BY id DESC LIMIT 1")[0][0]
     assert row and len(row) == 64
-    with open(os.path.join(staging, "applied", "provider-duo")) as fh:
-        assert fh.read() == staged
+    with open(os.path.join(staging, "applied", "provider-duo")) as fh:     # sealed with the data key
+        assert secrets["skey"] not in fh.read()
+    with app.app_context():
+        from radius_admin import services
+        assert services.read_applied(staging)["providers"]["provider-duo"] == staged
     # nothing pending afterwards; turning Duo off removes its file from the next staging
     with app.test_request_context():
         from radius_admin import services
@@ -243,6 +246,38 @@ def test_duo_can_serve_local_accounts_in_the_rules(browser, superconn, logged_in
     assert r.status_code == 400 and "rule uses Duo" in browser.text(r)
     browser.post("/integrations/duo/delete", csrf_page="/integrations/")
     assert q(superconn, "SELECT count(*) FROM ui.mfa_provider WHERE id='duo'")[0][0] == 1
+
+
+def test_local_rule_needs_break_glass_or_confirmation(browser, superconn, logged_in, idir):
+    """A Duo outage rejects (not drops) every local admin login the rule covers, so devices do not
+    fall back to their own accounts: the local rule needs an exempt account or an explicit OK."""
+    h = helper_of(browser)
+    h.duo["installed"] = {"version": "6.8.1", "verified": "catalog"}
+    admin(browser, superconn, logged_in)
+    browser.post("/integrations/duo/settings", dict(SETTINGS_FORM, enabled="1"), csrf_page="/integrations/duo")
+    form = {"local_enabled": "1", "local_provider": "duo", "local_scope": "all", "directory_scope": "all",
+            "exempt": ""}
+    r = browser.post("/integrations/policy", form, csrf_page="/integrations/policy")
+    assert r.status_code == 400 and "break-glass" in browser.text(r)
+    assert q(superconn, "SELECT enabled FROM ui.mfa_policy WHERE account_kind='local'")[0] == (False,)
+    # the directory rule alone leaves local accounts alone: no exempt account needed
+    r = browser.post("/integrations/policy", {"directory_enabled": "1", "directory_provider": "duo",
+                                              "local_scope": "all", "directory_scope": "all", "exempt": ""},
+                     csrf_page="/integrations/policy")
+    assert r.status_code == 302, browser.text(r)
+    # an explicit confirmation is accepted and audited
+    r = browser.post("/integrations/policy", dict(form, no_exempt_ok="1"), csrf_page="/integrations/policy")
+    assert r.status_code == 302, browser.text(r)
+    assert q(superconn, "SELECT enabled FROM ui.mfa_policy WHERE account_kind='local'")[0] == (True,)
+    d = audit(superconn, "integration.policy")[-1]
+    assert d.get("no_exempt_confirmed") is True
+    # clearing the last exempt account later needs the same confirmation
+    q(superconn, "INSERT INTO radusergroup (username, groupname, priority) VALUES ('breakglass', 'net-admins', 1)")
+    assert browser.post("/integrations/policy", dict(form, exempt="breakglass"),
+                        csrf_page="/integrations/policy").status_code == 302
+    r = browser.post("/integrations/policy", form, csrf_page="/integrations/policy")
+    assert r.status_code == 400 and "break-glass" in browser.text(r)
+    assert q(superconn, "SELECT username FROM ui.mfa_exempt") == [("breakglass",)]
 
 
 def test_remove_and_test(browser, superconn, logged_in, idir):
