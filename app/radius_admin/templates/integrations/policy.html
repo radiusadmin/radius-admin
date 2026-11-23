@@ -41,6 +41,7 @@
     <p id="exempt-hint" class="small muted">Keep one break-glass account here: if the provider cannot be reached, logins that need a second factor are rejected.</p>
     {{ m.field_error(errors, 'exempt') }}
     {% if policy['local'].enabled and not exempt %}<p class="warn-text">No local account is exempt. If the provider is unreachable, no device admin can log in.</p>{% endif %}
+    <label class="check"><input type="checkbox" name="no_exempt_ok" value="1"> Require the second factor for local accounts without an exempt account (no break-glass login on the devices while the provider is unreachable)</label>
   </section>
   <div class="actions"><button type="submit" class="btn btn-primary">Save rules</button>
   <a class="btn btn-quiet" href="{{ url_for('integrations.index') }}">Cancel</a></div>

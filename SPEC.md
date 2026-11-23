@@ -1556,7 +1556,10 @@ complete on the FreeRADIUS side and bench-tested with a stand-in.
   Message-Authenticator, on/off; a provider used by an enabled rule cannot be turned off, and one named
   by any rule cannot be removed); Second-factor rules (`/integrations/policy`): per account kind on/off,
   provider (must be on; a remote server only for directory accounts), all or selected clients
-  (at least one), exempt local device admins (at most 10, must be local device admins). Audit:
+  (at least one), exempt local device admins (at most 10, must be local device admins). The local
+  rule on with no exempt account needs the confirmation `no_exempt_ok` (a provider that cannot be
+  reached makes FreeRADIUS reject, not drop, these logins, so devices do not fall back to their own
+  accounts); such a save records `no_exempt_confirmed: true` in the audit detail. Audit:
   `integration.provider_create` / `_update` / `_delete` (detail without secrets: `shared_key_set`,
   `shared_key_updated`), `integration.policy`. FIPS mode: remote servers are not offered and the rules
   refuse them (the password would leave the server protected only by RADIUS's MD5-based hiding); in
@@ -1657,7 +1660,8 @@ unreachable). The portal pages that drive this follow.
   --log-group duo_authproxy_grp --create-init-script yes --enable-selinux no --silent` (it creates
   the user and group, writes and enables `/etc/systemd/system/duoauthproxy.service`, Type=forking,
   twistd started as root dropping to the service user; `conf/authproxy.cfg` owned by the service
-  user, 0640). A running proxy is stopped first. Drop-in
+  user, 0640). A running proxy is stopped first, and started again if the install then fails.
+  Drop-in
   `duoauthproxy.service.d/radius-admin.conf`: `ProtectSystem=strict` with write access to
   `log`, `run`, `conf` and `-/etc/duoauthproxy` (Duo's secret storage), private /tmp and devices,
   protected kernel and cgroups, `RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK`,
@@ -1717,7 +1721,10 @@ unreachable). The portal pages that drive this follow.
   `providers_sha256` (one SHA-256 over the provider files, '' without any) in the "expected" token
   and in `ui.apply_log.providers_sha256` (new column, sql/101-mfa.sql); `pending_state` compares it
   with the last apply (NULL counts as ''). The applied copy and its history keep the provider files;
-  a rollback to a set without a Duo file leaves the applied Duo copy, like the helper.
+  a rollback to a set without a Duo file leaves the applied Duo copy, like the helper. The history
+  (`applied/history/<backup_id>/`) keeps the newest `services.APPLIED_HISTORY_KEEP` (50, the helper's
+  default `keep_backups`) sets; older ones, with the provider secrets they hold, are removed after
+  each apply and rollback.
 - **Page** `/integrations/duo` (viewers: state; operators: test; admin + step-up: everything else):
   state (installed version, catalog-checked or Unverified, service running and listening, provider
   on/off, last install or removal), live progress and the install log (`/integrations/duo/status`,

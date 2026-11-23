@@ -18,7 +18,7 @@ mkdir -p "$RA_SYSTEMD_DIR" "$W/opt"
 cat > "$W/systemctl" <<EOF
 #!/bin/sh
 echo "\$*" >> "$W/systemctl.log"
-case "\$1" in is-active) exit 1;; esac
+case "\$1" in is-active) [ -e "$W/active" ] && exit 0; exit 1;; esac
 exit 0
 EOF
 chmod 0755 "$W/systemctl"
@@ -44,6 +44,7 @@ MK
 dir=""
 while [ $# -gt 0 ]; do case "$1" in --install-dir) dir=$2; shift;; esac; shift; done
 here=$(cd "$(dirname "$0")" && pwd)
+[ -n "${FAKE_DUO_INSTALL_FAIL:-}" ] && { echo "fake installer failed" >&2; exit 3; }
 mkdir -p "$dir/conf" "$dir/log" "$dir/run"
 cp "$here/built-by" "$dir/built-by"
 [ "$(stat -c %U "$here/install")" = root ] && [ "$(stat -c %U "$here")" = root ] && echo "owner root" > "$dir/owner-check"
@@ -85,6 +86,16 @@ printf '; radius-admin: test\n' > "$RA_DUO_DIR/conf/authproxy.cfg"
 bash "$INSTALL" "$W/request.json" "$W/build.tgz" >/dev/null 2>&1
 grep -q '^restart duoauthproxy.service' "$W/systemctl.log" && pass "with an applied configuration the service restarts" \
     || fail "restart: $(cat "$W/systemctl.log")"
+
+# a running proxy that the install stopped is started again when Duo's installer fails
+touch "$W/active"; : > "$W/systemctl.log"
+out=$(FAKE_DUO_INSTALL_FAIL=1 bash "$INSTALL" "$W/request.json" "$W/build.tgz" 2>&1); rc=$?
+[[ $rc -ne 0 ]] && grep -q '^stop duoauthproxy.service' "$W/systemctl.log" \
+    && [[ $(tail -n 1 "$W/systemctl.log") == "start duoauthproxy.service" && $out == *"starting the previous duoauthproxy"* ]] \
+    && pass "a failed install starts the proxy it stopped" || fail "failed install: rc=$rc $(cat "$W/systemctl.log") $out"
+rm -f "$W/active"; : > "$W/systemctl.log"
+out=$(FAKE_DUO_INSTALL_FAIL=1 bash "$INSTALL" "$W/request.json" "$W/build.tgz" 2>&1)
+! grep -q '^start' "$W/systemctl.log" && pass "a failed install leaves a stopped proxy stopped" || fail "stopped: $(cat "$W/systemctl.log")"
 
 # unsafe archives and failing builds install nothing
 mkdir -p "$W/evil/duoauthproxy-9.9.9-src"; echo x > "$W/evil/duoauthproxy-9.9.9-src/Makefile"; echo x > "$W/evil/other"

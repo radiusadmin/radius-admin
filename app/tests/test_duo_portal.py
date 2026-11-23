@@ -245,6 +245,38 @@ def test_duo_can_serve_local_accounts_in_the_rules(browser, superconn, logged_in
     assert q(superconn, "SELECT count(*) FROM ui.mfa_provider WHERE id='duo'")[0][0] == 1
 
 
+def test_local_rule_needs_break_glass_or_confirmation(browser, superconn, logged_in, idir):
+    """A Duo outage rejects (not drops) every local admin login the rule covers, so devices do not
+    fall back to their own accounts: the local rule needs an exempt account or an explicit OK."""
+    h = helper_of(browser)
+    h.duo["installed"] = {"version": "6.8.1", "verified": "catalog"}
+    admin(browser, superconn, logged_in)
+    browser.post("/integrations/duo/settings", dict(SETTINGS_FORM, enabled="1"), csrf_page="/integrations/duo")
+    form = {"local_enabled": "1", "local_provider": "duo", "local_scope": "all", "directory_scope": "all",
+            "exempt": ""}
+    r = browser.post("/integrations/policy", form, csrf_page="/integrations/policy")
+    assert r.status_code == 400 and "break-glass" in browser.text(r)
+    assert q(superconn, "SELECT enabled FROM ui.mfa_policy WHERE account_kind='local'")[0] == (False,)
+    # the directory rule alone leaves local accounts alone: no exempt account needed
+    r = browser.post("/integrations/policy", {"directory_enabled": "1", "directory_provider": "duo",
+                                              "local_scope": "all", "directory_scope": "all", "exempt": ""},
+                     csrf_page="/integrations/policy")
+    assert r.status_code == 302, browser.text(r)
+    # an explicit confirmation is accepted and audited
+    r = browser.post("/integrations/policy", dict(form, no_exempt_ok="1"), csrf_page="/integrations/policy")
+    assert r.status_code == 302, browser.text(r)
+    assert q(superconn, "SELECT enabled FROM ui.mfa_policy WHERE account_kind='local'")[0] == (True,)
+    d = audit(superconn, "integration.policy")[-1]
+    assert d.get("no_exempt_confirmed") is True
+    # clearing the last exempt account later needs the same confirmation
+    q(superconn, "INSERT INTO radusergroup (username, groupname, priority) VALUES ('breakglass', 'net-admins', 1)")
+    assert browser.post("/integrations/policy", dict(form, exempt="breakglass"),
+                        csrf_page="/integrations/policy").status_code == 302
+    r = browser.post("/integrations/policy", form, csrf_page="/integrations/policy")
+    assert r.status_code == 400 and "break-glass" in browser.text(r)
+    assert q(superconn, "SELECT username FROM ui.mfa_exempt") == [("breakglass",)]
+
+
 def test_remove_and_test(browser, superconn, logged_in, idir):
     h = helper_of(browser)
     h.duo["installed"] = {"version": "6.8.1", "verified": "catalog"}

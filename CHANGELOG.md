@@ -5,6 +5,19 @@ Each release has a section here. `main` builds are the stable releases (`0.2.0`)
 show the "Unreleased" section plus their commits. Bump `VERSION` on `dev` right after a
 release, so previews sort after it.
 
+## Unreleased
+
+### Fixed
+- **Second factor: no silent device lockout.** Requiring a second factor for local device admins
+  now needs an exempt break-glass account, or an explicit confirmation that there is none: while the
+  provider is unreachable FreeRADIUS rejects these logins, so devices do not fall back to their own
+  accounts.
+- **Duo: a failed install no longer leaves the proxy stopped.** The installer starts the proxy it
+  stopped again when Duo's installer fails.
+- **Old copies of provider secrets are removed.** The portal's history of applied files (which
+  includes Duo's configuration with its secret key) now keeps the same 50 sets as the helper's
+  backups instead of growing without limit.
+
 ## 0.3.0 - 2026-11-20
 
 ### Added

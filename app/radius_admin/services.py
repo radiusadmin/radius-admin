@@ -3,6 +3,8 @@ staging files, user/account operations."""
 import datetime
 import functools
 import os
+import re
+import shutil
 import tempfile
 import zoneinfo
 
@@ -401,6 +403,22 @@ def read_applied(base=None):
     return out
 
 
+# applied/history keeps as many sets as the helper keeps backups (helper.conf keep_backups,
+# default 50); older sets can no longer be rolled back to and hold old provider secrets.
+APPLIED_HISTORY_KEEP = 50
+_HISTORY_ID_RE = re.compile(r"[0-9]{8}T[0-9]{6}Z")
+
+
+def _prune_history(d):
+    h = os.path.join(d, "history")
+    try:
+        names = sorted((n for n in os.listdir(h) if _HISTORY_ID_RE.fullmatch(n)), reverse=True)
+    except FileNotFoundError:
+        return
+    for n in names[APPLIED_HISTORY_KEEP:]:
+        shutil.rmtree(os.path.join(h, n), ignore_errors=True)
+
+
 def save_applied(policy, clients, base=None, backup_id=None, providers=None):
     """Record what is now live. The helper's backup <backup_id> holds the files that
     were live BEFORE this apply, so the previous applied copy is archived under
@@ -418,6 +436,7 @@ def save_applied(policy, clients, base=None, backup_id=None, providers=None):
     _write_0600(os.path.join(d, "clients"), clients)
     if providers is not None:
         _put_provider_files(d, providers)
+    _prune_history(d)
 
 
 def restore_applied_from_history(backup_id, base=None, new_backup_id=None, certs_restored=False):
@@ -434,6 +453,7 @@ def restore_applied_from_history(backup_id, base=None, new_backup_id=None, certs
         _write_0600(os.path.join(nh, "policy"), prev["policy"])
         _write_0600(os.path.join(nh, "clients"), prev["clients"])
         _put_provider_files(nh, prev["providers"])
+        _prune_history(d)
     h = os.path.join(d, "history", backup_id)
     try:
         with open(os.path.join(h, "policy"), encoding="utf-8") as fh:
