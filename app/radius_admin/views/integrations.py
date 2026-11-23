@@ -78,7 +78,7 @@ def index():
                            timeout_hints=timeout_hints(policy, all_clients),
                            exempt=ig.load_exempt(), clients=clients, type_labels=ig.TYPE_LABELS,
                            kind_labels=ig.KIND_LABELS, in_use=ig.providers_in_use(),
-                           remote_allowed=_remote_allowed(), fips=_fips(), s=get_settings())
+                           remote_allowed=_remote_allowed(), s=get_settings())
 
 
 # ---------------------------------------------------------------- remote RADIUS MFA servers
@@ -360,7 +360,7 @@ def _duo_page(test=None, preflight=None, errors=None, status_code=200, applied=N
         fetch=read_status(cfg()["integration_dir"], "duo"), files=_duo_files(), provider=p,
         has_skey=bool(secrets.get("skey")), in_use=ig.DUO_ID in ig.providers_in_use(), test=test,
         switch_lock=switch_lock, applied=applied, push=push, duo_rules=[d for _, d in _duo_rules()], duo_applied=_duo_applied(),
-        pending=pending_state().get("pending", False), preflight=preflight, errors=errors or {}, fips=_fips(), factors=unlang().DUO_FACTORS,
+        pending=pending_state().get("pending", False), preflight=preflight, errors=errors or {}, factors=unlang().DUO_FACTORS,
         upload_mib=ig.UPLOAD_MAX // (1024 * 1024)), status_code
 
 
