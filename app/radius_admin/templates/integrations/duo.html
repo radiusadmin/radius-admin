@@ -122,8 +122,19 @@
 
 <section class="panel" id="duo-connect" aria-labelledby="duo-cfg-h">
   <h2 id="duo-cfg-h">3. Connect to Duo</h2>
-  <p class="small muted">From the Duo Admin Panel: protect an application of type "RADIUS" and copy its keys. Saving needs Apply changes to reach the Duo proxy and FreeRADIUS.</p>
-  <form method="post" action="{{ url_for('integrations.duo_settings') }}" class="stack narrow">
+  <p class="small muted">From the Duo Admin Panel: protect an application of type "RADIUS" and copy its keys. Save shows what changes and applies it to the Duo proxy and FreeRADIUS.</p>
+  {% if applied %}
+  <div id="duo-applied" class="flash {{ 'flash-success' if applied.ok else 'flash-error' }}" role="{{ 'status' if applied.ok else 'alert' }}">
+    <p>{% if applied.ok %}Duo settings saved and applied: {{ applied.message }}.{% else %}Duo settings saved, but the apply failed: {{ applied.message or 'the helper reported an error' }}.{% endif %}</p>
+    {% if applied.rolled_back %}<p class="small">The previous configuration was restored.</p>{% endif %}
+    {% if applied.backup_id %}<p class="small">Backup of the previous files: <span class="mono">{{ applied.backup_id }}</span></p>{% endif %}
+  </div>
+  {% if applied.output %}<pre class="code" tabindex="0" aria-label="radiusd output">{{ applied.output }}</pre>{% endif %}
+  {% elif pending %}
+  <p class="pending-note">Changes are waiting to be applied. <a href="{{ url_for('apply.index') }}">Review and apply</a></p>
+  {% endif %}
+  <form method="post" action="{{ url_for('integrations.duo_settings') }}" class="stack narrow" id="duo-settings"
+        data-duo-preview="{{ url_for('integrations.duo_preview') }}" data-busy="Saving…">
     {{ m.csrf() }}
     {% set s = provider.settings if provider else {} %}
     <label for="ikey">Integration key</label>
@@ -148,7 +159,28 @@
     </fieldset>
     {{ m.switch('enabled', 'Duo provider', provider and provider.enabled, locked=switch_lock, errors=errors) }}
     <p class="small muted">Enabled: FreeRADIUS can send logins to Duo once it is chosen in the <a href="{{ url_for('integrations.policy') }}">second-factor rules</a>.</p>
-    <div class="actions"><button type="submit" class="btn btn-primary">Save</button></div>
+    <div class="actions"><button type="submit" class="btn btn-primary" data-save>Save</button></div>
+    <dialog id="duo-apply-dialog" class="confirm-dialog duo-apply-dialog" aria-labelledby="duo-apply-title">
+      <div class="dialog-body">
+        <h2 id="duo-apply-title" data-title>Save and apply the Duo settings?</h2>
+        <ul class="small" data-restarts></ul>
+        <p class="small muted">Applying takes up to ~3 minutes when the Duo proxy restarts. Logins keep working with the current configuration until it is replaced; a failure restores it.</p>
+        <details data-diff-wrap hidden><summary>Changes to authproxy.cfg (secrets hidden)</summary>
+          <pre class="diff" tabindex="0" aria-label="Changes to authproxy.cfg" data-diff></pre></details>
+        <div data-others hidden>
+          <p>Applying from here would send these to FreeRADIUS too:</p>
+          <ul class="small" data-others-list></ul>
+          <label class="check"><input type="checkbox" name="confirm_all" value="1" data-confirm-all> I reviewed them: apply all pending changes from here</label>
+          <p class="small muted">Or save Duo only: nothing goes live until you <a href="{{ url_for('apply.index') }}">review and apply</a>.</p>
+        </div>
+        <div class="confirm-actions">
+          <button type="button" class="btn btn-quiet" data-cancel>Cancel</button>
+          <button type="submit" name="then" value="save" class="btn" data-save-only data-busy-text="Saving…">Save only</button>
+          <button type="submit" name="then" value="apply_all" class="btn btn-primary" data-apply-all hidden disabled data-busy-text="Applying, up to ~3 minutes…">Apply all</button>
+          <button type="submit" name="then" value="apply" class="btn btn-primary" data-apply data-busy-text="Applying, up to ~3 minutes…">Save and apply</button>
+        </div>
+      </div>
+    </dialog>
   </form>
 </section>
 {% endif %}
@@ -157,7 +189,11 @@
 <section class="panel" id="duo-test" aria-labelledby="duo-test-h">
   <h2 id="duo-test-h">4. Test</h2>
   <p class="small muted">Duo's connectivity check with the applied configuration: Duo's API and the password check on this server.</p>
+  {% if duo_applied %}
   <form method="post" action="{{ url_for('integrations.duo_test') }}#duo-test" data-busy="Testing…">{{ m.csrf() }}<button class="btn" type="submit">Run the check</button></form>
+  {% else %}
+  <p class="warn-text">Apply your Duo settings first: until then the Duo proxy runs Duo's sample configuration, which the check can only report as broken.</p>
+  {% endif %}
   {% if test %}
   {% if test.ok %}<p class="flash {{ 'flash-success' if test.passed else 'flash-error' }}">{{ test.message[:1]|upper ~ test.message[1:] }}.</p>
   <pre class="terminal" tabindex="0" aria-label="Connectivity check output">{{ test.output }}</pre>

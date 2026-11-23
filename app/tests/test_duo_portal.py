@@ -284,6 +284,7 @@ def test_remove_and_test(browser, superconn, logged_in, idir):
     h.duo["installed"] = {"version": "6.8.1", "verified": "catalog"}
     admin(browser, superconn, logged_in)
     browser.post("/integrations/duo/settings", dict(SETTINGS_FORM, enabled="1"), csrf_page="/integrations/duo")
+    browser.post("/apply/apply", {}, csrf_page="/apply/")          # Test needs an applied configuration
     n = len(h.requests)
     browser.post("/integrations/duo/remove", csrf_page="/integrations/duo")
     assert not any(r_["action"] == "integration_remove" for r_ in h.requests[n:])      # still on
@@ -414,6 +415,8 @@ def test_checks_return_to_their_section(browser, superconn, logged_in, idir):
     fragment, so the result page opens at the result instead of the top."""
     helper_of(browser).duo.update(installed={"version": "6.8.1", "verified": "catalog"}, service_active=True)
     admin(browser, superconn, logged_in)
+    browser.post("/integrations/duo/settings", dict(SETTINGS_FORM, enabled="1"), csrf_page="/integrations/duo")
+    browser.post("/apply/apply", {}, csrf_page="/apply/")          # Test needs an applied configuration
     body = browser.text(browser.get("/integrations/duo"))
     assert 'action="/integrations/duo/check#duo-check"' in body and 'id="duo-check"' in body
     assert 'action="/integrations/duo/test#duo-test"' in body and 'id="duo-test"' in body

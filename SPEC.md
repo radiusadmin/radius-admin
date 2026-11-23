@@ -489,6 +489,9 @@ No Flask sessions/itsdangerous; own server-side sessions (§3.2).
   users (admin: create w/ temp password, role, enable/disable, unlock, reset MFA),
   account (change password, MFA, list/revoke own sessions).
 - Pending changes = render(current DB) differs from last successful apply hashes.
+- One apply path: `services.apply_now(source)` renders, stages, calls the helper's `apply`,
+  writes `ui.apply_log`, keeps the applied copy, removes the staged files and audits
+  `config.apply` with detail `source` (`apply`: the Apply page; `duo`: the Duo page, section 29.3).
 - Every mutation and every auth event → ui.audit_log + syslog (ident `radius-admin`).
   Never log secrets/passwords/TOTP codes.
 - Security headers (also set by nginx): CSP `default-src 'self'; script-src 'self';
@@ -1773,6 +1776,33 @@ unreachable). The portal pages that drive this follow.
   unknown), the switch is disabled with the reason next to it (`id="enabled-locked"`, in the
   switch's `aria-describedby`); when locked on, a hidden `enabled=1` keeps it on through a save. The
   save still refuses a change those checks forbid (a stale page, a crafted request).
+- **Save applies (Duo only).** `services.pending_breakdown()` splits what is pending by part,
+  comparing the rendered files with the applied copy: `policy`, `certificates`, `clients` (the
+  clients file before the second-factor tail, which starts with `MFA_TAIL_MARK`), `mfa` (ids of
+  other providers whose top-level blocks in that tail differ) and `duo` (Duo's blocks, i.e. the
+  listener, the `radius_admin_mfa` clients section and `radius_admin_mfa_duo`, or `duo_file`, a
+  staged Duo file that differs from the applied one). `others` names every part besides Duo;
+  `only_duo` is true when Duo is all that is pending. Pending changes this comparison cannot explain
+  (no applied copy) count as others.
+  `POST /integrations/duo/preview` (admin + step-up, same form as Save) checks the form, saves it
+  inside the request's transaction, computes the breakdown, the masked `authproxy.cfg` diff and
+  what restarts (the Duo proxy when its file changes, FreeRADIUS whenever anything is applied),
+  and rolls the transaction back: JSON `{ok, errors, pending, only_duo, others, restarts, diff,
+  enabled}`; nothing is saved or audited. With JavaScript, Save asks for it and shows a dialog
+  (`#duo-apply-dialog`, busy text "up to ~3 minutes"); its buttons submit the settings form with
+  `then`: `apply` (offered when only Duo is pending), `apply_all` (offered when others are
+  pending; the server also needs `confirm_all=1`, a tick in the dialog) or `save`. The save
+  (`POST /integrations/duo/settings`) always stores the settings first (committed before the
+  apply); with `then=apply` and only Duo pending, or `then=apply_all` with `confirm_all`, it calls
+  `apply_now("duo")`, then runs the connectivity check when Duo is on and the apply succeeded, and
+  shows both on the page, or the helper's own message when the apply failed. Anything else saves
+  only and says why; there is never a partial apply. Without JavaScript, when the form has errors
+  or when nothing would change, Save only saves. While changes are pending the section links to
+  the Apply page.
+- **Test needs an applied configuration.** Until radius-admin has applied a Duo file (the applied
+  copy has `provider-duo`), the proxy runs Duo's sample `authproxy.cfg`: section 4 says to apply the
+  Duo settings first instead of offering the check, and `POST /integrations/duo/test` refuses with
+  the same message without calling the helper.
 - **Stored secrets** (`_macros.secret_field`). Before a secret key is stored the form shows the
   input (needed to turn Duo on). Once one is stored it shows "Secret key: set" and the input only
   inside `<details class="secret-change">` with the summary "Change secret key" (opened when the
