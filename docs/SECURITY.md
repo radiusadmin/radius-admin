@@ -488,7 +488,8 @@ tokens and RADIUS secrets are never logged; the helper redacts `secret = …` an
 - **Duo chain.** The Duo proxy reaches the password check only on 127.0.0.1:18121, as the single
   client of the listener `radius-admin-mfa-primary`, with its own random secret
   (`require_message_authenticator = yes`). Both secrets are stored encrypted with the data key
-  (AES-256-GCM, bound to the provider id) and written only into the clients file (root:freerad 0640).
+  (AES-256-GCM, bound to the provider id) and written only into the clients file (root:freerad 0640;
+  the app's copies of applied clients files are sealed with the data key).
 - **Remote servers** receive the device admin's password protected only by RADIUS's MD5-based
   User-Password hiding (exception 1.1-1); use them on a trusted network. They are not offered in
   FIPS mode.

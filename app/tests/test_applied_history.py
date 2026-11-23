@@ -98,6 +98,53 @@ def test_plain_copies_of_earlier_versions_are_sealed(tmp_path):
     assert services.read_applied(os.path.join(base), key)["providers"] == {"provider-duo": DUO}
 
 
+CLIENT_SECRET = "TestOnlyClientSecret0123456789"
+CLIENTS = 'client sw1 {\n\tipaddr = 192.0.2.10\n\tsecret = "%s"\n}\n' % CLIENT_SECRET
+
+
+def _clients_on_disk(base):
+    out = {}
+    for root, _dirs, files in os.walk(services.applied_dir(base)):
+        if "clients" in files:
+            with open(os.path.join(root, "clients"), encoding="utf-8") as fh:
+                out[root] = fh.read()
+    return out
+
+
+def test_clients_copies_are_sealed(tmp_path):
+    """The clients file holds every RADIUS shared secret: sealed like the provider files."""
+    base, key = str(tmp_path), _key()
+    services.save_applied("p1\n", CLIENTS, base=base, providers={}, datakey=key)
+    services.save_applied("p2\n", CLIENTS + "# 2\n", base=base, backup_id="20261102T000000Z", providers={},
+                          datakey=key)
+    disk = _clients_on_disk(base)
+    assert len(disk) == 2 and all(t.startswith("ra-sealed-v1:") and CLIENT_SECRET not in t for t in disk.values())
+    assert services.read_applied(base, key)["clients"] == CLIENTS + "# 2\n"
+    assert services.restore_applied_from_history("20261102T000000Z", base=base, new_backup_id="20261103T000000Z",
+                                                 datakey=key) == ("p1\n", CLIENTS)
+    assert services.read_applied(base, key)["clients"] == CLIENTS
+    disk = _clients_on_disk(base)
+    assert len(disk) == 3 and all(CLIENT_SECRET not in t for t in disk.values())
+
+
+def test_plain_clients_copies_are_sealed_and_a_replaced_key_drops_them(tmp_path):
+    base, key = str(tmp_path), _key()
+    d = services.applied_dir(base)
+    os.makedirs(os.path.join(d, "history", "20261101T000000Z"))
+    for x in (d, os.path.join(d, "history", "20261101T000000Z")):
+        with open(os.path.join(x, "policy"), "w") as fh:
+            fh.write("policy\n")
+        with open(os.path.join(x, "clients"), "w") as fh:
+            fh.write(CLIENTS)
+    assert services.read_applied(base, key)["clients"] == CLIENTS                     # still readable
+    services.save_applied("p2\n", CLIENTS, base=base, backup_id="20261102T000000Z", providers={}, datakey=key)
+    assert all(CLIENT_SECRET not in t for t in _clients_on_disk(base).values())
+    # with another data key the copy counts as missing, and a rollback to it finds no archived set
+    other = _key()
+    assert services.read_applied(base, other)["clients"] is None
+    assert services.restore_applied_from_history("20261101T000000Z", base=base, datakey=other) is None
+
+
 def test_a_replaced_data_key_makes_sealed_copies_count_as_missing(tmp_path):
     base = str(tmp_path)
     services.save_applied("p\n", "c\n", base=base, providers={"provider-duo": DUO}, datakey=_key())
