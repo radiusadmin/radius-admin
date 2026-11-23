@@ -82,6 +82,27 @@ out=$(pf)
 grep -q 'FAIL.*FAILS radiusd -XC' <<<"$out" \
     && pass "configured server: radiusd -XC failing still blocks" || fail "configured server -XC not a failure"
 
+# --- 5b. preflight on its own reads this host's settings, not the example defaults
+# shellcheck source=../../deploy/lib.sh
+. "$ROOT/deploy/lib.sh"
+cidr=$(primary_ipv4_cidr || true)
+if [[ -n $cidr ]]; then
+    net=$(python3 -I -c 'import ipaddress, sys; print(ipaddress.ip_interface(sys.argv[1]).network)' "$cidr")
+    printf 'server_name: portal.example.net\nadmin_net: %s\n' "$net" > "$W/site-pf.yaml"
+    out=$(PATH=$W/bin:$PATH RA_RADDB=$W/raddb RA_SITE_YAML=$W/site-pf.yaml RA_NGINX_SITE=$W/none RA_FIREWALL_NFT=$W/none \
+          "$ROOT/deploy/preflight.sh" --sqlite "$W/no.db" 2>&1)
+    if grep -q "OK.*address in admin network $net" <<<"$out" && grep -q 'portal.example.net' <<<"$out" \
+        && grep -q "settings from $W/site-pf.yaml" <<<"$out" && ! grep -q '192.0.2.0/24\|radius.example.net' <<<"$out"; then
+        pass "preflight alone: management subnet and server name from site.yaml, not the example defaults"
+    else fail "preflight alone: $(grep -E 'admin network|example|settings from' <<<"$out" | head -4)"; fi
+    out=$(PATH=$W/bin:$PATH RA_RADDB=$W/raddb RA_SITE_YAML=$W/none RA_NGINX_SITE=$W/none RA_FIREWALL_NFT=$W/none \
+          "$ROOT/deploy/preflight.sh" --sqlite "$W/no.db" 2>&1)
+    grep -q 'example default' <<<"$out" \
+        && pass "preflight alone on a new server: says the subnet is the example default" || fail "no default note: $(grep -E 'admin network|settings' <<<"$out" | head -3)"
+else
+    echo "SKIP: no global IPv4 address for the preflight settings test"
+fi
+
 # --- 6. PostgreSQL cluster port
 # shellcheck source=../../deploy/lib.sh
 . "$ROOT/deploy/lib.sh"
