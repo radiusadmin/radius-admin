@@ -200,6 +200,24 @@
   {% else %}<p class="flash flash-error">The check did not run: {{ test.message }}</p>{% endif %}
   {% endif %}
 </section>
+
+{% if has_role('admin') and duo.installed and duo.installed.version and duo_applied %}
+<section class="panel" id="duo-push" aria-labelledby="duo-push-h">
+  <h2 id="duo-push-h">Send a test push</h2>
+  <p class="small muted">Duo sends a push to this user's phone with the applied keys, as a device admin login would; nothing is logged in. The user must be enrolled in Duo under this name. At most one push per user every 30 seconds and 10 an hour.</p>
+  <form method="post" action="{{ url_for('integrations.duo_push_test') }}#duo-push" class="inline-form" data-busy="Waiting for the answer (up to 60 s)…">
+    {{ m.csrf() }}
+    <label for="push-user">Username</label>
+    <input id="push-user" name="username" value="{{ push.username if push else '' }}" maxlength="64" class="mono" autocomplete="off" required{{ m.described(errors, 'username') }}>
+    <button class="btn" type="submit">Send test push</button>
+  </form>
+  {{ m.field_error(errors, 'username') }}
+  {% if push %}
+  {% if push.ok %}<p class="flash {{ 'flash-success' if push.result == 'allow' else 'flash-error' }}" role="status">{{ push.label }}{% if push.status_msg %}: {{ push.status_msg }}{% endif %}</p>
+  {% else %}<p class="flash flash-error" role="alert">The test push was not sent: {{ push.message or 'the helper gave no reason' }}.</p>{% endif %}
+  {% endif %}
+</section>
+{% endif %}
 {% endif %}
 
 {% if has_role('admin') and duo.installed and duo.installed.version %}

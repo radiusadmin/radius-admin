@@ -333,7 +333,7 @@ def _duo_disable_block():
     return None
 
 
-def _duo_page(test=None, preflight=None, errors=None, status_code=200, applied=None):
+def _duo_page(test=None, preflight=None, errors=None, status_code=200, applied=None, push=None):
     from ..integration_fetch import read_status
     key = current_app.config["RA_DATA_KEY"]
     st = _helper("integration_status")
@@ -359,7 +359,7 @@ def _duo_page(test=None, preflight=None, errors=None, status_code=200, applied=N
         catalog_serial=cat.get("serial", 0) if cat.get("ok") else None, catalog_message=cat.get("message", ""),
         fetch=read_status(cfg()["integration_dir"], "duo"), files=_duo_files(), provider=p,
         has_skey=bool(secrets.get("skey")), in_use=ig.DUO_ID in ig.providers_in_use(), test=test,
-        switch_lock=switch_lock, applied=applied, duo_rules=[d for _, d in _duo_rules()], duo_applied=_duo_applied(),
+        switch_lock=switch_lock, applied=applied, push=push, duo_rules=[d for _, d in _duo_rules()], duo_applied=_duo_applied(),
         pending=pending_state().get("pending", False), preflight=preflight, errors=errors or {}, fips=_fips(), factors=unlang().DUO_FACTORS,
         upload_mib=ig.UPLOAD_MAX // (1024 * 1024)), status_code
 
@@ -627,6 +627,33 @@ def duo_test():
         flash("Apply your Duo settings first: until then Duo runs its sample configuration.", "error")
         return _duo_page()
     return _duo_page(test=_run_duo_test())
+
+
+_PUSH_USER_RE = re.compile(r"[A-Za-z0-9._@-]{1,64}")
+PUSH_RESULTS = {"allow": "Approved", "deny": "Denied", "timeout": "No answer in time",
+                "not_enrolled": "Not enrolled in Duo", "error": "Duo could not be asked"}
+
+
+@bp.route("/duo/push-test", methods=["POST"])
+@role_required("admin")
+@stepup_required
+def duo_push_test():
+    """Send a Duo Push to one user with the applied keys (helper integration_push_test, SPEC
+    section 29.3); audited integration.push_test with the username and the result only."""
+    user = form_str("username", maxlen=64)
+    if not _PUSH_USER_RE.fullmatch(user):
+        return _duo_page(errors={"username": "Username: 1-64 letters, digits, dots, underscores, @ or hyphens,"
+                                             " as Duo knows the user."}, status_code=400)
+    if not _duo_applied():
+        flash("Apply your Duo settings first: until then Duo runs its sample configuration.", "error")
+        return _duo_page()
+    r = _helper("integration_push_test", timeout=90, id="duo", username=user)
+    result = r.get("result") if r.get("ok") and r.get("result") in PUSH_RESULTS else None
+    ev("integration.push_test", success=result == "allow", object_type="integration", object_id="duo",
+       detail={"username": user, "result": result or "refused"})
+    return _duo_page(push={"ok": bool(result), "result": result, "label": PUSH_RESULTS.get(result, ""),
+                           "status_msg": (r.get("status_msg") or "")[:200], "username": user,
+                           "message": r.get("message") or ""})
 
 
 def _duo_applied():

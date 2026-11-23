@@ -188,8 +188,8 @@ Operator controls:
    file and, while an apply runs, the app's staging directory;
    Message-Authenticator required for every device that sends it (F-9, BlastRADIUS).
 4. **Host firewall:** inbound RADIUS only from the management network; nothing may reach
-   127.0.0.1:18120/18121 from outside the host; outbound from the Duo proxy only to
-   `api-*.duosecurity.com:443` (`deploy/firewall`).
+   127.0.0.1:18120/18121 from outside the host; outbound from the Duo proxy, and from the root
+   helper for an admin's test push, only to `api-*.duosecurity.com:443` (`deploy/firewall`).
 5. **Duo account:** a Duo edition that fits the framework (for FedRAMP-style requirements Duo's
    Federal editions); factors limited to push or passcode (hardware token) rather than phone
    call (SP 800-63B treats telephone authenticators as restricted); Duo's lockout and fraud
@@ -527,7 +527,10 @@ tokens and RADIUS secrets are never logged; the helper redacts `secret = …` an
   write access only to its log, run and conf directories and its secret store). Its configuration
   holds the Duo secret key (owner: the service user, 0640) and is written only by the helper from a
   whitelist grammar; it listens and talks only on 127.0.0.1. New outbound traffic: the proxy to
-  `api-*.duosecurity.com:443`. Duo bundles its own Python and an OpenSSL FIPS module
+  `api-*.duosecurity.com:443`, and the root helper to the same API host for an admin's test push
+  (`integration_push_test`: keys read from the applied configuration and never returned, HMAC-SHA512
+  request signatures (Duo signature version 5), TLS 1.2+ checked against the system CAs, a
+  username pattern, one push per user per 30 s and 10 an hour, admin + step-up and audited). Duo bundles its own Python and an OpenSSL FIPS module
   (`pkgs/fips_modules`); a build is marked FIPS-capable only after the maintainers' check of that
   build on a FIPS lab machine (exception 9).
 - **FIPS mode** (section 29.4). Duo is installed, turned on and applied only for a build the signed

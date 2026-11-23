@@ -187,6 +187,7 @@ class FakeHelper:
                     "listening": False, "state": {}}
         self.catalog = {"serial": 0, "entries": [], "source": "none", "message": ""}
         self.integration_log = ""
+        self.push = {"result": "allow", "status_msg": "Success. Logging you in..."}   # integration_push_test
         self.cert_status = {}           # what cert_status adds to its answer (SPEC section 30)
         self._sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self._sock.bind(path)
@@ -302,6 +303,8 @@ class FakeHelper:
         if a == "integration_test":
             return {"ok": True, "action": a, "message": "the connectivity check passed", "passed": True,
                     "output": "The Auth Proxy was able to reach Duo\nskey [redacted]"}
+        if a == "integration_push_test":
+            return dict({"ok": True, "action": a, "message": "test push: %s" % self.push.get("result")}, **self.push)
         if a == "cert_status":
             return dict({"eap_server": None, "client_ca": None, "eap_ocsp": None, "portal_server": None,
                          "portal_configured": False, "portal_server_name": None}, ok=True, action=a, message="ok",
