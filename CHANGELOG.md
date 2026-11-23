@@ -16,6 +16,10 @@ release, so previews sort after it.
   or as the default.
 
 ### Changed
+- **Duo: one button disables and removes it.** "Disable and remove Duo" turns the provider off,
+  applies that and removes the proxy, after one confirmation. When a second-factor rule uses Duo,
+  the page names it and the rule is turned off in the same action once you tick it. If something
+  fails, the page shows the actual reason.
 - **Duo: Save applies.** Saving the Duo settings shows what changes (Duo's configuration with
   secrets hidden, and which services restart), then saves and applies it and runs the connectivity
   check, all on the Duo page. When other changes are pending too, the dialog lists them and offers

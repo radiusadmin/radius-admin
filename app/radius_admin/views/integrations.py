@@ -359,7 +359,7 @@ def _duo_page(test=None, preflight=None, errors=None, status_code=200, applied=N
         catalog_serial=cat.get("serial", 0) if cat.get("ok") else None, catalog_message=cat.get("message", ""),
         fetch=read_status(cfg()["integration_dir"], "duo"), files=_duo_files(), provider=p,
         has_skey=bool(secrets.get("skey")), in_use=ig.DUO_ID in ig.providers_in_use(), test=test,
-        switch_lock=switch_lock, applied=applied, duo_applied=_duo_applied(),
+        switch_lock=switch_lock, applied=applied, duo_rules=[d for _, d in _duo_rules()], duo_applied=_duo_applied(),
         pending=pending_state().get("pending", False), preflight=preflight, errors=errors or {}, fips=_fips(), factors=unlang().DUO_FACTORS,
         upload_mib=ig.UPLOAD_MAX // (1024 * 1024)), status_code
 
@@ -643,17 +643,65 @@ def _run_duo_test():
     return r
 
 
+def _duo_rules():
+    """The enabled second-factor rules that name Duo: [(kind, description)]."""
+    out = []
+    for kind, r in ig.load_policy().items():
+        if r["enabled"] and r["provider_id"] == ig.DUO_ID:
+            where = ("on all clients" if r["client_scope"] == "all" else
+                     "on %d selected client%s" % (len(r["client_ids"]), "" if len(r["client_ids"]) == 1 else "s"))
+            out.append((kind, "%s require Duo %s" % (ig.KIND_LABELS[kind], where)))
+    return out
+
+
 @bp.route("/duo/remove", methods=["POST"])
 @role_required("admin")
 @stepup_required
 def duo_remove():
+    """Disable and remove Duo in one action (SPEC section 29.3): the enabled rules that name it are
+    turned off (only with rules_off; otherwise those logins would be rejected), the provider is
+    turned off, the change is applied (apply_now; refused while other changes are pending), and
+    the helper removes the proxy. Each step is audited; a failing step stops the rest."""
+    from ..services import ApplyRenderError, apply_now, pending_breakdown
     p = ig.get_provider(ig.DUO_ID)
-    if p is not None and p["enabled"]:
-        flash("Turn the Duo provider off and apply the changes before you remove Duo.", "error")
+    rules = _duo_rules()
+    if rules and not form_bool("rules_off"):
+        flash("Duo was not removed: %s. Tick \"Turn this rule off too\" to turn %s off with it."
+              % ("; ".join(d for _, d in rules), "it" if len(rules) == 1 else "them"), "error")
         return redirect(url_for("integrations.duo"))
+    b = pending_breakdown()
+    needs_apply = bool(p is not None and p["enabled"]) or b["duo"]
+    if needs_apply and b["others"]:
+        flash("Duo was not removed: Other changes are pending (%s). Apply or undo them first."
+              % ", ".join(b["others"]), "error")
+        return redirect(url_for("integrations.duo"))
+    if rules:
+        changed = {}
+        for kind, _ in rules:
+            db.execute("UPDATE ui.mfa_policy SET enabled=false, updated_at=now() WHERE account_kind=%s", (kind,))
+            changed[kind] = {"enabled": {"from": True, "to": False}}
+        changed["reason"] = "duo_remove"
+        ev("integration.policy", object_type="mfa_policy", detail=changed)
+    if p is not None and p["enabled"]:
+        db.execute("UPDATE ui.mfa_provider SET enabled=false, updated_at=now() WHERE id=%s", (ig.DUO_ID,))
+        ev("integration.configure", object_type="mfa_provider", object_id=ig.DUO_ID,
+           detail={"enabled": {"from": True, "to": False}})
+    db.commit()            # the rules and the provider stay off whatever happens next
+    if needs_apply and pending_breakdown()["pending"]:
+        try:
+            ok, resp, _ = apply_now("duo_remove")
+        except ApplyRenderError as e:
+            flash("Duo is off but was not removed: the configuration could not be rendered: %s" % e, "error")
+            return redirect(url_for("integrations.duo"))
+        if not ok:
+            flash("Duo is off but was not removed: the apply failed: %s" % (resp.get("message") or "no reason given"),
+                  "error")
+            return redirect(url_for("integrations.duo"))
     r = _helper("integration_remove", id="duo", actor=g.user["username"])
     ev("integration.remove_requested", success=bool(r.get("ok")), object_type="integration", object_id="duo",
        detail={"message": r.get("message", "")[:300]})
-    if not r.get("ok"):
-        flash("Duo was not removed: %s" % r.get("message"), "error")
+    if r.get("ok"):
+        flash("Duo is off and its removal has started.", "success")
+    else:
+        flash("Duo was not removed: %s" % (r.get("message") or "the helper gave no reason"), "error")
     return redirect(url_for("integrations.duo"))

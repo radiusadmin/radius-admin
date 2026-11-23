@@ -204,9 +204,18 @@
 
 {% if has_role('admin') and duo.installed and duo.installed.version %}
 <section class="panel callout callout-danger" aria-labelledby="duo-rm-h">
-  <h2 id="duo-rm-h">Remove Duo</h2>
-  <p class="small">Stops and removes the Duo proxy from this server; its configuration is kept in /var/backups/radius-admin. Turn the provider off and apply the changes first.</p>
-  {{ m.post_button(url_for('integrations.duo_remove'), 'Remove Duo', 'btn btn-danger-quiet', confirm='Remove the Duo Authentication Proxy from this server?', busy='Starting the removal…') }}
+  {% set duo_on = provider and provider.enabled %}
+  <h2 id="duo-rm-h">{{ 'Disable and remove Duo' if duo_on else 'Remove Duo' }}</h2>
+  <p class="small">{% if duo_on %}Turns the Duo provider off, applies that (FreeRADIUS and the Duo proxy restart; device admin logins stop using a second factor), then stops and removes{% else %}Stops and removes{% endif %} the Duo proxy from this server; its configuration is kept in /var/backups/radius-admin.</p>
+  <form method="post" action="{{ url_for('integrations.duo_remove') }}" class="stack" data-busy="{{ 'Disabling and removing, up to ~3 minutes…' if duo_on else 'Starting the removal…' }}"
+        data-confirm="{{ ('Disable Duo and remove it? Device admin logins stop using a second factor; FreeRADIUS and the Duo proxy restart.' ~ (' The second-factor rules that use Duo are turned off: ' ~ duo_rules|join('; ') ~ '.' if duo_rules else '')) if duo_on else 'Remove the Duo Authentication Proxy from this server?' }}">
+    {{ m.csrf() }}
+    {% if duo_rules %}
+    <p class="warn-text">A second-factor rule uses Duo: {{ duo_rules|join('; ') }}. Those logins would be rejected without Duo, so the rule must be turned off with it.</p>
+    <label class="check"><input type="checkbox" name="rules_off" value="1" required> Turn this rule off too</label>
+    {% endif %}
+    <div class="actions"><button type="submit" class="btn btn-danger-quiet">{{ 'Disable and remove Duo' if duo_on else 'Remove Duo' }}</button></div>
+  </form>
 </section>
 {% endif %}
 {% endblock %}

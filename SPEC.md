@@ -1767,7 +1767,19 @@ unreachable). The portal pages that drive this follow.
   `fetch-duo.json`, Upload, and Install for each build in `integration_dir` (with, in standard mode
   only, a SHA-256 field and a required confirmation that it was compared with Duo's published value);
   3. Connect to Duo (ikey, skey write-only, API hostname, fail mode (standard mode only), factors,
-  on/off); 4. Test (`integration_test`); Remove (refused while the provider is on).
+  on/off); 4. Test (`integration_test`); Disable and remove (below).
+- **Disable and remove** (`POST /integrations/duo/remove`, admin + step-up, one button: "Disable
+  and remove Duo" while the provider is on, "Remove Duo" while it is off, each behind a
+  confirmation). Steps, each audited, each stopping the rest when it fails: (1) the enabled
+  second-factor rules that name Duo are listed on the page ("Local device admin accounts require
+  Duo on all clients") and turned off only with `rules_off=1` (a required tick; without it nothing
+  changes, since those logins would be rejected without Duo), `integration.policy` with detail
+  `reason: duo_remove`; (2) the provider is turned off (`integration.configure`); both are
+  committed; (3) when an apply is needed (the provider was on, or Duo changes are pending) and
+  nothing else is pending, `apply_now("duo_remove")`; other pending changes refuse the whole
+  action before step 1 (never a partial apply); a failed apply shows the helper's message and stops;
+  (4) the helper's `integration_remove` (`integration.remove_requested`); a refusal shows the
+  helper's own reason.
 - **On/off switch.** The provider is turned on and off with a switch (`_macros.switch`): a real
   checkbox `name=enabled` with `role="switch"` and visible Enabled/Disabled text that CSS follows
   (no JavaScript). The page computes the same checks as the save (`_duo_enable_block`,
