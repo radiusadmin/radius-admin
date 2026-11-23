@@ -1853,8 +1853,9 @@ unreachable). The portal pages that drive this follow.
 
 ## 30. Change (2026-11-20): certificates managed in the portal
 
-Page **Certificates** (`/certificates/`, Network access; every role sees it, changes need admin +
-step-up, each one audited `certificate.upload|csr|issued|forget|ocsp`, never with key material):
+Page **Certificates** (`/certificates/`, under Settings; every role can open it but only admins see
+the Settings button; changes need admin + step-up, each one audited
+`certificate.upload|csr|issued|forget|ocsp`, never with key material):
 
 - **802.1X server certificate** (`eap_server`): FreeRADIUS's `certs/site/radius.pem` + `radius.key`
   (EAP-TLS/TTLS/PEAP and RadSec).

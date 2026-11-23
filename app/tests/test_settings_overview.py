@@ -20,7 +20,7 @@ def test_admin_sees_one_settings_button_at_the_bottom(browser, logged_in):
     logged_in("admin")
     n = nav(browser.text(browser.get("/dashboard")))
     assert "Administration" not in n
-    for gone in ('href="/settings"', "/settings/sso", "/ui-admins/", "/setup/", "/updates"):
+    for gone in ('href="/settings"', "/settings/sso", "/ui-admins/", "/setup/", "/updates", "/certificates/"):
         assert gone not in n, gone
     assert SETTINGS_LINK.search(n)
     # the button sits in its own footer after every other group
@@ -36,7 +36,7 @@ def test_overview_lists_every_settings_page_by_category(browser, logged_in):
     for heading in ("RADIUS and switches", "Console access", "Notifications", "Maintenance"):
         assert f">{heading}</h2>" in main
     for href in ('href="/settings"', 'href="/ui-admins/"', 'href="/settings/sso"', 'href="/alerts/settings"',
-                 'href="/updates"', 'href="/setup/"'):
+                 'href="/updates"', 'href="/setup/"', 'href="/certificates/"'):
         assert href in main, href
     assert current(t) == ["Settings"]
     assert "All settings" not in main                   # no back link on the overview itself
@@ -44,7 +44,7 @@ def test_overview_lists_every_settings_page_by_category(browser, logged_in):
 
 def test_settings_pages_highlight_the_button_and_link_back(browser, logged_in):
     logged_in("admin")
-    for path in ("/settings", "/setup/", "/alerts/settings"):
+    for path in ("/settings", "/setup/", "/alerts/settings", "/certificates/"):
         t = browser.text(browser.get(path))
         assert current(t) == ["Settings"], path
         assert ('<p class="crumb"><a class="btn btn-quiet btn-small btn-back" href="/settings/overview">'
@@ -61,3 +61,7 @@ def test_non_admins_get_no_settings_button(browser, logged_in, role):
     t = browser.text(browser.get("/dashboard"))
     assert not SETTINGS_LINK.search(nav(t)) and 'class="nav-foot"' not in t
     assert browser.get("/settings/overview").status_code == 403
+    # Certificates moved under Settings: still readable, but no dead "All settings" link
+    assert "/certificates/" not in nav(t)
+    r = browser.get("/certificates/")
+    assert r.status_code == 200 and "All settings" not in browser.text(r)
