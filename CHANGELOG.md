@@ -5,6 +5,16 @@ Each release has a section here. `main` builds are the stable releases (`0.2.0`)
 show the "Unreleased" section plus their commits. Bump `VERSION` on `dev` right after a
 release, so previews sort after it.
 
+## Unreleased
+
+### Added
+- **Device profile for Cisco Catalyst 9000 switches (IOS-XE).** Built-in profile
+  `cisco-iosxe`: VLAN by the standard tunnel attributes, full admin rights by
+  `shell:priv-lvl=15`, session actions on UDP 1700 (re-authenticate, bounce port, disconnect)
+  naming the session by accounting session id and MAC, and SNMP port names expanded to the
+  names the switch sends in RADIUS (`Gi1/0/5` → `GigabitEthernet1/0/5`). Choose it per client
+  or as the default.
+
 ## 0.3.0 - 2026-11-20
 
 ### Added

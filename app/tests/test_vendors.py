@@ -39,6 +39,50 @@ def test_catalyst_1300_profile_keeps_the_original_behaviour():
     assert [p["coa"][a]["packet"] for a in vendors.COA_ACTIONS] == ["coa", "coa", "disconnect"]
 
 
+def test_catalyst_iosxe_profile():
+    p = vendors.builtin("cisco-iosxe")
+    assert p["status"] == "supported" and p["mab"]["port_types"] == ["Ethernet"]
+    assert p["reply"]["vlan"] == vendors.default()["reply"]["vlan"]
+    assert p["reply"]["admin_full"] == [{"attr": "Cisco-AVPair", "op": "+=", "value": "shell:priv-lvl=15"}]
+    assert p["reply"]["role"] == []
+    assert p["coa"]["port"] == 1700 and p["coa"]["identify"] == "session-and-mac"
+    assert p["coa"]["send_nas_port_id"] is False
+    assert p["coa"]["reauth"]["attrs"] == [{"attr": "Cisco-AVPair", "value": "subscriber:command=reauthenticate"}]
+    assert p["coa"]["bounce"]["attrs"] == [{"attr": "Cisco-AVPair", "value": "subscriber:command=bounce-host-port"}]
+    assert p["coa"]["disconnect"] == {"packet": "disconnect", "attrs": []}
+
+
+def test_catalyst_iosxe_mfa_timeout_is_set_per_server():
+    # per-server values override the global radius-server ones on IOS-XE (SPEC section 29.4)
+    text, is_commands = vendors.mfa_timeout_hint(vendors.builtin("cisco-iosxe"))
+    assert is_commands
+    assert text.splitlines() == ["radius server <this RADIUS server's name on the switch>",
+                                 " timeout 30", " retransmit 2", " exit"]
+
+
+@pytest.mark.parametrize("ifname,nas_port_id", [
+    ("Gi1/0/5", "GigabitEthernet1/0/5"), ("Te1/1/1", "TenGigabitEthernet1/1/1"), ("Fa0", "FastEthernet0"),
+    ("Gi2/0/48", "GigabitEthernet2/0/48"), ("gi1/0/5", "gi1/0/5"), ("Vl10", "Vl10"), ("Po1", "Po1"),
+    ("Tw1/0/1", "Tw1/0/1")])
+def test_catalyst_iosxe_port_names(ifname, nas_port_id):
+    assert vendors.port_name(vendors.builtin("cisco-iosxe"), ifname) == nas_port_id
+
+
+def test_catalyst_iosxe_coa_names_the_session_by_id_and_mac_without_port():
+    p = vendors.builtin("cisco-iosxe")
+    text = coa.build_request("bounce", "192.0.2.5", "0000000A", "AA-BB-CC-00-00-01", "GigabitEthernet1/0/5", profile=p)
+    lines = text.splitlines()
+    assert lines[:3] == ['Acct-Session-Id = "0000000A"', 'Calling-Station-Id = "AA-BB-CC-00-00-01"',
+                         "NAS-IP-Address = 192.0.2.5"]
+    assert "NAS-Port-Id" not in text
+    assert 'Cisco-AVPair = "subscriber:command=bounce-host-port"' in lines
+
+
+def test_catalyst_iosxe_alongside_the_default_adds_no_policy_branches():
+    assert unlang.render_policy("", vendors.default(), [vendors.builtin("cisco-iosxe")]) == \
+        unlang.render_policy("", vendors.default(), [])
+
+
 # ------------------------------------------------------------------ export / import
 def test_export_import_round_trip():
     text = vendors.export_json(vendors.default())

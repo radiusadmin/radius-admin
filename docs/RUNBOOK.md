@@ -1052,7 +1052,7 @@ names or addresses.
   installation default) and *Session-action port* (leave empty for the profile's port).
 * **Default:** Settings → Devices → *Default device profile*, used by every client that does
   not name one.
-* **CSV import:** an optional `vendor_profile` column (`default`, `cisco-c1300`, `generic-rfc`).
+* **CSV import:** an optional `vendor_profile` column (`default`, `cisco-c1300`, `cisco-iosxe`, `generic-rfc`).
 * **Roles:** Access rules → edit → *Role* (optional). Devices whose profile uses roles get it
   with the VLAN (the Generic profile sends it as `Filter-Id`: the device must know a filter or
   role of that name, or it may refuse the session); others get the VLAN only. Takes effect at
