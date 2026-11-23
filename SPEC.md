@@ -809,12 +809,26 @@ CSV columns (header row required, exact names, any order tolerated by name):
 - **`radius-admin-freeradius`** (`tools/package/build-freeradius-deb.sh`): FreeRADIUS 3.2.10 from the
   signed upstream release (key `FR_KEY_FPR` in `tools/lib/fr-release.sh`, shared with the bench
   build), `--enable-fips-workaround`, prefix `/opt/radius-admin-freeradius`, raddb `/etc/freeradius`,
-  logs `/var/log/freeradius`. Modules needing libraries the product does not use (perl, python,
+  logs `/var/log/freeradius`. **LDAPS through OpenSSL (change 2026-11-23, package revision 2):**
+  rlm_ldap links a private OpenLDAP client library (`tools/lib/openldap-build.sh`): the
+  distribution's own `openldap` source package (`apt-get source`, checked by the archive's signed
+  Release; the build host needs deb-src), configured `--disable-shared --enable-static --with-pic
+  --with-tls=openssl --without-cyrus-sasl --disable-slapd`, static `liblber.a`/`libldap.a`
+  linked into `rlm_ldap.so` with `-Wl,--exclude-libs` (radiusd also loads the system
+  `libldap.so.2` through libpq; a second shared one would clash by SONAME and symbols). The
+  build fails unless `rlm_ldap.so` and `libexec/ra-ldapwhoami` (`ldapwhoami` built the same way,
+  for the installer's directory test) link `libssl.so.3`, no libldap/liblber/GnuTLS, take no
+  `ldap_*`/`ber_*` symbol from elsewhere and export none. No SASL binds. `SOURCE` names the
+  openldap version and source files, `copyright` adds the OpenLDAP Public License, and
+  `packages/source/` carries the openldap `.dsc` and tarballs. The bench build
+  (`tools/ci/build-freeradius.sh`) uses the same library and rebuilds a prefix without
+  `share/radius-admin-openldap`. The distribution's `freeradius` package keeps GnuTLS (SECURITY.md
+  exception 5); preflight says which TLS library rlm_ldap uses. Modules needing libraries the product does not use (perl, python,
   mysql, sqlite, redis, rest, …) are configured out, so the package does not depend on the build
   host; the build fails unless `rlm_sql_postgresql`, `rlm_ldap`, `rlm_eap_tls`, `rlm_sql`, `rlm_files`
   and `rlm_pap` were built. Depends are the distribution packages owning the directly linked
   libraries, with the minimum versions `dpkg-shlibdeps` takes from their symbols files (never the
-  build host's version); the build fails unless every versioned dependency is in the
+  build host's version; with the private OpenLDAP no longer `libldap2`); the build fails unless every versioned dependency is in the
   distribution's own archive (`tools/package/check-depends.sh`; CI pins libpq to the distribution
   build, `tools/ci/distro-libpq.sh`). The package is built per distribution release and its
   version says which (`3.2.10-1~ubuntu24.04`). `Conflicts: freeradius`.

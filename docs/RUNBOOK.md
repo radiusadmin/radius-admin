@@ -1448,7 +1448,7 @@ migration (new switch-admin passwords, MAB devices) exists only in PostgreSQL.
 | Device admin rejected | Auth log reason; source IP not in admin subnet; user not in `net-admins`; directory account not in an allowed group (§6.9a); legacy hash → reset password in UI; account disabled (`Auth-Type := Reject`) |
 | MAB rejected | MAC registered + enabled? switch sends PAP (not EAP-MD5)? Calling-Station-Id matches User-Name? |
 | EAP-TLS rejected | cert SAN DNS present? chains to Example-IssuingCA/Example-RootCA (`reject_unknown_intermediate_ca`)? OCSP reachable from FreeRADIUS? AD computer object in a rule group? `radiusd -X` |
-| LDAP bind/TLS errors | libldap uses GnuTLS (preflight shows it); `cipher_list` is unset on purpose; check the DC's Schannel policy allows TLS 1.2 ECDHE-AES-GCM; `ldapsearch -H ldaps://dc01.example.net -x -D '<bind DN>' -W -b '' -s base` |
+| LDAP bind/TLS errors | preflight shows rlm_ldap's TLS library (bundled package: the system OpenSSL, stricter than GnuTLS: SHA-1-signed or small-key DC certificates and TLS < 1.2 fail; distribution FreeRADIUS: GnuTLS); `cipher_list` is unset on purpose (FreeRADIUS 3.2.10 ignores it); check the DC's Schannel policy allows TLS 1.2 ECDHE-AES-GCM; `ldapsearch -H ldaps://dc01.example.net -x -D '<bind DN>' -W -b '' -s base` |
 | `rlm_sql_postgresql` load error | §1.1; `ldd <libdir>/rlm_sql_postgresql.so` (needs libpq5) |
 | DB permission denied | grants (`sql/30-grants.sql`), pg_hba order (`radius-admin` block must precede generic `local` lines) |
 

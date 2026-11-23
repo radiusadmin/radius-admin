@@ -43,7 +43,8 @@ record them in the SSP.
 | EAP-TLS (TLS 1.2, FIPS cipher list) | FreeRADIUS rlm_eap_tls | libssl | OpenSSL FIPS provider |
 | EAP-TTLS tunnel (same TLS settings as EAP-TLS) | FreeRADIUS rlm_eap_ttls | libssl | OpenSSL FIPS provider |
 | 802.1X user password hashes (`{X-PBKDF2}HMACSHA2+256`) — created / verified | app / FreeRADIUS rlm_pap | `hashlib.pbkdf2_hmac` / `PKCS5_PBKDF2_HMAC` | OpenSSL FIPS provider |
-| LDAPS to AD | FreeRADIUS rlm_ldap → libldap | **GnuTLS** — Ubuntu's libldap is built against GnuTLS, so this connection does **not** use the OpenSSL FIPS provider | **Outside the OpenSSL boundary — see exception 5.** Verify whether the GnuTLS in use is a FIPS-validated module in your Ubuntu Pro FIPS stream |
+| LDAPS to AD (bundled `radius-admin-freeradius` package) | FreeRADIUS rlm_ldap → private static libldap (`--with-tls=openssl`, SPEC §15) | libssl | OpenSSL FIPS provider |
+| LDAPS to AD (distribution `freeradius` package or own build) | FreeRADIUS rlm_ldap → libldap | **GnuTLS** — Ubuntu's libldap is built against GnuTLS, so this connection does **not** use the OpenSSL FIPS provider | **Outside the OpenSSL boundary — see exception 5.** Verify whether the GnuTLS in use is a FIPS-validated module in your Ubuntu Pro FIPS stream |
 | Package signatures | apt | gpgv | not a FIPS function (integrity of software supply, outside the boundary) |
 | Update signatures (ECDSA P-384, SHA-384) | root helper (`update_install`), release job | `openssl dgst -sha384 -verify` / `-sign` | OpenSSL FIPS provider (approved); verified the same way in both modes |
 | Bundled FreeRADIUS package integrity | installer (`fr-package`) | `sha384sum`; the upstream source signature is checked with `gpg` at build time | not a FIPS function (supply-chain integrity). The `.sha384` travels in the same bundle, so it detects damage, not tampering: that comes from the bundle's SHA-256 checked by `update.sh --sha256` (the push script passes it) until releases carry a signed manifest |
@@ -78,9 +79,20 @@ fingerprints (`hashlib`).
    and is not a secret.
 4. **TOTP uses HMAC-SHA1** — HMAC-SHA1 remains approved (SP 800-131A Rev. 2) and is
    computed by the FIPS provider; SHA-1 is not used for anything else.
-5. **LDAPS to Active Directory does not go through the OpenSSL FIPS provider.** Ubuntu's
-   `libldap` links GnuTLS, so rlm_ldap's TLS session to `dc01` uses GnuTLS.
-   Consequences found in testing (sandbox, FreeRADIUS 3.2):
+5. **LDAPS to Active Directory does not go through the OpenSSL FIPS provider — only with the
+   distribution's FreeRADIUS (or an own build).** The bundled `radius-admin-freeradius`
+   package (from 3.2.10-2) links rlm_ldap statically against OpenLDAP built from the
+   distribution's own source package with `--with-tls=openssl` (SPEC §15): its LDAPS session runs
+   in the system libssl (checked at run time: rlm_ldap binds `SSL_CTX_new`, `SSL_connect`, … to
+   libssl and nothing to GnuTLS), so this exception does not apply to it. radiusd still maps
+   `libgnutls` because the system `libldap.so.2` comes in through libpq, which uses it for nothing
+   radius-admin configures. Fixes for that libldap arrive as distribution updates; the package is
+   rebuilt and released within 14 days of a high or critical one. With the bundled package,
+   `tls_min_version` is enforced (a TLS 1.2-only server is refused with `"1.3"`), but
+   `cipher_list` has no effect either: FreeRADIUS 3.2.10 sets it after creating the TLS context
+   (`ldap.c`), so the suites come from the system OpenSSL policy (in FIPS mode, approved suites
+   only). For the distribution's FreeRADIUS, Ubuntu's `libldap` links GnuTLS, so rlm_ldap's TLS
+   session to `dc01` uses GnuTLS. Consequences found in testing (sandbox, FreeRADIUS 3.2):
    * `cipher_list` is therefore **left unset** in `mods-available/ldap` (commented out):
      an OpenSSL-syntax list is not meaningful to GnuTLS (in testing rlm_ldap still
      connected with garbage values and to a server offering only AES128-SHA with RSA key
@@ -99,9 +111,8 @@ fingerprints (`hashlib`).
    (c) optional, test first in a lab: set a GnuTLS priority string as `cipher_list`,
    e.g. `NONE:+VERS-TLS1.3:+VERS-TLS1.2:+AES-256-GCM:+AES-128-GCM:+ECDHE-ECDSA:+ECDHE-RSA:+AEAD:+SIGN-ALL:-SIGN-RSA-SHA1:-SIGN-ECDSA-SHA1:+GROUP-SECP384R1:+GROUP-SECP256R1:+COMP-NULL`,
    and confirm with a packet capture that the DC session uses it;
-   (d) for a clean OpenSSL boundary, rebuild OpenLDAP's libldap against OpenSSL
-   (`--with-tls=openssl`) and link FreeRADIUS against it (custom package — maintenance
-   cost). `preflight.sh` reports which TLS library rlm_ldap/libldap link.
+   (d) for a clean OpenSSL boundary, use the bundled `radius-admin-freeradius` package (above).
+   `preflight.sh` reports which TLS library rlm_ldap/libldap link.
 6. **EAP-TLS stays TLS 1.2 max** (unchanged from current production; TLS 1.3 for EAP
    has known supplicant interop issues). Cipher list restricted to the FIPS list below.
 7. **CoA / Disconnect requests (RFC 5176) use the same RADIUS MD5** as exception 1. They are
@@ -444,7 +455,7 @@ component or fully organisational.
 | 3.13.1 | Monitor/control communications at boundaries | nginx ACL + host firewall restrict the UI to the management network | Network firewalls/VLAN ACLs |
 | 3.13.8 | Cryptographic protection of CUI in transit | TLS (UI), LDAPS (AD), EAP-TLS | RADIUS/UDP itself (exception 1); LDAPS cipher policy not enforced client-side (exception 5) |
 | 3.13.10 | Establish and manage cryptographic keys | UI TLS key generated on host (make-csr.sh), cert from internal PKI; data key 0400 radius-admin; RADIUS secrets generated from DRBG | Key/cert lifecycle, backup of data.key, secret rotation schedule |
-| 3.13.11 | FIPS-validated cryptography for CUI | All app/nginx/EAP crypto via the OpenSSL FIPS provider (validated only on the `fips` stream's certified packages — see F-1); app refuses non-FIPS start | Exceptions §1.1 (RADIUS MD5; LDAPS via GnuTLS; Duo second factor, exception 9 with the controls of §1.3); F-1 stream choice |
+| 3.13.11 | FIPS-validated cryptography for CUI | All app/nginx/EAP crypto via the OpenSSL FIPS provider (validated only on the `fips` stream's certified packages — see F-1); app refuses non-FIPS start; LDAPS too with the bundled FreeRADIUS package | Exceptions §1.1 (RADIUS MD5; LDAPS via GnuTLS with the distribution's FreeRADIUS only; Duo second factor, exception 9 with the controls of §1.3); F-1 stream choice |
 | 3.13.15 | Protect authenticity of communications sessions | TLS; server-side sessions with 256-bit random tokens, rotated at login and MFA, `__Host-` Secure HttpOnly SameSite=Strict cookie; CSRF token + Origin/Referer checks; HSTS, CSP, frame-ancestors none | — |
 | 3.14.6 / 3.14.7 | Monitor systems / identify unauthorized use | Auth log (radpostauth) with reject reasons and per-record detail, live sessions (accounting), unknown-device queue, alerts (reject spikes, unresponsive switches, FreeRADIUS down, portal down) to syslog/email, audit log, failed-login records | Forward alerts to the SIEM and define response procedures |
 
@@ -461,7 +472,7 @@ package does about each. Check every one on the server you migrate.
 | F-4 | FreeRADIUS bootstrap test CA and test certificates with private keys left in `certs/`; `ca_path = ${cadir}` makes EAP trust that test CA | High | `ca_path` removed and `reject_unknown_intermediate_ca = yes`; delete/shred the test material after cut-over (RUNBOOK §12) |
 | F-5 | `radpostauth.pass` contains switch-admin passwords in cleartext (the stock post-auth query logs User-Password) | High | Not migrated; the new query never stores passwords; shred the old database; rotate every switch-admin password |
 | F-6 | Unused EAP methods and modules enabled; inner-tunnel enabled | Medium | Removed (EAP-TLS only); less attack surface and fewer non-FIPS code paths (MD4/DES in MS-CHAP) |
-| F-7 | TLS cipher lists `DEFAULT` for LDAP/EAP | Medium | EAP: FIPS list (OpenSSL). LDAP: `tls_min_version = 1.2`; `cipher_list` left unset because libldap uses GnuTLS (§1.1 exception 5) |
+| F-7 | TLS cipher lists `DEFAULT` for LDAP/EAP | Medium | EAP: FIPS list (OpenSSL). LDAP: `tls_min_version = 1.2` (enforced); `cipher_list` left unset: FreeRADIUS 3.2.10 ignores it with either TLS library (set after the TLS context is created); with the bundled package the system OpenSSL policy applies (§1.1 exception 5) |
 | F-8 | Verbose `ldap_debug` | Low | Set to `0x0000` |
 | F-9 | **Message-Authenticator** not required for switches (BlastRADIUS, CVE-2024-3596) | High | Migrated as `auto`; per switch, after confirming it sends Message-Authenticator, set `yes` in the UI (RUNBOOK §5); set `limit_proxy_state = yes` |
 | F-10 | Shared secrets generated by a script, stored in cleartext files, unknown age | Medium | Rotate to UI-generated 32-character random secrets, one switch at a time; protect database backups |
@@ -619,7 +630,7 @@ validated like any query string.
 - The password is checked by an LDAP simple bind as the user over the same LDAPS connection
   settings as the computer lookup (TLS 1.2+, `require_cert = demand`, the site CA). It is never
   stored, logged or audited; the outer TLS tunnel protects it on the wire, the LDAPS session on
-  the way to the domain controller. The LDAPS caveat of exception 5 (GnuTLS) applies to it too.
+  the way to the domain controller. The LDAPS caveat of exception 5 (GnuTLS, distribution FreeRADIUS only) applies to it too.
 - The second rlm_ldap section reuses the main one's server, bind account and TLS settings by
   reference: no second copy of the bind password, one place to change it, and the installer's bind
   test and kept live settings cover both.

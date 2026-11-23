@@ -20,6 +20,13 @@ release, so previews sort after it.
   or as the default.
 
 ### Changed
+- **LDAPS through OpenSSL with the bundled FreeRADIUS.** The `radius-admin-freeradius` package
+  (3.2.10-2) links rlm_ldap against OpenLDAP built from the distribution's own source package
+  with OpenSSL, instead of the distribution's GnuTLS libldap, so in FIPS mode the connection to
+  the directory uses the OpenSSL FIPS provider. The package also carries `ra-ldapwhoami`, built
+  the same way, for testing the directory login. OpenSSL is stricter than GnuTLS: domain
+  controllers with SHA-1-signed or small-key certificates, or without TLS 1.2, are refused.
+  Servers on the distribution's FreeRADIUS are unchanged.
 - **Auth log names MAB devices.** A MAB login from a registered device shows the device's
   description, with the MAC under it, in the list and on the record. The "User / device" filter
   also searches MAB descriptions.
