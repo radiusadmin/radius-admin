@@ -20,6 +20,13 @@ release, so previews sort after it.
   or as the default.
 
 ### Changed
+- **Preflight on its own checks this server's settings.** Run without `--admin-net`, it now
+  takes the management subnet and portal name from the installed configuration instead of the
+  example defaults, so it no longer reports a false "no local IPv4 address" failure on an
+  installed server. It prints where the settings came from.
+- **RUNBOOK: moving a server onto the bundled FreeRADIUS package** (§1.3), for FreeRADIUS
+  installed from `.deb` packages or as a source build, with backups and rollback, and a note on
+  Wi-Fi controllers that take minutes to reconnect after FreeRADIUS was stopped.
 - **FIPS mode: FreeRADIUS uses the OpenSSL FIPS provider.** Upstream FreeRADIUS 3.2.10 loads
   OpenSSL's default provider even on a FIPS kernel, so EAP, password hashing and LDAPS in radiusd
   were not using the validated module. The bundled `radius-admin-freeradius` package (3.2.10-3)
