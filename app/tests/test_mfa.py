@@ -412,3 +412,25 @@ def test_cli_records_integration_outcome(app, superconn, monkeypatch):
     row = q(superconn, "SELECT action, success, actor, object_id, detail::text FROM ui.audit_log"
                        " WHERE action = 'integration.install'")[0]
     assert row[:4] == ("integration.install", True, "alice", "duo") and json.loads(row[4])["version"] == "6.8.1"
+
+
+def test_edit_shows_the_secret_behind_change(browser, superconn, logged_in):
+    """SPEC section 29.1: a new server asks for the shared secret; an existing one shows
+    "Shared secret: set" and the input only behind "Change shared secret"."""
+    import re
+    u = logged_in("admin")
+    stepup(browser, superconn, u)
+    body = browser.text(browser.get("/integrations/remote/new"))
+    assert re.search(r'<input id="secret" name="secret" type="password" required', body)
+    assert "Change shared secret" not in body
+    browser.post("/integrations/remote/new", REMOTE_FORM)
+    body = browser.text(browser.get("/integrations/nps-mfa/edit"))
+    assert "Shared secret: set" in " ".join(re.sub(r"<[^>]+>", " ", body).split())
+    d = re.search(r'<details class="secret-change"([^>]*)>(.*?)</details>', body, re.S)
+    assert d and "open" not in d.group(1)
+    assert "<summary>Change shared secret</summary>" in d.group(2) and 'name="secret"' in d.group(2)
+    assert body.count('name="secret"') == 1 and "required" not in d.group(2)
+    r = browser.post("/integrations/nps-mfa/edit", dict(REMOTE_FORM, secret="short"))
+    assert r.status_code == 400
+    d = re.search(r'<details class="secret-change"([^>]*)>(.*?)</details>', browser.text(r), re.S)
+    assert d and "open" in d.group(1) and 'id="secret-error"' in d.group(2)

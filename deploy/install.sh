@@ -41,6 +41,8 @@
 #   --confirm-migrate       allow the migrate phase to run
 #   --restart-freeradius    restart FreeRADIUS at the end of the fr-package and freeradius phases
 #   --freeradius-deb FILE   FreeRADIUS package for fr-package (default: the bundled one in packages/)
+#   --skip-ldap-check       fr-package: install the bundled FreeRADIUS package even when its
+#                           directory login test fails (default: refuse; see RUNBOOK)
 #   --from-checkout         install this git checkout as it is. Without it, a full install from a
 #                           checkout (no BUILD.json) downloads the signed release of its VERSION
 #                           from GitHub, verifies it and runs that release's installer instead
@@ -90,6 +92,7 @@ FROM=""
 CONFIRM_MIGRATE=0
 RESTART_FR=0
 FR_DEB=""
+SKIP_LDAP_CHECK=0
 LISTEN_IP=""
 RESOLVER=""
 SWITCH_NETS=""
@@ -127,6 +130,7 @@ while [[ $# -gt 0 ]]; do
         --from) FROM=$2; shift 2 ;;
         --confirm-migrate) CONFIRM_MIGRATE=1; shift ;;
         --restart-freeradius) RESTART_FR=1; shift ;;
+        --skip-ldap-check) SKIP_LDAP_CHECK=1; shift ;;
         --freeradius-deb) FR_DEB=$2; shift 2 ;;
         --listen-ip) OPT_LISTEN_IP=$2; shift 2 ;;
         --admin-net) OPT_ADMIN_NET=$2; shift 2 ;;
@@ -444,6 +448,7 @@ phase_fr_package() {
             return 0
         fi
     fi
+    fr_package_ldap_check "$deb"
     DEBIAN_FRONTEND=noninteractive NEEDRESTART_SUSPEND=1 apt-get install -y -q --no-install-recommends "$deb"
     ok "installed radius-admin-freeradius $ver${have:+ (was $have)}"
     FR_SVC=""; RADIUSD=""
@@ -890,47 +895,67 @@ for root, _, files in os.walk(staged):
 PY
 }
 
-ldap_bind_check() { # ldap_bind_check FILE : log in to AD with the identity/password FreeRADIUS will use
-    # radiusd -XC never contacts AD, so a wrong bind account or password only shows when
-    # FreeRADIUS restarts (rlm_ldap "Invalid credentials", data 52e) -- and then it will not
-    # start at all. Test the login before anything is installed.
-    local f=$1
-    if ! command -v ldapwhoami >/dev/null 2>&1; then
-        warn "ldapwhoami not installed (apt install ldap-utils): AD bind account NOT tested before install"
-        return 0
-    fi
-    local out rc
-    out=$(python3 - "$f" "$RA_RADDB" <<'PY'
+# The directory login test uses the LDAP library rlm_ldap uses: the bundled package's
+# ra-ldapwhoami (OpenSSL, SPEC section 15) when that package is installed, else ldap-utils'.
+RA_BUNDLED_LDAPWHOAMI=${RA_BUNDLED_LDAPWHOAMI:-/opt/radius-admin-freeradius/libexec/ra-ldapwhoami}
+ldap_bind_tool() {
+    if [[ -x $RA_BUNDLED_LDAPWHOAMI ]]; then printf '%s\n' "$RA_BUNDLED_LDAPWHOAMI"; else command -v ldapwhoami; fi
+}
+
+ldap_bind_try() { # ldap_bind_try FILE TOOL : one bind with FILE's server/identity/password/CA; prints OK|BADCRED|FAIL|SKIP message
+    python3 - "$1" "$RA_RADDB" "$2" <<'PY'
 import re, subprocess, sys, os, tempfile
-f, raddb = sys.argv[1:3]
+f, raddb, tool = sys.argv[1:4]
 t = open(f).read()
 def val(key):
     m = re.search(r"^[ \t]*%s[ \t]*=[ \t]*(?:'([^']*)'|\"([^\"]*)\"|(\S+))" % key, t, re.M)
     return None if not m else next(g for g in m.groups() if g is not None)
+def path(p):
+    return p.replace("${certdir}", os.path.join(raddb, "certs")).replace("${confdir}", raddb)
 server, ident, pw = val("server"), val("identity"), val("password")
-ca = val("ca_file")
+ca, cadir = val("ca_file"), val("ca_path")
 if not (server and ident and pw is not None):
     print("SKIP could not read server/identity/password"); sys.exit(0)
-if ca:
-    ca = ca.replace("${certdir}", os.path.join(raddb, "certs")).replace("${confdir}", raddb)
 uri = server if "://" in server else "ldaps://" + server
-fd, pf = tempfile.mkstemp(); os.write(fd, pw.encode()); os.close(fd)
 env = dict(os.environ, LDAPTLS_REQCERT="demand")
-if ca and not os.path.exists(ca):
-    print("FAIL ca_file %s does not exist" % ca); sys.exit(0)
 if ca:
+    ca = path(ca)
+    if not os.path.exists(ca):
+        print("FAIL ca_file %s does not exist" % ca); sys.exit(0)
     env["LDAPTLS_CACERT"] = ca
+elif cadir:
+    env["LDAPTLS_CACERTDIR"] = path(cadir)
+fd, pf = tempfile.mkstemp(); os.write(fd, pw.encode()); os.close(fd)
 try:
-    r = subprocess.run(["ldapwhoami", "-x", "-H", uri, "-D", ident, "-y", pf], capture_output=True, text=True,
+    r = subprocess.run([tool, "-x", "-H", uri, "-D", ident, "-y", pf], capture_output=True, text=True,
                        timeout=20, env=env)
     msg = (r.stdout + r.stderr).strip().replace("\n", " ")[:300]
+    if r.returncode != 0 and "Can't contact" in msg:
+        # libldap hides the TLS reason; its debug output names it (e.g. "ee key too small")
+        d = subprocess.run([tool, "-d", "1", "-x", "-H", uri, "-D", ident, "-y", pf], capture_output=True,
+                           text=True, timeout=20, env=env)
+        tls = [ln.strip() for ln in (d.stdout + d.stderr).splitlines() if ln.lstrip().startswith("TLS:")]
+        if tls:
+            msg = (msg + " (" + "; ".join(tls[-2:]) + ")")[:400]
     print(("OK " if r.returncode == 0 else ("BADCRED " if "Invalid credentials" in msg else "FAIL ")) + msg)
 except Exception as e:
     print("FAIL %s" % e)
 finally:
     os.unlink(pf)
 PY
-)
+}
+
+ldap_bind_check() { # ldap_bind_check FILE : log in to AD with the identity/password FreeRADIUS will use
+    # radiusd -XC never contacts AD, so a wrong bind account or password only shows when
+    # FreeRADIUS restarts (rlm_ldap "Invalid credentials", data 52e) -- and then it will not
+    # start at all. Test the login before anything is installed.
+    local f=$1 tool out rc
+    tool=$(ldap_bind_tool || true)
+    if [[ -z $tool ]]; then
+        warn "ldapwhoami not installed (apt install ldap-utils): AD bind account NOT tested before install"
+        return 0
+    fi
+    out=$(ldap_bind_try "$f" "$tool")
     rc=$?
     case $out in
         OK*) ok "AD bind with the LDAP service account works" ;;
@@ -938,6 +963,44 @@ PY
         SKIP*) warn "AD bind not tested: ${out#SKIP }" ;;
         *) warn "AD bind test inconclusive (rc $rc): ${out#FAIL } -- check that FreeRADIUS starts after the next Apply" ;;
     esac
+}
+
+fr_package_ldap_check() { # fr_package_ldap_check DEB : before installing the bundled FreeRADIUS package
+    # Its rlm_ldap uses OpenSSL, which refuses some directory setups the distribution's GnuTLS
+    # libldap accepted (SHA-1-signed or small-key certificates, TLS below 1.2). FreeRADIUS does
+    # not start when the LDAP bind fails, so log in with the package's own ra-ldapwhoami first and
+    # stop when only the new library fails (SPEC section 15; lesson "LDAP identity overwrite").
+    local deb=$1 live=$RA_RADDB/mods-available/ldap x tool new ref reftool
+    [[ -r $live ]] || return 0
+    ldap_is_off "$live" && return 0
+    if (( SKIP_LDAP_CHECK )); then
+        warn "directory login with the new FreeRADIUS package NOT tested (--skip-ldap-check)"
+        return 0
+    fi
+    x=$(mktemp -d)
+    dpkg-deb --fsys-tarfile "$deb" | tar -x -C "$x" ./opt/radius-admin-freeradius/libexec/ra-ldapwhoami 2>/dev/null || true
+    tool=$x/opt/radius-admin-freeradius/libexec/ra-ldapwhoami
+    if [[ ! -x $tool ]]; then
+        rm -rf "$x"
+        return 0
+    fi
+    new=$(ldap_bind_try "$live" "$tool")
+    case $new in
+        OK*) ok "the new FreeRADIUS package logs in to the directory (LDAPS through OpenSSL)" ;;
+        BADCRED*) rm -rf "$x"
+                  die "AD rejects the LDAP bind account/password in mods-available/ldap (${new#BADCRED }). FreeRADIUS would not start with it; nothing was changed. Fix identity/password in $live first." ;;
+        SKIP*) warn "directory login with the new FreeRADIUS package not tested: ${new#SKIP }" ;;
+        *)
+            reftool=$(ldap_bind_tool || true)
+            ref=""
+            [[ -n $reftool ]] && ref=$(ldap_bind_try "$live" "$reftool")
+            if [[ $ref == OK* ]]; then
+                rm -rf "$x"
+                die "the directory login works with the FreeRADIUS installed now but not with the new package, whose LDAP uses OpenSSL: ${new#FAIL }. Nothing was changed. Usually the domain controller's certificate (SHA-1 signature, RSA below 2048 bits, name not in the certificate) or TLS version (below 1.2) is the cause: check it with openssl s_client (RUNBOOK) and fix the directory side, or run again with --skip-ldap-check to install anyway (FreeRADIUS would then fail its LDAP bind after the next restart)."
+            fi
+            warn "directory login test inconclusive (new package: ${new#FAIL }; current: ${ref:-no ldapwhoami}) -- check that FreeRADIUS starts after the next restart" ;;
+    esac
+    rm -rf "$x"
 }
 
 # ------------------------------------------------------------------ a new (blank) server
@@ -1403,6 +1466,17 @@ import socket,sys
 s=socket.socket(socket.AF_UNIX); s.settimeout(30); s.connect("/run/radius-admin-helper.sock")
 s.sendall(sys.stdin.buffer.read()); print(s.recv(65536).decode().strip())' 2>&1 || true)
     if [[ $st == *'"ok":true'* ]]; then ok "helper reachable by radius-admin: $st"; else warn "helper status failed: $st"; fi
+    # RADIUS client shared secrets are sealed with the data key at rest (SPEC section 3.2): seal the
+    # plain ones (an upgrade, a rollback that wrote them back, a migration from SQLite)
+    local sealed
+    sealed=$(app_env "$RA_PYTHON" -m radius_admin.cli seal-client-secrets 2>&1) \
+        || die "sealing the RADIUS client shared secrets failed: $sealed"
+    ok "$sealed"
+    # what an older release left in the staging directory: its last staged files (plain) and its
+    # applied copies (plain until this release seals them)
+    sealed=$(app_env "$RA_PYTHON" -m radius_admin.cli seal-staging 2>&1) \
+        || die "cleaning the staging directory failed: $sealed"
+    ok "staging directory: $sealed"
 }
 
 need_admin_net() {

@@ -96,9 +96,9 @@ radius-admin/
 | Web socket group | `radius-admin-web`; `www-data` is a member |
 | App code | `/opt/radius-admin/` (root:root 0755) |
 | App config | `/etc/radius-admin/radius-admin.conf` (root:radius-admin 0640), INI format |
-| Key file | `/etc/radius-admin/keys/data.key` 32 random bytes (radius-admin:radius-admin 0400) — AES-256-GCM key for TOTP secrets |
+| Key file | `/etc/radius-admin/keys/data.key` 32 random bytes (radius-admin:radius-admin 0400) — AES-256-GCM key for secrets at rest (TOTP, client shared secrets, provider and SNMP/SMTP credentials, certificate keys, applied-file copies) |
 | Gunicorn socket | `/run/radius-admin/app.sock` (dir radius-admin:radius-admin-web 0750) |
-| Staging dir | `/var/lib/radius-admin/staging/` (radius-admin:radius-admin 0700) files `policy`, `clients` |
+| Staging dir | `/var/lib/radius-admin/staging/` (radius-admin:radius-admin 0700) files `policy`, `clients` (and the provider files), present only while the helper validates or applies them: the app removes them once the helper answered, unless another apply staged newer ones |
 | Helper | `/usr/local/libexec/radius-admin/radius-admin-helper` (root 0755) |
 | Helper socket | `/run/radius-admin-helper.sock` root:radius-admin 0660, systemd socket activated, Accept=yes |
 | Helper work | `/var/lib/radius-admin-helper/` (root 0700): `backups/<UTC ts>/`, `validate/`, `state.json`, lock file |
@@ -217,7 +217,10 @@ ui.login_attempt(id bigserial PK, ip inet, username text, success boolean, at ti
 ui.radius_client(
   id serial PK, name text UNIQUE NOT NULL CHECK (name ~ '^[A-Za-z0-9._-]{1,63}$'),
   ipaddr text NOT NULL,                   -- IPv4/IPv6 address or CIDR, validated in app
-  secret text NOT NULL,                   -- RADIUS shared secret (must be cleartext for RADIUS)
+  secret text NOT NULL,                   -- '' once sealed; a plain value (older release, script) wins
+  secret_enc bytea,                       -- sql/103: the shared secret, AES-256-GCM with the data key
+                                          -- (additional data radius-admin:radius_client:secret); the app
+                                          -- opens it to render the clients file, for CoA and reveal
   require_ma text NOT NULL DEFAULT 'auto' CHECK (require_ma IN ('yes','no','auto')),
   limit_proxy_state text NOT NULL DEFAULT 'auto' CHECK (limit_proxy_state IN ('yes','no','auto')),
   nas_type text NOT NULL DEFAULT 'other', description text NOT NULL DEFAULT '',
@@ -239,6 +242,18 @@ ui.audit_log(id bigserial PK, at timestamptz NOT NULL DEFAULT now(), actor text,
   action text NOT NULL, object_type text, object_id text, detail jsonb, success boolean NOT NULL,
   prev_hash text NOT NULL, hash text NOT NULL)
 ```
+
+Client shared secrets at rest (sql/103-client-secrets.sql): the portal and the client import
+write `secret_enc` (and `secret` = ''); `python3 -m radius_admin.cli seal-client-secrets`, run at
+the end of the installer's app phase, seals every plain `secret` (audit `client.secrets_seal`);
+right after it `seal-staging` removes the staged files an older release left (it kept the last
+ones, in plain) and seals its plain applied copies (audit `config.staging_sealed` with the counts,
+only when it changed something). Both record the actor `installer` (the CLI runs with `env -i`).
+`update.sh` (rollback and install) runs the installed release's `unseal-client-secrets` (audit
+`client.secrets_unseal`) before it starts a release whose CLI has no `seal-client-secrets`, and
+installs nothing when that fails; a sealed secret it cannot open stops it with nothing changed.
+A sealed secret that the data key cannot open: rendering refuses for an enabled client, reveal
+refuses, and the edit page requires a new secret.
 radius_admin: full DML on ui.* EXCEPT ui.audit_log where it has only SELECT, INSERT
 (+ sequence usage). A trigger on ui.audit_log raises on UPDATE/DELETE/TRUNCATE.
 Audit hash: `hash = sha256_hex(prev_hash + canonical_json(row fields except id/hash))`,
@@ -392,6 +407,7 @@ Actions:
   empty `text` and a message (section 23).
 - `integration_status`, `integration_catalog`, `integration_preflight`, `integration_fetch`,
   `integration_install`, `integration_log`: second-factor provider installs, section 29.1.
+- `integration_remove`, `integration_test`, `integration_push_test`: section 29.1 and 29.3.
 - `cert_status`, and the staged `certificates` file in `validate`/`apply`/`rollback`: certificates
   managed in the portal, section 30.
 Staging path is fixed in helper.conf, never taken from the request. Helper safety
@@ -455,6 +471,12 @@ No Flask sessions/itsdangerous; own server-side sessions (§3.2).
 - CSRF token per session on every POST (hidden field) + Origin/Referer same-host check.
 - Step-up re-auth (password + MFA) within `stepup_minutes` for: apply, rollback,
   custom policy edit, settings, UI admin management, revealing a secret, MFA reset.
+  A GET whose step-up lapsed returns to itself after the re-authentication; a POST is not
+  replayed (the admin submits again) and returns to the form's `return_to`, else the page it was
+  sent from (Referer naming this host), else its own path; each only when it passes `safe_next`
+  and is a page that answers GET (never a POST-only address, which would end in 405: a POST result
+  shown in place, such as the Duo check at `/integrations/duo/test`, is not a page), else the
+  dashboard. Every form on the Duo page carries `return_to=/integrations/duo` (`m.csrf(return_to)`).
 - RBAC: viewer = read-only (secrets masked); operator = edit clients, switch admins,
   MAB, access rules, and apply; admin = everything incl. custom policy, settings,
   UI admins, rollback, secret reveal.
@@ -473,6 +495,9 @@ No Flask sessions/itsdangerous; own server-side sessions (§3.2).
   users (admin: create w/ temp password, role, enable/disable, unlock, reset MFA),
   account (change password, MFA, list/revoke own sessions).
 - Pending changes = render(current DB) differs from last successful apply hashes.
+- One apply path: `services.apply_now(source)` renders, stages, calls the helper's `apply`,
+  writes `ui.apply_log`, keeps the applied copy, removes the staged files and audits
+  `config.apply` with detail `source` (`apply`: the Apply page; `duo`: the Duo page, section 29.3).
 - Every mutation and every auth event → ui.audit_log + syslog (ident `radius-admin`).
   Never log secrets/passwords/TOTP codes.
 - Security headers (also set by nginx): CSP `default-src 'self'; script-src 'self';
@@ -642,7 +667,9 @@ CSV columns (header row required, exact names, any order tolerated by name):
   Quoted SNMP values spanning lines (-Ox wraps hex at 16 bytes) are joined; hourly housekeeping (mab_pending
   30 d, coa_request 90 d, snmp_test 7 d, resolved alerts 400 d).
 - UI: Sessions (`views/sessions.py`; accounting coverage per switch; CoA queue + result page; reworked in section 24),
-  auth-log detail (`/auth-log/<id>`, `insight.py` reason hints, cert expiry, group decode, NAS→client),
+  auth-log detail (`/auth-log/<id>`, `insight.py` reason hints, cert expiry, group decode, NAS→client;
+  `authmethod = 'mab'` rows show the `mab_device.description` of the station MAC when it is not empty,
+  in the list and the record, and the list's user filter also matches it),
   Alerts (+ settings, admin + step-up; SMTP password AES-256-GCM, AAD `radius-admin/alert_settings/smtp`),
   MAB expiry / vendor (`oui.py`, package `ieee-data`) / unknown-device queue with one-click approve and
   a `mab_default_vlan` setting, Reports (`views/reports.py`: CSV with formula neutralisation + print
@@ -747,6 +774,10 @@ CSV columns (header row required, exact names, any order tolerated by name):
   `preflight.sh --fips-mode on|off` (install.sh passes the mode; default the installed value, else
   off): the kernel/OpenSSL/Python FIPS checks block only in FIPS mode; standard mode prints one
   line and skips the FIPS-only notes (radiusd FIPS strings, GnuTLS LDAPS warning).
+  Run on its own (no `--admin-net`), preflight takes the management subnet and portal name the
+  way install.sh does without answers: `site.yaml` (`live_site`), then the nginx site, then the
+  firewall table; only with none of them the example defaults, and then the "no local IPv4
+  address" failure says the subnet is the example default. It prints `settings from <source>`.
 - **Portal settings without answers** (`update.sh`, which runs `install.sh --phase … -y`, or a
   phase run by hand): `server_name`, `admin_net`, `listen_ip` and `resolver` come from
   `/etc/radius-admin/site.yaml` (read with `ans_load`), else from the installed nginx site
@@ -782,12 +813,46 @@ CSV columns (header row required, exact names, any order tolerated by name):
 - **`radius-admin-freeradius`** (`tools/package/build-freeradius-deb.sh`): FreeRADIUS 3.2.10 from the
   signed upstream release (key `FR_KEY_FPR` in `tools/lib/fr-release.sh`, shared with the bench
   build), `--enable-fips-workaround`, prefix `/opt/radius-admin-freeradius`, raddb `/etc/freeradius`,
-  logs `/var/log/freeradius`. Modules needing libraries the product does not use (perl, python,
+  logs `/var/log/freeradius`. **LDAPS through OpenSSL (change 2026-11-23, package revision 2):**
+  rlm_ldap links a private OpenLDAP client library (`tools/lib/openldap-build.sh`): the
+  distribution's own `openldap` source package (`apt-get source`, checked by the archive's signed
+  Release; the build host needs deb-src), configured `--disable-shared --enable-static --with-pic
+  --with-tls=openssl --without-cyrus-sasl --disable-slapd`, static `liblber.a`/`libldap.a`
+  linked into `rlm_ldap.so` with `-Wl,--exclude-libs` (radiusd also loads the system
+  `libldap.so.2` through libpq; a second shared one would clash by SONAME and symbols). The
+  build fails unless `rlm_ldap.so` and `libexec/ra-ldapwhoami` (`ldapwhoami` built the same way)
+  link `libssl.so.3`, no libldap/liblber/GnuTLS, take no
+  `ldap_*`/`ber_*` symbol from elsewhere and export none. No SASL binds. `SOURCE` names the
+  openldap version and source files, `copyright` adds the OpenLDAP Public License, and
+  `packages/source/` carries the openldap `.dsc` and tarballs. The bench build
+  (`tools/ci/build-freeradius.sh`) uses the same library and rebuilds a prefix without
+  `share/radius-admin-openldap`. The distribution's `freeradius` package keeps GnuTLS (SECURITY.md
+  exception 5); preflight says which TLS library rlm_ldap uses. **Patches (change 2026-11-23,
+  package revision 3):** `tools/package/freeradius/patches/*.patch` are applied in order to the
+  verified release by `fr_apply_patches` (`tools/lib/fr-release.sh`; `patch -p1 --fuzz=0`, a patch
+  that does not apply stops the build), in the package build and in the bench build (which
+  rebuilds when the patch set's hash in `share/radius-admin-openldap` changes). `SOURCE` lists each
+  patch with its SHA-256; the patches ship in `share/doc/radius-admin-freeradius/patches/` and
+  `packages/source/`. Each patch file starts with why it exists and when to drop it. `0001-tls-fips-provider-in-fips-mode`: in FIPS mode
+  (`/proc/sys/crypto/fips_enabled` = 1, or `fips=yes` already set by the OpenSSL configuration)
+  `tls_global_init` loads the `fips` and `base` providers, sets `fips=yes`, never loads the
+  default provider or sets `-fips`, fails when the FIPS provider is missing, and logs the active
+  providers; standard mode is unchanged (SECURITY.md §1). **Installer:** the directory
+  login test (`ldap_bind_check`, freeradius phase) uses `ra-ldapwhoami` when the bundled package
+  is installed, else ldap-utils' `ldapwhoami` (`ca_file` → `LDAPTLS_CACERT`, else `ca_path` →
+  `LDAPTLS_CACERTDIR`; `LDAPTLS_REQCERT=demand`; on "Can't contact" a second run with `-d 1` adds
+  libldap's `TLS:` lines to the message). Before `fr-package` installs or upgrades the package
+  (`fr_package_ldap_check`), it extracts the new package's `ra-ldapwhoami` and binds with the
+  live `mods-available/ldap` (skipped without that file, with the "directory not configured"
+  marker, or for a package without the tool): success goes ahead; "Invalid credentials" stops;
+  any other failure stops when the current tool (installed package's `ra-ldapwhoami` or
+  `ldapwhoami`) binds, otherwise it is a warning. `--skip-ldap-check` (install.sh; `update.sh --
+  --skip-ldap-check`) skips it with a warning. Modules needing libraries the product does not use (perl, python,
   mysql, sqlite, redis, rest, …) are configured out, so the package does not depend on the build
   host; the build fails unless `rlm_sql_postgresql`, `rlm_ldap`, `rlm_eap_tls`, `rlm_sql`, `rlm_files`
   and `rlm_pap` were built. Depends are the distribution packages owning the directly linked
   libraries, with the minimum versions `dpkg-shlibdeps` takes from their symbols files (never the
-  build host's version); the build fails unless every versioned dependency is in the
+  build host's version; with the private OpenLDAP no longer `libldap2`); the build fails unless every versioned dependency is in the
   distribution's own archive (`tools/package/check-depends.sh`; CI pins libpq to the distribution
   build, `tools/ci/distro-libpq.sh`). The package is built per distribution release and its
   version says which (`3.2.10-1~ubuntu24.04`). `Conflicts: freeradius`.
@@ -821,7 +886,12 @@ CSV columns (header row required, exact names, any order tolerated by name):
   dictionaries `DICT_DIRS`, installer).
 - Tests: `tests/package/test_freeradius_deb.sh` (package contents; with `--install`, the installer
   phase, idempotency, kept configuration, checksum refusal, start and answer, upgrade without
-  restart, purge).
+  restart, purge; linkage of `rlm_ldap.so`/`ra-ldapwhoami` and a TLS handshake of `ra-ldapwhoami`
+  bound to libssl). The bench (`ldap_tls_cases`, after the other cases) starts radiusd under
+  `LD_DEBUG=bindings` and requires that rlm_ldap binds to the directory with `SSL_CTX_new` and
+  `SSL_connect` from libssl and binds nothing to GnuTLS or the system libldap/liblber (so the
+  bench needs a FreeRADIUS built by `tools/ci/build-freeradius.sh`), then restarts slapd TLS
+  1.2-only and requires that `tls_min_version = "1.2"` binds and `"1.3"` does not.
 
 ## 16. Change (2026-11-02): updates from signed GitHub builds
 
@@ -1277,20 +1347,25 @@ meta refresh stays only inside `<noscript>`, so every page still works without J
   names.
 - **Built-in profiles.**
 
-  | id | Status | VLAN | Full admin | CoA |
-  |---|---|---|---|---|
   | id | MAB from | Role |
   |---|---|---|
   | `cisco-c1300` | Ethernet | none |
+  | `cisco-iosxe` | Ethernet | none |
   | `generic-rfc` | Ethernet, Wireless-802.11 | `Filter-Id := {role}` (RFC 2865) |
 
   | id | Status | VLAN | Full admin | CoA |
   |---|---|---|---|---|
   | `cisco-c1300` (default) | supported | RFC 3580 tunnel attributes | `Cisco-AVPair += "shell:priv-lvl=15"` | UDP 1700, `mac-then-session`; reauth and bounce by `Cisco-AVPair` subscriber commands; Disconnect |
+  | `cisco-iosxe` | supported | RFC 3580 tunnel attributes | `Cisco-AVPair += "shell:priv-lvl=15"` | UDP 1700, `session-and-mac` without NAS-Port-Id (IOS-XE refuses a request unless every session identifier matches); reauth and bounce by `Cisco-AVPair` subscriber commands; Disconnect |
   | `generic-rfc` | unverified | RFC 3580 tunnel attributes | `Service-Type := Administrative-User` (RFC 2865) | UDP 3799, `session-and-mac`; Disconnect only (re-authenticate and bounce have no standard form) |
 
-  `generic-rfc` keeps SNMP port names as reported. Both render a policy that passes
-  `radiusd -XC`; `generic-rfc` stays "unverified" until it has run against real hardware.
+  `generic-rfc` keeps SNMP port names as reported. `cisco-iosxe` expands the IOS-XE short
+  ifName to the interface name in NAS-Port-Id (`Gi1/0/5` → `GigabitEthernet1/0/5`, likewise
+  `Fa`, `Te`; other names as reported). All render a policy that passes `radiusd -XC`;
+  `cisco-iosxe` has the same reply lists as `cisco-c1300`, so it adds no policy branches.
+  `generic-rfc` stays "unverified" until it has run against real hardware. `cisco-iosxe`
+  (added 2026-11-20) is "supported" by the maintainer's decision, from Cisco's documentation,
+  before a run on hardware.
 - **A profile per client.**
   - **Database** (`sql/99-vendor-profiles.sql`, additive, idempotent): `ui.radius_client.vendor_profile`
     (`NULL` = the default; CHECK `^[a-z0-9][a-z0-9-]{0,31}$`) and `ui.radius_client.coa_port`
@@ -1554,9 +1629,13 @@ complete on the FreeRADIUS side and bench-tested with a stand-in.
   rules, providers, available integrations. Admin + step-up: add/edit/remove a remote MFA server
   (id, description, address, port, shared secret write-only, timeout 5–60, require
   Message-Authenticator, on/off; a provider used by an enabled rule cannot be turned off, and one named
-  by any rule cannot be removed); Second-factor rules (`/integrations/policy`): per account kind on/off,
+  by any rule cannot be removed; the edit form shows "Shared secret: set" with the input behind a
+  "Change shared secret" `<details>`, and an empty input keeps the stored secret, see 29.3); Second-factor rules (`/integrations/policy`): per account kind on/off,
   provider (must be on; a remote server only for directory accounts), all or selected clients
-  (at least one), exempt local device admins (at most 10, must be local device admins). Audit:
+  (at least one), exempt local device admins (at most 10, must be local device admins). The local
+  rule on with no exempt account needs the confirmation `no_exempt_ok` (a provider that cannot be
+  reached makes FreeRADIUS reject, not drop, these logins, so devices do not fall back to their own
+  accounts); such a save records `no_exempt_confirmed: true` in the audit detail. Audit:
   `integration.provider_create` / `_update` / `_delete` (detail without secrets: `shared_key_set`,
   `shared_key_updated`), `integration.policy`. FIPS mode: remote servers are not offered and the rules
   refuse them (the password would leave the server protected only by RADIUS's MD5-based hiding); in
@@ -1592,7 +1671,8 @@ installer itself follow in the next step).
   `integration_owner = radius-admin`, created by the installer, 0750), `integration_catalog =
   /opt/radius-admin/integrations/catalog.json`, `integration_fetch_unit`,
   `integration_install_unit`, `integration_max_mib = 128`, `integration_log_dir =
-  /var/log/radius-admin`, `duo_dir = /opt/duoauthproxy`. The helper knows per provider the file
+  /var/log/radius-admin`, `duo_dir = /opt/duoauthproxy`, `integration_allow_unlisted = true`
+  (boolean; `false` = only catalog-listed builds install, see `integration_install`). The helper knows per provider the file
   pattern, the download prefix, its service (`duoauthproxy.service`), its address (127.0.0.1:18120),
   its API host pattern (`api-*.duosecurity.com`) and its build packages; the request only names the id.
 - **Catalog checks** (every action that uses it). The shipped catalog and `.sig` must be
@@ -1619,8 +1699,10 @@ installer itself follow in the next step).
     `integration_max_mib`, and is copied into `<work_dir>/integration/<id>/` (root 0700) while
     hashing (SHA-256). A catalog entry with that hash → `verified: catalog` (size and version must
     match; withdrawn, a non-FIPS entry in FIPS mode, or `min_radius_admin` above the installed build
-    → refused). Not in the catalog: refused in FIPS mode; otherwise refused with the file's SHA-256
-    in the message unless `sha256` equals it → `verified: pasted-hash`. Writes `request.json` (id,
+    → refused). Not in the catalog: refused in FIPS mode, and refused when helper.conf has
+    `integration_allow_unlisted = false` ("… this server installs only builds the signed catalog
+    lists …"); otherwise refused with the file's SHA-256 in the message unless `sha256` equals it →
+    `verified: pasted-hash`. Writes `request.json` (id,
     version, file, sha256, size, verified, fips, catalog_serial), the state (`queued`, actor) and
     starts `<integration_install_unit>@<id>.service`; refused while that unit runs.
   - `integration_log {"id", "offset"?}`: as `update_log`, for the log the state names
@@ -1657,7 +1739,8 @@ unreachable). The portal pages that drive this follow.
   --log-group duo_authproxy_grp --create-init-script yes --enable-selinux no --silent` (it creates
   the user and group, writes and enables `/etc/systemd/system/duoauthproxy.service`, Type=forking,
   twistd started as root dropping to the service user; `conf/authproxy.cfg` owned by the service
-  user, 0640). A running proxy is stopped first. Drop-in
+  user, 0640). A running proxy is stopped first, and started again if the install then fails.
+  Drop-in
   `duoauthproxy.service.d/radius-admin.conf`: `ProtectSystem=strict` with write access to
   `log`, `run`, `conf` and `-/etc/duoauthproxy` (Duo's secret storage), private /tmp and devices,
   protected kernel and cgroups, `RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK`,
@@ -1666,8 +1749,13 @@ unreachable). The portal pages that drive this follow.
   starts with `; radius-admin` (an applied configuration), otherwise left stopped.
 - **Removal** (`integrations/duo/remove.sh`, `radius-admin-integration-install --remove duo`,
   unit `radius-admin-integration-remove@.service`): only an install with `.radius-admin`; the
-  configuration is copied to `/var/backups/radius-admin/duoauthproxy-authproxy.cfg-<time>` (0600),
+  configuration is copied to `/var/backups/radius-admin/duoauthproxy-authproxy.cfg-<time>` (0600)
+  with the value of every key containing `skey`, `secret`, `password` or `_key` replaced by `REDACTED`,
   the service stopped, Duo's `uninstall --no-prompt` run, the drop-in removed.
+- **Helper sandbox.** `radius-admin-helper@.service` (`ProtectSystem=strict`) lists
+  `-/opt/duoauthproxy/conf` in `ReadWritePaths`: apply and rollback write `conf/authproxy.cfg`
+  (the connectivity tool runs in a unit of its own, below). Optional (`-`): a server without Duo
+  starts the helper as before. `tests/helper/test_helper_unit.py` checks the unit.
 - **Outcome audit.** The dispatcher records `integration.install` / `integration.remove` (result
   done, removed or failed; version; message; the actor from the state) with
   `python3 -m radius_admin.cli record-integration`.
@@ -1700,7 +1788,28 @@ unreachable). The portal pages that drive this follow.
   and apply first") or an install/removal runs; state `queued` with `action: remove`; starts
   `<integration_remove_unit>@<id>.service`. `integration_test {"id"}`: runs Duo's
   `usr/local/bin/authproxy_connectivity_tool` (root-owned, writable only by root) for at most
-  120 s; `{passed, output}` with lines naming skey, secret or password redacted.
+  120 s, as a transient unit (`systemd-run --wait --pipe`, `ProtectSystem=strict`, write access to
+  Duo's `log/` only, `CapabilityBoundingSet=CAP_SYS_PTRACE CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH`,
+  `RuntimeMaxSec=115`): the tool recognises the running proxy on its port only by mapping the
+  socket to a process, which needs `CAP_SYS_PTRACE`, and the helper has none; `{passed, output}` with lines naming skey, secret or password redacted.
+  `integration_push_test {"id": "duo", "username"}` (section 29.3): `username` must fullmatch
+  `[A-Za-z0-9._@-]{1,64}`; Duo must be installed and the live `authproxy.cfg` must start with
+  `; radius-admin` and pass `check_duo_config` (otherwise "apply the Duo settings first"); ikey,
+  skey and api_host come only from that file (api_host re-checked against
+  `^api-[a-z0-9]{1,16}\.duosecurity\.com$`). Rate limit under the lock `push-test.lock`, kept in
+  `<work_dir>/push-test.json` (`tries`: time, a hash of the username, never the name, and whether a
+  push was sent): 10 requests to Duo per hour in all, and no request for a user while a push to
+  that user was sent less than 30 s ago. A request that Duo answers before any push (not
+  enrolled, no access to the application, bypass) does not start that wait. Then POST `/auth/v2/preauth {username}` and, when its result is
+  `auth`, POST `/auth/v2/auth {username, factor: push, device: auto}` (at most 70 s; Duo waits up
+  to 60 s for the answer), as JSON bodies signed with Duo signature version 5 (HMAC-SHA512 over
+  date, method, host, path, the empty query, the SHA-512 of the body and of the absent X-Duo
+  headers; never the SHA-1 version 2 scheme), over TLS 1.2+ to `api_host:443` verified against the
+  system CAs. Answer `{ok: true, result, status_msg, pushed}` (`pushed`: the auth call that sends
+  the push was made) with `result` one of `allow`, `deny`,
+  `timeout` (Duo's status `timeout`), `not_enrolled` (preauth `enroll`), `error` (Duo refused the
+  request, or could not be reached or verified); never keys. helper.conf `duo_api_connect`
+  (`127.0.0.1:PORT`) and `duo_api_cafile` exist for tests only and are empty by default.
 
 ### 29.3 Duo in the portal
 
@@ -1717,7 +1826,16 @@ unreachable). The portal pages that drive this follow.
   `providers_sha256` (one SHA-256 over the provider files, '' without any) in the "expected" token
   and in `ui.apply_log.providers_sha256` (new column, sql/101-mfa.sql); `pending_state` compares it
   with the last apply (NULL counts as ''). The applied copy and its history keep the provider files;
-  a rollback to a set without a Duo file leaves the applied Duo copy, like the helper.
+  a rollback to a set without a Duo file leaves the applied Duo copy, like the helper. The history
+  (`applied/history/<backup_id>/`) keeps the newest `services.APPLIED_HISTORY_KEEP` (50, the helper's
+  default `keep_backups`) sets; older ones, with the provider secrets they hold, are removed after
+  each apply and rollback. In `applied/` and its history every file (policy, clients file with every RADIUS shared secret,
+  provider files) is sealed with the
+  data key (`ra-sealed-v1:` + base64 of the AES-256-GCM blob, additional data
+  `radius-admin:applied:<file name>`); plain copies of earlier versions are read as they are and
+  sealed by the next apply or rollback, and a copy that cannot be opened (data key replaced) counts
+  as missing (a policy or clients copy that cannot be opened means no archived set for that backup). The
+  staged copies the helper reads stay plain.
 - **Page** `/integrations/duo` (viewers: state; operators: test; admin + step-up: everything else):
   state (installed version, catalog-checked or Unverified, service running and listening, provider
   on/off, last install or removal), live progress and the install log (`/integrations/duo/status`,
@@ -1728,7 +1846,68 @@ unreachable). The portal pages that drive this follow.
   `fetch-duo.json`, Upload, and Install for each build in `integration_dir` (with, in standard mode
   only, a SHA-256 field and a required confirmation that it was compared with Duo's published value);
   3. Connect to Duo (ikey, skey write-only, API hostname, fail mode (standard mode only), factors,
-  on/off); 4. Test (`integration_test`); Remove (refused while the provider is on).
+  on/off); 4. Test (`integration_test`); Disable and remove (below).
+- **Disable and remove** (`POST /integrations/duo/remove`, admin + step-up, one button: "Disable
+  and remove Duo" while the provider is on, "Remove Duo" while it is off, each behind a
+  confirmation). Steps, each audited, each stopping the rest when it fails: (1) the enabled
+  second-factor rules that name Duo are listed on the page ("Local device admin accounts require
+  Duo on all clients") and turned off only with `rules_off=1` (a required tick; without it nothing
+  changes, since those logins would be rejected without Duo), `integration.policy` with detail
+  `reason: duo_remove`; (2) the provider is turned off (`integration.configure`); both are
+  committed; (3) when an apply is needed (the provider was on, or Duo changes are pending) and
+  nothing else is pending, `apply_now("duo_remove")`; other pending changes refuse the whole
+  action before step 1 (never a partial apply); a failed apply shows the helper's message and stops;
+  (4) the helper's `integration_remove` (`integration.remove_requested`); a refusal shows the
+  helper's own reason.
+- **On/off switch.** The provider is turned on and off with a switch (`_macros.switch`): a real
+  checkbox `name=enabled` with `role="switch"` and visible Enabled/Disabled text that CSS follows
+  (no JavaScript). The page computes the same checks as the save (`_duo_enable_block`,
+  `_duo_disable_block`): while Duo is on and an enabled rule names it, or while it is off and cannot
+  be turned on (not installed; FIPS mode: build not FIPS-capable; helper unreachable: install state
+  unknown), the switch is disabled with the reason next to it (`id="enabled-locked"`, in the
+  switch's `aria-describedby`); when locked on, a hidden `enabled=1` keeps it on through a save. The
+  save still refuses a change those checks forbid (a stale page, a crafted request).
+- **Save applies (Duo only).** `services.pending_breakdown()` splits what is pending by part,
+  comparing the rendered files with the applied copy: `policy`, `certificates`, `clients` (the
+  clients file before the second-factor tail, which starts with `MFA_TAIL_MARK`), `mfa` (ids of
+  other providers whose top-level blocks in that tail differ) and `duo` (Duo's blocks, i.e. the
+  listener, the `radius_admin_mfa` clients section and `radius_admin_mfa_duo`, or `duo_file`, a
+  staged Duo file that differs from the applied one). `others` names every part besides Duo;
+  `only_duo` is true when Duo is all that is pending. Pending changes this comparison cannot explain
+  (no applied copy) count as others.
+  `POST /integrations/duo/preview` (admin + step-up, same form as Save) checks the form, saves it
+  inside the request's transaction, computes the breakdown, the masked `authproxy.cfg` diff and
+  what restarts (the Duo proxy when its file changes, FreeRADIUS whenever anything is applied),
+  and rolls the transaction back: JSON `{ok, errors, pending, only_duo, others, restarts, diff,
+  enabled}`; nothing is saved or audited. With JavaScript, Save asks for it and shows a dialog
+  (`#duo-apply-dialog`, busy text "up to ~3 minutes"); its buttons submit the settings form with
+  `then`: `apply` (offered when only Duo is pending), `apply_all` (offered when others are
+  pending; the server also needs `confirm_all=1`, a tick in the dialog) or `save`. The save
+  (`POST /integrations/duo/settings`) always stores the settings first (committed before the
+  apply); with `then=apply` and only Duo pending, or `then=apply_all` with `confirm_all`, it calls
+  `apply_now("duo")`, then runs the connectivity check when Duo is on and the apply succeeded, and
+  shows both on the page, or the helper's own message when the apply failed. Anything else saves
+  only and says why; there is never a partial apply. Without JavaScript, when the form has errors
+  or when nothing would change, Save only saves. While changes are pending the section links to
+  the Apply page.
+- **Test needs an applied configuration.** Until radius-admin has applied a Duo file (the applied
+  copy has `provider-duo`), the proxy runs Duo's sample `authproxy.cfg`: section 4 says to apply the
+  Duo settings first instead of offering the check, and `POST /integrations/duo/test` refuses with
+  the same message without calling the helper.
+- **Send a test push** (`POST /integrations/duo/push-test`, admin + step-up; shown once a Duo
+  configuration has been applied, section 4 of the page): a username (same pattern as the helper,
+  checked before the helper is asked); the helper's `integration_push_test` (timeout 90 s); the page
+  shows Approved, Denied, No answer in time, Not enrolled in Duo or Duo could not be asked with
+  Duo's status message ("Refused by Duo before any push" / "Allowed by Duo without a push" when
+  Duo answered at preauth, e.g. a user without access to the application or a bypass user), or the helper's refusal (rate limit, no applied configuration). Audited
+  `integration.push_test` with `username`, `result` (`refused` when the helper refused) and
+  `pushed`, never keys.
+- **Stored secrets** (`_macros.secret_field`). Before a secret key is stored the form shows the
+  input (needed to turn Duo on). Once one is stored it shows "Secret key: set" and the input only
+  inside `<details class="secret-change">` with the summary "Change secret key" (opened when the
+  new value has an error). An empty or missing `skey` keeps the stored key; a new one replaces it
+  and the audit detail records `duo_skey_updated`. The remote MFA server's edit form does the same
+  for its shared secret (`shared_key_updated`).
 - **Upload** `POST /integrations/duo/upload`: multipart field `build`; the file name (directory part
   dropped) must be `duoauthproxy-X.Y.Z-src.tgz`; at most 128 MiB, written to a temporary file in
   `integration_dir` and renamed (0640). The request size limit is 2 MiB everywhere else; this path
@@ -1776,7 +1955,8 @@ unreachable). The portal pages that drive this follow.
   provider column (rule 3). Setup checklist: optional step `mfa` "Second factor for device admins",
   done when a rule is on and its provider is on, linking to the Integrations page.
 - **Device timeout.** Vendor profiles gain `setup.mfa_timeout` (section 26; Catalyst 1200/1300:
-  `radius-server timeout 30` + `radius-server retransmit 2`; generic-rfc `null` → the generic text;
+  `radius-server timeout 30` + `radius-server retransmit 2`; Catalyst 9000: `timeout 30` +
+  `retransmit 2` under `radius server <name>`, which overrides the global values; generic-rfc `null` → the generic text;
   custom profiles: form field `setup_mfa_timeout`). The Integrations page lists, per profile of the
   enabled clients the enabled rules cover (all enabled clients when a rule covers all, or no rule
   is on), the profile's commands or the generic text and the client count.
@@ -1806,8 +1986,9 @@ unreachable). The portal pages that drive this follow.
 
 ## 30. Change (2026-11-20): certificates managed in the portal
 
-Page **Certificates** (`/certificates/`, Network access; every role sees it, changes need admin +
-step-up, each one audited `certificate.upload|csr|issued|forget|ocsp`, never with key material):
+Page **Certificates** (`/certificates/`, under Settings; every role can open it but only admins see
+the Settings button; changes need admin + step-up, each one audited
+`certificate.upload|csr|issued|forget|ocsp`, never with key material):
 
 - **802.1X server certificate** (`eap_server`): FreeRADIUS's `certs/site/radius.pem` + `radius.key`
   (EAP-TLS/TTLS/PEAP and RadSec).

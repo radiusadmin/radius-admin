@@ -21,7 +21,7 @@ import signal
 import sys
 import time
 
-from . import alerts, audit, coa, db, helper_client, vendors
+from . import alerts, audit, coa, db, helper_client, services, vendors
 from .config import ConfigError, load_config
 from .crypto import DataKey, fips_status
 from .ports import same_ports
@@ -180,9 +180,9 @@ def coa_tool(cfg):
         return None, None, str(e)
 
 
-def run_coa(conn, cfg, profile):
+def run_coa(conn, cfg, profile, key=None):
     pending = db.query("SELECT r.*, host(r.nas_ip) AS nas, c.name, c.ipaddr, c.secret, c.enabled, c.key_status,"
-                       " c.vendor_profile, c.coa_port"
+                       " c.vendor_profile, c.coa_port, c.secret_enc"
                        " FROM ui.coa_request r JOIN ui.radius_client c ON c.id = r.client_id"
                        " WHERE r.done_at IS NULL ORDER BY r.id LIMIT 10", conn=conn)
     if not pending:
@@ -205,7 +205,8 @@ def run_coa(conn, cfg, profile):
             try:
                 req = coa.build_request(r["action"], r["nas"], r["acct_session_id"], r["calling_station_id"],
                                         r["nas_port_id"], profile=vp)
-                ok, msg = coa.send(r["action"], host, vendors.coa_port(r, vp), r["secret"], req, rc, dd, profile=vp)
+                secret = services.client_secret(r, key)     # sealed at rest (SPEC section 3.2)
+                ok, msg = coa.send(r["action"], host, vendors.coa_port(r, vp), secret, req, rc, dd, profile=vp)
                 if not ok and msg.startswith(coa.NO_REPLY):
                     silent.add(r["client_id"])
             except coa.CoaError as e:
@@ -352,7 +353,7 @@ def loop(cfg, once=False):
             if now - last_beat >= HEARTBEAT_EVERY:
                 heartbeat(conn, radclient_note)
                 last_beat = now
-            run_coa(conn, cfg, profile)
+            run_coa(conn, cfg, profile, key)
             if profile:
                 run_tests(conn, key, profile)
             if profile and profile["enabled"]:

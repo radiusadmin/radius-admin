@@ -14,10 +14,11 @@ HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 
 FIPS_MODE=""
 OCSP_URL=-
+OPT_ADMIN_NET=""
 while [[ $# -gt 0 ]]; do
     case $1 in
         --sqlite) RA_SQLITE_DB=$2; shift 2 ;;
-        --admin-net) RA_ADMIN_NET=$2; shift 2 ;;
+        --admin-net) OPT_ADMIN_NET=$2; shift 2 ;;
         --fips-mode) FIPS_MODE=$2; shift 2 ;;
         --ocsp-url) OCSP_URL=$2; shift 2 ;;
         -h|--help) sed -n '2,10p' "$0"; exit 0 ;;
@@ -28,6 +29,21 @@ require_root
 [[ -n $FIPS_MODE ]] || FIPS_MODE=$(live_fips || echo off)
 [[ $FIPS_MODE == on || $FIPS_MODE == off ]] || die "--fips-mode must be on or off"
 [[ $OCSP_URL != - ]] || OCSP_URL=$(live_nginx ocsp_url || true)
+# The management subnet and portal name this host runs (as install.sh resolves them: site.yaml,
+# then the nginx site, then the firewall table), not the example defaults, when run on its own.
+SETTINGS_SRC="example defaults"
+for _k in admin_net server_name; do
+    _v=""
+    if _v=$(live_site "$_k"); then _s=$RA_SITE_YAML
+    elif _v=$(live_nginx "$_k"); then _s=$RA_NGINX_SITE
+    elif [[ $_k == admin_net ]] && _v=$(live_nft "$_k"); then _s=$RA_FIREWALL_NFT
+    else continue; fi
+    if [[ $_k == admin_net ]]; then RA_ADMIN_NET=$_v; else RA_SERVER_NAME=$_v; fi
+    [[ $SETTINGS_SRC == "example defaults" ]] && SETTINGS_SRC=$_s
+done
+ADMIN_NET_NOTE=""
+if [[ -n $OPT_ADMIN_NET ]]; then RA_ADMIN_NET=$OPT_ADMIN_NET
+elif [[ $SETTINGS_SRC == "example defaults" ]]; then ADMIN_NET_NOTE=" (example default: pass --admin-net CIDR)"; fi
 
 hdr "System"
 if [[ -r /etc/os-release ]]; then
@@ -36,6 +52,7 @@ if [[ -r /etc/os-release ]]; then
     if [[ ${VERSION_ID:-} == 24.04 ]]; then ok "$PRETTY_NAME"; else warn "untested OS: ${PRETTY_NAME:-unknown} (target Ubuntu 24.04)"; fi
 fi
 info "kernel $(uname -r)"
+info "settings from $SETTINGS_SRC: management subnet $RA_ADMIN_NET${OPT_ADMIN_NET:+ (--admin-net)}, portal name $RA_SERVER_NAME"
 PYV=$(python3 -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null || echo none)
 if [[ $PYV == 3.12 ]]; then ok "python3 $PYV"; else warn "python3 is $PYV (target 3.12)"; fi
 
@@ -111,7 +128,9 @@ else
                 TLSLIB=$( { ldd "$LIBDIR/rlm_ldap.so"; if [[ -n $LDAPLIB ]]; then ldd "$LDAPLIB"; fi; } 2>/dev/null \
                     | grep -oE 'lib(gnutls|ssl|crypto)\.so[.0-9]*' | sort -u | tr '\n' ' ')
                 if [[ $FIPS_MODE == on ]] && grep -q gnutls <<<"$TLSLIB"; then
-                    warn "rlm_ldap -> ${LDAPLIB:-libldap} uses GnuTLS ($TLSLIB): LDAPS to AD is NOT protected by the OpenSSL FIPS provider and cipher_list does not apply. Restrict the DC (Schannel) to TLS1.2+/AES-GCM and verify whether this GnuTLS is a FIPS-validated module in your Ubuntu Pro stream (docs/SECURITY.md)."
+                    warn "rlm_ldap -> ${LDAPLIB:-libldap} uses GnuTLS ($TLSLIB): LDAPS to AD is NOT protected by the OpenSSL FIPS provider. The bundled radius-admin-freeradius package links rlm_ldap against OpenSSL instead; with this FreeRADIUS, restrict the DC (Schannel) to TLS1.2+/AES-GCM and verify whether this GnuTLS is a FIPS-validated module in your Ubuntu Pro stream (docs/SECURITY.md)."
+                elif [[ -z $LDAPLIB ]] && grep -q 'libssl' <<<"$TLSLIB" && ! grep -q gnutls <<<"$TLSLIB"; then
+                    info "rlm_ldap: private OpenLDAP client library (static), LDAPS through the system OpenSSL ($TLSLIB)"
                 else
                     info "rlm_ldap TLS libraries: ${TLSLIB:-unknown} (libldap ${LDAPLIB:-not found})"
                 fi
@@ -212,7 +231,7 @@ fi
 
 hdr "Network"
 VIP=$(detect_vlan_ip "$RA_ADMIN_NET" || true)
-if [[ -n $VIP ]]; then ok "address in admin network $RA_ADMIN_NET: $VIP ($(ip -o -4 addr show | awk -v a="$VIP" 'index($4, a"/")==1 {print $2}'))"; else bad "no local IPv4 address inside $RA_ADMIN_NET (nginx must bind to it; pass --listen-ip to install.sh)"; fi
+if [[ -n $VIP ]]; then ok "address in admin network $RA_ADMIN_NET: $VIP ($(ip -o -4 addr show | awk -v a="$VIP" 'index($4, a"/")==1 {print $2}'))"; else bad "no local IPv4 address inside $RA_ADMIN_NET$ADMIN_NET_NOTE (nginx must bind to it; pass --listen-ip to install.sh)"; fi
 info "UDP listeners 1812/1813: $(ss -H -lun 2>/dev/null | awk '$4 ~ /:(1812|1813)$/ {print $4}' | tr '\n' ' ')"
 TCP=$(ss -H -ltn 2>/dev/null | awk '$4 ~ /:(80|443|5432)$/ {print $4}' | tr '\n' ' ')
 info "TCP listeners on 80/443/5432: ${TCP:-none}"

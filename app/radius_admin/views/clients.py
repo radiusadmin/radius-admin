@@ -9,7 +9,8 @@ from ..crypto import generate_radius_secret
 from ..flashing import flash
 from ..listnav import list_url
 from ..security import cfg, login_required, role_required, stepup_required
-from ..services import get_settings, set_setting, unlang
+from ..services import (client_secret, client_secret_readable, get_settings, seal_client_secret, set_setting,
+                        unlang)
 from ..snmp import cli_port_name
 from . import ev, form_bool, form_str
 from .auth import inline_stepup
@@ -52,9 +53,15 @@ KEY_LABELS = {"ok": "ok", "encrypted": "Encrypted key – not usable", "missing"
 
 
 def _get(cid):
+    """The client row with its shared secret opened (SPEC section 3.2: sealed at rest);
+    `secret_unreadable` when the sealed secret cannot be opened with this data key."""
     row = db.query_one("SELECT * FROM ui.radius_client WHERE id=%s", (cid,))
     if row is None:
         abort(404)
+    row = dict(row)
+    row["secret_unreadable"] = not client_secret_readable(row)
+    row["secret"] = client_secret(row)
+    row.pop("secret_enc", None)
     return row
 
 
@@ -148,6 +155,9 @@ def _parse_form(existing=None):
             errors["secret"] = str(e)
     elif secret_mode != "keep" or not existing:
         errors["secret"] = "Choose how to set the shared secret."
+    elif existing.get("secret_unreadable") and data.get("transport", existing.get("transport")) != "radsec":
+        errors["secret"] = ("The stored shared secret cannot be read (was the data key replaced?)."
+                            " Generate or enter one.")
     elif existing.get("transport") == "radsec" and not existing["secret"]:
         errors["secret"] = "This client has no shared secret yet (it used RadSec). Generate or enter one."
     data["key_status"] = "ok" if data["secret"] is not None or not existing else existing["key_status"]
@@ -191,11 +201,11 @@ def new():
                                    tristate=TRISTATE, nas_types=NAS_TYPES, key_labels=KEY_LABELS), status
         if not errors:
             row = db.execute_returning(
-                "INSERT INTO ui.radius_client (name, ipaddr, secret, require_ma, limit_proxy_state,"
+                "INSERT INTO ui.radius_client (name, ipaddr, secret, secret_enc, require_ma, limit_proxy_state,"
                 " nas_type, description, enabled, key_status, key_scope, dot1x_ports, is_switch,"
                 " transport, radsec_peer_name, vendor_profile, coa_port)"
-                " VALUES (%s,%s,%s,%s,%s,%s,%s,%s,'ok',%s,%s,%s,%s,%s,%s,%s) RETURNING id",
-                (data["name"], data["ipaddr"], data["secret"] or "", data["require_ma"],
+                " VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,'ok',%s,%s,%s,%s,%s,%s,%s) RETURNING id",
+                (data["name"], data["ipaddr"]) + seal_client_secret(data["secret"]) + (data["require_ma"],
                  data["limit_proxy_state"], data["nas_type"], data["description"], data["enabled"],
                  data["key_scope"], data["dot1x_ports"], data["is_switch"], data["transport"],
                  data["radsec_peer_name"], data["vendor_profile"], data["coa_port"]))
@@ -232,16 +242,18 @@ def edit(cid):
             return render_template("clients/form.html", c=data, errors=errors, is_new=False, mode=mode,
                                    tristate=TRISTATE, nas_types=NAS_TYPES, key_labels=KEY_LABELS), status
         if not errors:
-            secret = data["secret"] if data["secret"] is not None else existing["secret"]
+            # a kept secret stays as stored (sealed, or plain until the next seal step)
+            sec_sql, sec_args = ("secret=%s, secret_enc=%s, ", seal_client_secret(data["secret"])) \
+                if data["secret"] is not None else ("", ())
             try:
                 with db.cursor() as cur:
                     cur.execute("SAVEPOINT client_edit")
                     cur.execute(
-                        "UPDATE ui.radius_client SET name=%s, ipaddr=%s, secret=%s, require_ma=%s,"
+                        "UPDATE ui.radius_client SET name=%s, ipaddr=%s, " + sec_sql + "require_ma=%s,"
                         " limit_proxy_state=%s, nas_type=%s, description=%s, enabled=%s, key_status=%s,"
                         " key_scope=%s, dot1x_ports=%s, is_switch=%s, transport=%s, radsec_peer_name=%s,"
                         " vendor_profile=%s, coa_port=%s, updated_at=now() WHERE id=%s",
-                        (data["name"], data["ipaddr"], secret, data["require_ma"], data["limit_proxy_state"],
+                        (data["name"], data["ipaddr"]) + sec_args + (data["require_ma"], data["limit_proxy_state"],
                          data["nas_type"], data["description"], data["enabled"], data["key_status"],
                          data["key_scope"], data["dot1x_ports"], data["is_switch"], data["transport"],
                          data["radsec_peer_name"], data["vendor_profile"], data["coa_port"], cid))
@@ -322,6 +334,10 @@ def reveal(cid):
         flash("%s uses RadSec: it authenticates with a certificate and has no shared secret." % row["name"], "info")
         return redirect(list_url("clients.index"))
     secret = None
+    if row["secret_unreadable"]:
+        flash("The shared secret of %s cannot be read (was the data key replaced?). Set a new one on the edit"
+              " page." % row["name"], "error")
+        return redirect(list_url("clients.index"))
     if request.method == "POST":
         secret = row["secret"]
         ev("client.secret_reveal", object_type="radius_client", object_id=cid, detail={"name": row["name"]})
@@ -410,8 +426,12 @@ def _import_options(form):
 
 
 def _existing_clients():
-    return db.query("SELECT id, name, ipaddr, secret, enabled, key_status, key_scope, dot1x_ports, is_switch, vendor_profile"
-                    " FROM ui.radius_client ORDER BY id")
+    rows = [dict(r) for r in db.query("SELECT id, name, ipaddr, secret, secret_enc, enabled, key_status, key_scope,"
+                                      " dot1x_ports, is_switch, vendor_profile FROM ui.radius_client ORDER BY id")]
+    for r in rows:      # compared with the file's secrets; an unreadable one counts as different
+        r["secret"] = client_secret(r)
+        r.pop("secret_enc", None)
+    return rows
 
 
 def _build_plan(text, opts, with_mode=False):
@@ -505,19 +525,19 @@ def import_confirm():
             for it in items:
                 if it["action"] == "new":
                     cur.execute(
-                        "INSERT INTO ui.radius_client (name, ipaddr, secret, require_ma, nas_type, enabled,"
+                        "INSERT INTO ui.radius_client (name, ipaddr, secret, secret_enc, require_ma, nas_type, enabled,"
                         " key_status, key_scope, dot1x_ports, is_switch, vendor_profile)"
-                        " VALUES (%s,%s,%s,%s,'other',%s,%s,%s,%s,%s,%s)",
-                        (it["hostname"], it["ip"], it["secret"] or "", it["require_ma"], it["enabled"],
+                        " VALUES (%s,%s,%s,%s,%s,'other',%s,%s,%s,%s,%s,%s)",
+                        (it["hostname"], it["ip"]) + seal_client_secret(it["secret"]) + (it["require_ma"], it["enabled"],
                          it["key_status"], it["key_scope"], it["dot1x_ports"], it["is_switch"], it.get("vendor_profile")))
                     created.append(it["hostname"])
                 elif it["action"] == "update":
                     if it["secret"] is not None:
                         cur.execute("UPDATE ui.radius_client SET name=%s, ipaddr=%s, key_scope=%s, dot1x_ports=%s,"
-                                    " is_switch=%s, vendor_profile=%s, secret=%s, key_status='ok', updated_at=now()"
-                                    " WHERE id=%s",
+                                    " is_switch=%s, vendor_profile=%s, secret=%s, secret_enc=%s, key_status='ok',"
+                                    " updated_at=now() WHERE id=%s",
                                     (it["hostname"], it["ip"], it["key_scope"], it["dot1x_ports"], it["is_switch"],
-                                     it.get("vendor_profile"), it["secret"], it["id"]))
+                                     it.get("vendor_profile")) + seal_client_secret(it["secret"]) + (it["id"],))
                     else:
                         cur.execute("UPDATE ui.radius_client SET name=%s, ipaddr=%s, key_scope=%s, dot1x_ports=%s,"
                                     " is_switch=%s, vendor_profile=%s, updated_at=now() WHERE id=%s",

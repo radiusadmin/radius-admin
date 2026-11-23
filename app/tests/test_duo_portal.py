@@ -203,18 +203,20 @@ def test_duo_config_staged_and_applied(app, browser, superconn, logged_in, idir)
     r = browser.post("/apply/apply", {"expected": m.group(1)}, csrf_page="/apply/")
     assert r.status_code == 200
     staging = app.config["RA"]["staging_dir"]
-    with open(os.path.join(staging, "provider-duo")) as fh:
-        staged = fh.read()
+    staged = h.staged["provider-duo"][0]          # what the helper read; removed from staging since
+    assert not os.path.exists(os.path.join(staging, "provider-duo"))
     secrets = ig.decrypt_secrets(app.config["RA_DATA_KEY"], "duo",
                                  q(superconn, "SELECT secrets_enc FROM ui.mfa_provider WHERE id='duo'")[0][0])
     assert staged == unlang.render_duo_config(dict(json.loads(q(superconn, "SELECT settings::text FROM ui.mfa_provider"
                                                                             " WHERE id='duo'")[0][0]), **secrets))
-    with open(os.path.join(staging, "clients")) as fh:
-        assert "home_server radius_admin_mfa_duo" in fh.read()
+    assert "home_server radius_admin_mfa_duo" in h.staged["clients"][0]
     row = q(superconn, "SELECT providers_sha256 FROM ui.apply_log WHERE action='apply' ORDER BY id DESC LIMIT 1")[0][0]
     assert row and len(row) == 64
-    with open(os.path.join(staging, "applied", "provider-duo")) as fh:
-        assert fh.read() == staged
+    with open(os.path.join(staging, "applied", "provider-duo")) as fh:     # sealed with the data key
+        assert secrets["skey"] not in fh.read()
+    with app.app_context():
+        from radius_admin import services
+        assert services.read_applied(staging)["providers"]["provider-duo"] == staged
     # nothing pending afterwards; turning Duo off removes its file from the next staging
     with app.test_request_context():
         from radius_admin import services
@@ -224,7 +226,7 @@ def test_duo_config_staged_and_applied(app, browser, superconn, logged_in, idir)
     m = re.search(r'name="expected" value="([^"]+)"', page)
     assert m.group(1).endswith(":")
     browser.post("/apply/apply", {"expected": m.group(1)}, csrf_page="/apply/")
-    assert not os.path.exists(os.path.join(staging, "provider-duo"))
+    assert "provider-duo" not in h.staged
 
 
 def test_duo_can_serve_local_accounts_in_the_rules(browser, superconn, logged_in, idir):
@@ -245,20 +247,49 @@ def test_duo_can_serve_local_accounts_in_the_rules(browser, superconn, logged_in
     assert q(superconn, "SELECT count(*) FROM ui.mfa_provider WHERE id='duo'")[0][0] == 1
 
 
+def test_local_rule_needs_break_glass_or_confirmation(browser, superconn, logged_in, idir):
+    """A Duo outage rejects (not drops) every local admin login the rule covers, so devices do not
+    fall back to their own accounts: the local rule needs an exempt account or an explicit OK."""
+    h = helper_of(browser)
+    h.duo["installed"] = {"version": "6.8.1", "verified": "catalog"}
+    admin(browser, superconn, logged_in)
+    browser.post("/integrations/duo/settings", dict(SETTINGS_FORM, enabled="1"), csrf_page="/integrations/duo")
+    form = {"local_enabled": "1", "local_provider": "duo", "local_scope": "all", "directory_scope": "all",
+            "exempt": ""}
+    r = browser.post("/integrations/policy", form, csrf_page="/integrations/policy")
+    assert r.status_code == 400 and "break-glass" in browser.text(r)
+    assert q(superconn, "SELECT enabled FROM ui.mfa_policy WHERE account_kind='local'")[0] == (False,)
+    # the directory rule alone leaves local accounts alone: no exempt account needed
+    r = browser.post("/integrations/policy", {"directory_enabled": "1", "directory_provider": "duo",
+                                              "local_scope": "all", "directory_scope": "all", "exempt": ""},
+                     csrf_page="/integrations/policy")
+    assert r.status_code == 302, browser.text(r)
+    # an explicit confirmation is accepted and audited
+    r = browser.post("/integrations/policy", dict(form, no_exempt_ok="1"), csrf_page="/integrations/policy")
+    assert r.status_code == 302, browser.text(r)
+    assert q(superconn, "SELECT enabled FROM ui.mfa_policy WHERE account_kind='local'")[0] == (True,)
+    d = audit(superconn, "integration.policy")[-1]
+    assert d.get("no_exempt_confirmed") is True
+    # clearing the last exempt account later needs the same confirmation
+    q(superconn, "INSERT INTO radusergroup (username, groupname, priority) VALUES ('breakglass', 'net-admins', 1)")
+    assert browser.post("/integrations/policy", dict(form, exempt="breakglass"),
+                        csrf_page="/integrations/policy").status_code == 302
+    r = browser.post("/integrations/policy", form, csrf_page="/integrations/policy")
+    assert r.status_code == 400 and "break-glass" in browser.text(r)
+    assert q(superconn, "SELECT username FROM ui.mfa_exempt") == [("breakglass",)]
+
+
 def test_remove_and_test(browser, superconn, logged_in, idir):
     h = helper_of(browser)
     h.duo["installed"] = {"version": "6.8.1", "verified": "catalog"}
     admin(browser, superconn, logged_in)
     browser.post("/integrations/duo/settings", dict(SETTINGS_FORM, enabled="1"), csrf_page="/integrations/duo")
-    n = len(h.requests)
-    browser.post("/integrations/duo/remove", csrf_page="/integrations/duo")
-    assert not any(r_["action"] == "integration_remove" for r_ in h.requests[n:])      # still on
-    q(superconn, "UPDATE ui.mfa_provider SET enabled=false WHERE id='duo'")
-    browser.post("/integrations/duo/remove", csrf_page="/integrations/duo")
-    assert h.requests[-1]["action"] == "integration_remove"
+    browser.post("/apply/apply", {}, csrf_page="/apply/")          # Test needs an applied configuration
     r = browser.post("/integrations/duo/test", csrf_page="/integrations/duo")
     body = browser.text(r)
     assert "able to reach Duo" in body and audit(superconn, "integration.test")
+    browser.post("/integrations/duo/remove", csrf_page="/integrations/duo")         # off, applied, removed
+    assert h.requests[-1]["action"] == "integration_remove"
 
 
 def test_status_and_log_json(browser, superconn, logged_in, idir):
@@ -356,9 +387,11 @@ def test_fips_mode_turns_duo_on_only_with_a_fips_capable_build(app, browser, sup
     admin(browser, superconn, logged_in)
     body = browser.text(browser.get("/integrations/duo"))
     assert "not FIPS-capable" not in body                            # standard mode: never mentioned
+    assert not _has(_switch(body), "disabled")
     app.config["RA"]["require_fips"] = True
     body = browser.text(browser.get("/integrations/duo"))
     assert "FIPS mode: this build is not FIPS-capable" in body and "installed before FIPS mode" in body
+    assert _has(_switch(body), "disabled") and 'id="enabled-locked"' in body                # with the reason
     r = browser.post("/integrations/duo/settings", dict(SETTINGS_FORM, enabled="1"), csrf_page="/integrations/duo")
     assert r.status_code == 400 and "Install a FIPS-capable build first" in browser.text(r)
     assert q(superconn, "SELECT enabled FROM ui.mfa_provider WHERE id='duo'") in ([], [(False,)])
@@ -367,7 +400,8 @@ def test_fips_mode_turns_duo_on_only_with_a_fips_capable_build(app, browser, sup
     assert r.status_code == 302
     h.catalog["entries"][0].update(fips=True, fips_tested=["ubuntu-24.04-pro-fips-updates"])
     h.duo["installed"]["fips"] = True
-    assert "not FIPS-capable" not in browser.text(browser.get("/integrations/duo"))
+    body = browser.text(browser.get("/integrations/duo"))
+    assert "not FIPS-capable" not in body and not _has(_switch(body), "disabled")
     r = browser.post("/integrations/duo/settings", dict(SETTINGS_FORM, enabled="1"), csrf_page="/integrations/duo")
     assert r.status_code == 302 and q(superconn, "SELECT enabled FROM ui.mfa_provider WHERE id='duo'") == [(True,)]
 
@@ -377,6 +411,8 @@ def test_checks_return_to_their_section(browser, superconn, logged_in, idir):
     fragment, so the result page opens at the result instead of the top."""
     helper_of(browser).duo.update(installed={"version": "6.8.1", "verified": "catalog"}, service_active=True)
     admin(browser, superconn, logged_in)
+    browser.post("/integrations/duo/settings", dict(SETTINGS_FORM, enabled="1"), csrf_page="/integrations/duo")
+    browser.post("/apply/apply", {}, csrf_page="/apply/")          # Test needs an applied configuration
     body = browser.text(browser.get("/integrations/duo"))
     assert 'action="/integrations/duo/check#duo-check"' in body and 'id="duo-check"' in body
     assert 'action="/integrations/duo/test#duo-test"' in body and 'id="duo-test"' in body
@@ -384,3 +420,112 @@ def test_checks_return_to_their_section(browser, superconn, logged_in, idir):
     assert 'id="duo-test"' in body and "The Auth Proxy was able to reach Duo" in body
     # the back link above the heading is a button
     assert '<a class="btn btn-quiet btn-small btn-back" href="/integrations/">Integrations</a>' in body
+
+
+def _switch(body):
+    """The Enabled/Disabled switch of the Duo provider (SPEC section 29.3)."""
+    m = re.search(r'<input[^>]*role="switch"[^>]*>', body)
+    assert m, "no switch on the page"
+    return m.group(0)
+
+
+def _has(tag, attr):
+    return re.search(r"\s%s[\s>=]" % attr, tag) is not None
+
+
+def _plain(body):
+    return " ".join(re.sub(r"<[^>]+>", " ", body).split())
+
+
+def test_provider_switch_shows_state_and_why_it_is_locked(browser, superconn, logged_in, idir):
+    """SPEC section 29.3: Duo is turned on and off with a switch, a real checkbox with role=switch
+    and visible Enabled/Disabled text. When the server would refuse the change the switch is
+    disabled and the reason is next to it, instead of an error after Save."""
+    h = helper_of(browser)
+    admin(browser, superconn, logged_in)
+    body = browser.text(browser.get("/integrations/duo"))
+    sw = _switch(body)
+    assert 'type="checkbox"' in sw and 'name="enabled"' in sw and 'value="1"' in sw
+    assert '<span class="switch-on">Enabled</span>' in body and '<span class="switch-off">Disabled</span>' in body
+    # not installed: cannot be turned on
+    assert not _has(sw, "checked") and _has(sw, "disabled")
+    assert "enabled-locked" in sw and 'id="enabled-locked"' in body
+    assert "Install the Duo Authentication Proxy first" in body
+    # the helper does not answer: the install state is unknown
+    h.fail_next["integration_status"] = {"message": "helper down"}
+    body = browser.text(browser.get("/integrations/duo"))
+    assert _has(_switch(body), "disabled") and "install state is unknown" in _plain(body).split("Second factors")[1]
+    # installed: free to turn on
+    h.duo["installed"] = {"version": "6.8.1", "verified": "catalog"}
+    body = browser.text(browser.get("/integrations/duo"))
+    sw = _switch(body)
+    assert not _has(sw, "disabled") and not _has(sw, "checked") and 'id="enabled-locked"' not in body
+    r = browser.post("/integrations/duo/settings", dict(SETTINGS_FORM, enabled="1"), csrf_page="/integrations/duo")
+    assert r.status_code == 302
+    sw = _switch(browser.text(browser.get("/integrations/duo")))
+    assert _has(sw, "checked") and not _has(sw, "disabled")
+    # a second-factor rule names Duo: locked on, and a save keeps it on
+    q(superconn, "UPDATE ui.mfa_policy SET enabled=true, provider_id='duo' WHERE account_kind='directory'")
+    body = browser.text(browser.get("/integrations/duo"))
+    sw = _switch(body)
+    assert _has(sw, "checked") and _has(sw, "disabled") and "A second-factor rule uses Duo" in body
+    assert '<input type="hidden" name="enabled" value="1">' in body
+    r = browser.post("/integrations/duo/settings", dict(SETTINGS_FORM, skey="", enabled="1"),
+                     csrf_page="/integrations/duo")
+    assert r.status_code == 302 and q(superconn, "SELECT enabled FROM ui.mfa_provider WHERE id='duo'") == [(True,)]
+    # the rule is off again: the switch can turn Duo off
+    q(superconn, "UPDATE ui.mfa_policy SET enabled=false WHERE account_kind='directory'")
+    body = browser.text(browser.get("/integrations/duo"))
+    assert not _has(_switch(body), "disabled") and '<input type="hidden" name="enabled"' not in body
+
+
+def test_secret_key_behind_change_once_set(app, browser, superconn, logged_in, idir):
+    """SPEC section 29.3: before a secret key exists the page shows its input; once one is stored
+    it shows "Secret key: set" and the input only behind "Change secret key" (no JavaScript)."""
+    from radius_admin import integrations as ig
+    admin(browser, superconn, logged_in)
+    body = browser.text(browser.get("/integrations/duo"))
+    assert re.search(r'<input id="skey" name="skey" type="password"', body)
+    assert "Change secret key" not in body and "Secret key: set" not in _plain(body)
+    assert browser.post("/integrations/duo/settings", SETTINGS_FORM, csrf_page="/integrations/duo").status_code == 302
+    body = browser.text(browser.get("/integrations/duo"))
+    assert "Secret key: set" in _plain(body)
+    d = re.search(r'<details class="secret-change"([^>]*)>(.*?)</details>', body, re.S)
+    assert d and "open" not in d.group(1)
+    assert "<summary>Change secret key</summary>" in d.group(2) and 'name="skey"' in d.group(2)
+    assert body.count('name="skey"') == 1
+
+    def stored():
+        blob = q(superconn, "SELECT secrets_enc FROM ui.mfa_provider WHERE id='duo'")[0][0]
+        return ig.decrypt_secrets(app.config["RA_DATA_KEY"], "duo", blob)["skey"]
+    # saved without opening it: the stored key stays
+    browser.post("/integrations/duo/settings", dict(SETTINGS_FORM, skey="", factors="push"),
+                 csrf_page="/integrations/duo")
+    assert stored() == SKEY and "duo_skey_updated" not in audit(superconn, "integration.configure")[-1]
+    # a new key replaces it
+    browser.post("/integrations/duo/settings", dict(SETTINGS_FORM, skey="T" * 40), csrf_page="/integrations/duo")
+    assert stored() == "T" * 40 and audit(superconn, "integration.configure")[-1]["duo_skey_updated"] is True
+    # a wrong new key: the details open with the error
+    r = browser.post("/integrations/duo/settings", dict(SETTINGS_FORM, skey="short"), csrf_page="/integrations/duo")
+    assert r.status_code == 400
+    d = re.search(r'<details class="secret-change"([^>]*)>(.*?)</details>', browser.text(r), re.S)
+    assert d and "open" in d.group(1) and "Secret key must be" in d.group(2)
+    assert stored() == "T" * 40
+
+
+def test_upload_is_one_button_with_javascript(browser, superconn, logged_in, idir):
+    """With JavaScript, one "Upload a build…" button picks the file and uploads it (the build only
+    goes to Ready to install); without it, the file field and the Upload button as before."""
+    admin(browser, superconn, logged_in)
+    body = browser.text(browser.get("/integrations/duo"))
+    form = re.search(r'<form method="post" action="/integrations/duo/upload"[^>]*>(.*?)</form>', body, re.S).group(1)
+    assert re.search(r'<button type="button" class="btn js-only" data-pick-file="build"[^>]*>Upload a build…</button>', form)
+    assert 'class="nojs-only"' in form and '<button class="btn" type="submit">Upload</button>' in form
+    static = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "radius_admin", "static")
+    css, js = (open(os.path.join(static, n)).read() for n in ("app.css", "app.js"))
+    assert ".js .nojs-only" in css and "data-pick-file" in js
+
+
+def test_state_banner_keeps_its_distance(browser, superconn, logged_in, idir):
+    static = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "radius_admin", "static")
+    assert re.search(r"\.kv \+ \.flash[^{]*\{[^}]*margin-top", open(os.path.join(static, "app.css")).read())

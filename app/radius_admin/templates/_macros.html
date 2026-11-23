@@ -1,4 +1,4 @@
-{% macro csrf() %}<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">{% endmacro %}
+{% macro csrf(return_to=None) %}<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">{% if return_to %}<input type="hidden" name="return_to" value="{{ return_to }}">{% endif %}{% endmacro %}
 
 {# Pages whose saved changes only reach FreeRADIUS after "Apply changes" say so once,
    under the title. Everywhere else saving takes effect right away, so nothing is shown. #}
@@ -101,3 +101,50 @@
 {# A disabled button with a spinner, for work already running; app.js stops the spinner
    when the live_status on the page gives up waiting. #}
 {% macro busy_button(label, cls='btn') %}<button type="button" class="{{ cls }} is-busy" disabled aria-busy="true" data-live-busy>{{ label }}</button>{% endmacro %}
+
+{# An on/off setting as a switch: a real checkbox (role=switch, so Space toggles it and screen
+   readers say on/off) with visible Enabled/Disabled text that CSS follows without JavaScript.
+   locked: why the setting cannot change from its current state; the switch is then disabled,
+   the reason is shown next to it, and a hidden field keeps the current value in the form. #}
+{% macro switch(name, label, checked, locked=None, errors=None, hint=None) %}
+<div class="toggle-field">
+  <span class="toggle-label" id="{{ name }}-label">{{ label }}</span>
+  <label class="toggle-switch">
+    <input type="checkbox" role="switch" id="{{ name }}" name="{{ name }}" value="1" aria-labelledby="{{ name }}-label"
+      {%- set ids = ([name ~ '-locked'] if locked else []) + ([name ~ '-hint'] if hint else []) + ([name ~ '-error'] if errors and errors.get(name) else []) %}
+      {%- if ids %} aria-describedby="{{ ids|join(' ') }}"{% endif %}
+      {%- if errors and errors.get(name) %} aria-invalid="true"{% endif %}
+      {{- ' checked' if checked else '' }}{{ ' disabled' if locked else '' }}>
+    <span class="toggle-state" aria-hidden="true"><span class="switch-on">Enabled</span><span class="switch-off">Disabled</span></span>
+  </label>
+  {% if locked and checked %}<input type="hidden" name="{{ name }}" value="1">{% endif %}
+  {% if locked %}<p class="toggle-reason small" id="{{ name }}-locked">{{ locked }}</p>{% endif %}
+  {% if hint %}<p class="small muted" id="{{ name }}-hint">{{ hint }}</p>{% endif %}
+  {{ field_error(errors, name) }}
+</div>
+{% endmacro %}
+
+{# A stored secret is never shown and never asked for again by default: "<label>: set", with
+   the input for a new value behind "Change <label>" (details/summary, no JavaScript). An empty
+   input keeps the stored value; the server decides that, not this markup. is_set false: the
+   plain input, as for a new record. #}
+{% macro secret_field(errors, name, label, is_set, hint, maxlength, required=False) %}
+{% set err = errors and errors.get(name) %}
+{% if is_set %}
+<div class="secret-field">
+  <p class="secret-state"><span class="secret-name">{{ label }}:</span> set</p>
+  <details class="secret-change"{{ ' open' if err else '' }}>
+    <summary>Change {{ label|lower }}</summary>
+    <label for="{{ name }}">New {{ label|lower }}</label>
+    <input id="{{ name }}" name="{{ name }}" type="password" maxlength="{{ maxlength }}" autocomplete="new-password" aria-describedby="{{ name }}-hint{{ ' ' ~ name ~ '-error' if err else '' }}"{{ ' aria-invalid=true' if err else '' }}>
+    <p id="{{ name }}-hint" class="small muted">Leave empty to keep the stored {{ label|lower }}. {{ hint }}</p>
+    {{ field_error(errors, name) }}
+  </details>
+</div>
+{% else %}
+<label for="{{ name }}">{{ label }}</label>
+<input id="{{ name }}" name="{{ name }}" type="password"{{ ' required' if required else '' }} maxlength="{{ maxlength }}" autocomplete="new-password" aria-describedby="{{ name }}-hint{{ ' ' ~ name ~ '-error' if err else '' }}"{{ ' aria-invalid=true' if err else '' }}>
+<p id="{{ name }}-hint" class="small muted">{{ hint }}</p>
+{{ field_error(errors, name) }}
+{% endif %}
+{% endmacro %}

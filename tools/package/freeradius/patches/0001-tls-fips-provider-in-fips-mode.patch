@@ -1,0 +1,127 @@
+radius-admin patch for FreeRADIUS 3.2.10: use only the OpenSSL FIPS provider in FIPS mode.
+
+Upstream tls_global_init() (src/main/tls.c, unchanged on v3.2.x as of 2026-11-23) always sets
+the default property "-fips" and loads the default provider, so on a FIPS kernel radiusd still
+takes its algorithms from the non-validated default provider (seen on Ubuntu 24.04 Pro
+fips-updates: rlm_ldap negotiated ChaCha20-Poly1305 and X25519; no fips.so in the process).
+
+With this patch, when the kernel is in FIPS mode (/proc/sys/crypto/fips_enabled = 1) or the
+OpenSSL configuration already enabled fips=yes, radiusd loads the "fips" and "base" providers,
+enables the fips=yes default property and never loads the default provider; it refuses to
+start when the FIPS provider cannot be loaded, and logs the active providers. Standard mode
+(no FIPS kernel) is unchanged. MD4/MD5/DES stay the local implementations of
+--enable-fips-workaround; the TLS 1.0 PRF in rlm_eap/libeap/mppe_keys.c keeps its own
+separate default-provider context (EAP-FAST / TLS < 1.2 only).
+
+Drop this patch when FreeRADIUS ships an equivalent fix (SPEC section 15).
+
+--- a/src/main/tls.c
++++ b/src/main/tls.c
+@@ -64,10 +64,43 @@
+ #  include <openssl/provider.h>
+ 
+ static OSSL_PROVIDER *openssl_default_provider = NULL;
++static OSSL_PROVIDER *openssl_fips_provider = NULL;
++static OSSL_PROVIDER *openssl_base_provider = NULL;
+ 
+ #ifndef WITH_FIPS
+ static OSSL_PROVIDER *openssl_legacy_provider = NULL;
+ #endif
++
++/*
++ *	FIPS mode: the kernel says so (/proc/sys/crypto/fips_enabled), or the
++ *	OpenSSL configuration already enabled the "fips=yes" default property.
++ *	In FIPS mode every algorithm must come from the FIPS provider, so the
++ *	default provider is never loaded and "-fips" is never set (radius-admin
++ *	patch; upstream loads the default provider unconditionally).
++ */
++static bool tls_fips_wanted(void)
++{
++	FILE	*fp;
++	int	c = 0;
++
++	if (EVP_default_properties_is_fips_enabled(NULL)) return true;
++
++	fp = fopen("/proc/sys/crypto/fips_enabled", "r");
++	if (!fp) return false;
++	c = fgetc(fp);
++	fclose(fp);
++
++	return (c == '1');
++}
++
++static int tls_log_provider(OSSL_PROVIDER *prov, void *uctx)
++{
++	char	*buf = uctx;
++	size_t	used = strlen(buf);
++
++	snprintf(buf + used, 256 - used, "%s%s", used ? ", " : "", OSSL_PROVIDER_get0_name(prov));
++	return 1;
++}
+ #endif
+ 
+ #define LOG_PREFIX "tls"
+@@ -3703,7 +3736,7 @@
+ 	CONF_modules_load_file(NULL, NULL, 0);
+ 
+ #if OPENSSL_VERSION_NUMBER >= 0x30000000L
+-	EVP_set_default_properties(NULL, "-fips");
++	if (!tls_fips_wanted()) EVP_set_default_properties(NULL, "-fips");
+ #endif
+ 
+ 	/*
+@@ -3726,6 +3759,37 @@
+ #endif
+ 
+ #if OPENSSL_VERSION_NUMBER >= 0x30000000L
++	if (tls_fips_wanted()) {
++		char providers[256] = "";
++
++		/*
++		 *	FIPS mode: the FIPS provider for every algorithm, the base
++		 *	provider for encoders/decoders (reading keys and certificates).
++		 *	Refuse to start rather than fall back to the default provider.
++		 */
++		if (!OSSL_PROVIDER_available(NULL, "fips")) {
++			openssl_fips_provider = OSSL_PROVIDER_load(NULL, "fips");
++			if (!openssl_fips_provider) {
++				ERROR("(TLS) FIPS mode: failed loading the OpenSSL FIPS provider");
++				return -1;
++			}
++		}
++		if (!OSSL_PROVIDER_available(NULL, "base")) {
++			openssl_base_provider = OSSL_PROVIDER_load(NULL, "base");
++			if (!openssl_base_provider) {
++				ERROR("(TLS) FIPS mode: failed loading the OpenSSL base provider");
++				return -1;
++			}
++		}
++		if (!EVP_default_properties_enable_fips(NULL, 1)) {
++			ERROR("(TLS) FIPS mode: failed setting the fips=yes default property");
++			return -1;
++		}
++		OSSL_PROVIDER_do_all(NULL, tls_log_provider, providers);
++		INFO("(TLS) FIPS mode: OpenSSL providers %s, default property fips=yes", providers);
++		return 0;
++	}
++
+ 	/*
+ 	 *	Load the default provider for most algorithms
+ 	 */
+@@ -3821,6 +3885,16 @@
+ 	}
+ 	openssl_default_provider = NULL;
+ 
++	if (openssl_fips_provider && !OSSL_PROVIDER_unload(openssl_fips_provider)) {
++		ERROR("Failed unloading FIPS provider");
++	}
++	openssl_fips_provider = NULL;
++
++	if (openssl_base_provider && !OSSL_PROVIDER_unload(openssl_base_provider)) {
++		ERROR("Failed unloading base provider");
++	}
++	openssl_base_provider = NULL;
++
+ #ifndef WITH_FIPS
+ 	if (openssl_legacy_provider && !OSSL_PROVIDER_unload(openssl_legacy_provider)) {
+ 		ERROR("Failed unloading legacy provider");

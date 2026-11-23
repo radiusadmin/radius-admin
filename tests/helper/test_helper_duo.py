@@ -68,8 +68,9 @@ def denv(env):  # noqa: F811
     _write(e.fips, "0\n", 0o644)
     _write(os.path.join(e.root, "bin", "systemctl"), FAKE_SYSTEMCTL.replace("__ROOT__", e.root))
     _write(os.path.join(e.root, "bin", "ss"), FAKE_SS.replace("__ROOT__", e.root))
+    _write(os.path.join(e.root, "bin", "systemd-run"), FAKE_SYSTEMD_RUN.replace("__ROOT__", e.root))
     with open(e.conf, "a") as fh:
-        fh.write("duo_dir = %s\nfips_file = %s\n" % (e.duo, e.fips))
+        fh.write("duo_dir = %s\nfips_file = %s\nsystemd_run = %s/bin/systemd-run\n" % (e.duo, e.fips, e.root))
     return e
 
 
@@ -292,6 +293,37 @@ def test_remove_of_a_foreign_install_refused(denv):
     os.unlink(os.path.join(denv.duo, ".radius-admin"))
     r = denv.call({"action": "integration_remove", "id": "duo"})
     assert r["ok"] is False and "not installed by radius-admin" in r["message"]
+
+
+FAKE_SYSTEMD_RUN = r"""#!/bin/sh
+# records its arguments, then runs the command after "--" (a transient unit stands in as a child)
+printf '%s\n' "$@" > "__ROOT__/systemd-run.args"
+while [ $# -gt 0 ] && [ "$1" != "--" ]; do shift; done
+shift
+exec "$@"
+"""
+
+
+def test_connectivity_tool_runs_in_a_sandbox_of_its_own(denv):
+    """Duo's tool recognises the running proxy on its port only with CAP_SYS_PTRACE (to map the
+    socket to a process); the helper does not have it, so the tool runs as a transient unit with
+    that capability, write access to Duo's log/ only, and the other protections."""
+    d = os.path.join(denv.duo, "usr", "local", "bin")
+    os.makedirs(d)
+    tool = os.path.join(d, "authproxy_connectivity_tool")
+    _write(tool, "#!/bin/sh\necho 'The Auth Proxy was able to reach Duo'\nexit 0\n", 0o755)
+    r = denv.call({"action": "integration_test", "id": "duo"})
+    assert r["ok"] and r["passed"] is True and "able to reach Duo" in r["output"]
+    args = open(os.path.join(denv.root, "systemd-run.args")).read().splitlines()
+    assert args[-2:] == ["--", tool]
+    assert {"--wait", "--pipe", "--quiet", "--collect"} <= set(args)
+    props = {args[i + 1].split("=", 1)[0]: args[i + 1].split("=", 1)[1] for i, a in enumerate(args) if a == "-p"}
+    assert props["ProtectSystem"] == "strict" and props["ReadWritePaths"] == "-%s/log" % denv.duo
+    caps = set(props["CapabilityBoundingSet"].split())
+    assert "CAP_SYS_PTRACE" in caps and "CAP_SYS_ADMIN" not in caps and "CAP_SETUID" not in caps
+    for k in ("NoNewPrivileges", "PrivateTmp", "PrivateDevices", "ProtectHome", "ProtectKernelModules"):
+        assert props[k] == "yes", k
+    assert int(props["RuntimeMaxSec"]) <= 120
 
 
 def test_connectivity_tool_output_redacted(denv):

@@ -32,7 +32,7 @@ jobs:
         run: |
           sudo apt-get install -y -q shellcheck >/dev/null
           shellcheck -S warning deploy/*.sh tests/freeradius/*.sh tests/migration/*.sh \
-              tests/installer/*.sh tests/package/*.sh tests/release/*.sh tools/*.sh tools/ci/*.sh \
+              tests/installer/*.sh tests/package/*.sh tests/release/*.sh tests/ci/*.sh tools/*.sh tools/ci/*.sh \
               tools/lib/*.sh tools/package/*.sh tools/release/*.sh integrations/*/*.sh
       - name: Site-data scan
         env:
@@ -84,6 +84,8 @@ jobs:
         run: cd "$REPO" && bash tests/installer/test_ad_join.sh | tee "$LOGS/ad-join.log"
       - name: Update install checks
         run: cd "$REPO" && sudo bash tests/installer/test_update_install.sh | tee "$LOGS/update-install.log"
+      - name: Update keeps client secrets readable (rollback)
+        run: cd "$REPO" && sudo bash tests/installer/test_update_secrets.sh | tee "$LOGS/update-secrets.log"
       - name: Integration install checks
         run: cd "$REPO" && sudo bash tests/installer/test_integration_install.sh | tee "$LOGS/integration-install.log"
       - name: Duo install checks
@@ -100,21 +102,70 @@ jobs:
         run: cd "$REPO" && sudo bash tests/release/test_release.sh | tee "$LOGS/release.log"
       - name: Install from a checkout (signed release download)
         run: cd "$REPO" && sudo bash tests/installer/test_fetch_release.sh | tee "$LOGS/fetch-release.log"
+      - name: CI skips for tested trees
+        run: cd "$REPO" && bash tests/ci/test_tested_tree.sh | tee "$LOGS/tested-tree.log"
       - name: Count tests
         id: counts
         if: always()
         run: |
           tools/ci/test-counts.py "$LOGS/helper.log" "$LOGS/licence-tool.log" "$LOGS/installer.log" "$LOGS/live-settings.log" "$LOGS/ad-join.log" \
-              "$LOGS/ldap-carry-over.log" "$LOGS/eap-carry-over.log" "$LOGS/update-install.log" "$LOGS/integration-install.log" "$LOGS/duo-install.log" "$LOGS/nginx-dropin.log" "$LOGS/nginx-update.log" "$LOGS/max-request-time.log" "$LOGS/install-reruns.log" "$LOGS/release.log" "$LOGS/fetch-release.log" | tee -a "$GITHUB_OUTPUT"
+              "$LOGS/ldap-carry-over.log" "$LOGS/eap-carry-over.log" "$LOGS/update-install.log" "$LOGS/update-secrets.log" "$LOGS/integration-install.log" "$LOGS/duo-install.log" "$LOGS/nginx-dropin.log" "$LOGS/nginx-update.log" "$LOGS/max-request-time.log" "$LOGS/install-reruns.log" "$LOGS/release.log" "$LOGS/fetch-release.log" "$LOGS/tested-tree.log" | tee -a "$GITHUB_OUTPUT"
+
+  # The package and bench jobs take most of a run. Each one, when it passes, records the tree it
+  # tested (an artifact tested-<job>-<tree>); a later run of the same tree within 7 days skips
+  # the job, so a squash merge into dev or a promotion to testing does not repeat what the pull
+  # request already ran (tools/ci/tested-tree.py says which markers count). Lint and unit always
+  # run; pushes to main (release, badges) and manual runs always run everything. A failed lookup
+  # runs the jobs.
+  tested:
+    name: Earlier runs of this tree
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      tree: ${{ steps.find.outputs.tree }}
+      package_run: ${{ steps.find.outputs.package_run }}
+      bench_run: ${{ steps.find.outputs.bench_run }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Look for runs that passed on this tree
+        id: find
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tree=$(git rev-parse 'HEAD^{tree}')
+          echo "tree=$tree" >> "$GITHUB_OUTPUT"
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] || { [ "$GITHUB_EVENT_NAME" = push ] && [ "$GITHUB_REF_NAME" = main ]; }; then
+            echo "Full run ($GITHUB_EVENT_NAME on $GITHUB_REF_NAME)"
+            exit 0
+          fi
+          for job in package bench; do
+            if run=$(tools/ci/tested-tree.py "$job" "$tree"); then
+              if [ -n "$run" ]; then
+                echo "${job}_run=$run" >> "$GITHUB_OUTPUT"
+                msg="The $job job passed on this tree ($tree) in $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$run, so it is skipped here."
+                echo "::notice title=$job skipped::$msg"
+                echo "$msg" >> "$GITHUB_STEP_SUMMARY"
+              else
+                echo "No earlier run passed the $job job on $tree"
+              fi
+            else
+              echo "::warning title=$job lookup failed::Running the $job job."
+            fi
+          done
 
   package:
     name: FreeRADIUS package
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    needs: tested
     if: >-
+      !cancelled() && needs.tested.outputs.package_run == '' && (
       github.event_name != 'push' ||
       github.ref_name == 'main' || github.ref_name == 'dev' || github.ref_name == 'testing' ||
-      startsWith(github.ref_name, 'ci/')
+      startsWith(github.ref_name, 'ci/'))
     outputs:
       passed: ${{ steps.counts.outputs.passed }}
       failed: ${{ steps.counts.outputs.failed }}
@@ -122,9 +173,11 @@ jobs:
       - uses: actions/checkout@v7
       - name: Build radius-admin-freeradius
         run: |
+          # deb-src: the package builds rlm_ldap's OpenLDAP from the distribution source package
+          sudo sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/ubuntu.sources
           sudo apt-get update -q
           sudo apt-get install -y -q --no-install-recommends build-essential pkg-config dpkg-dev \
-              binutils libtalloc-dev libssl-dev libpq-dev libldap-dev curl gnupg ca-certificates file python3-apt
+              binutils libtalloc-dev libssl-dev libpq-dev curl gnupg ca-certificates file python3-apt
           sudo tools/ci/distro-libpq.sh
           sudo tools/package/build-freeradius-deb.sh "$GITHUB_WORKSPACE/packages" /var/tmp/ra-frpkg
       - name: Package tests (install, start, upgrade, purge)
@@ -140,15 +193,28 @@ jobs:
           name: radius-admin-freeradius
           path: packages/
           retention-days: 14
+      - name: Marker for this tree
+        if: needs.tested.outputs.tree != ''
+        run: echo "package passed on $GITHUB_SHA in run $GITHUB_RUN_ID" > "$RUNNER_TEMP/tested-package"
+      - uses: actions/upload-artifact@v7
+        if: needs.tested.outputs.tree != ''
+        continue-on-error: true
+        with:
+          name: tested-package-${{ needs.tested.outputs.tree }}
+          path: ${{ runner.temp }}/tested-package
+          retention-days: 7
+          overwrite: true
 
   bench:
     name: App tests, FreeRADIUS bench and migration
     runs-on: ubuntu-24.04
     timeout-minutes: 45
+    needs: tested
     if: >-
+      !cancelled() && needs.tested.outputs.bench_run == '' && (
       github.event_name != 'push' ||
       github.ref_name == 'main' || github.ref_name == 'dev' || github.ref_name == 'testing' ||
-      startsWith(github.ref_name, 'ci/')
+      startsWith(github.ref_name, 'ci/'))
     outputs:
       passed: ${{ steps.counts.outputs.passed }}
       failed: ${{ steps.counts.outputs.failed }}
@@ -200,6 +266,17 @@ jobs:
           name: bench-logs
           path: ${{ runner.temp }}/logs
           retention-days: 7
+      - name: Marker for this tree
+        if: needs.tested.outputs.tree != ''
+        run: echo "bench passed on $GITHUB_SHA in run $GITHUB_RUN_ID" > "$RUNNER_TEMP/tested-bench"
+      - uses: actions/upload-artifact@v7
+        if: needs.tested.outputs.tree != ''
+        continue-on-error: true
+        with:
+          name: tested-bench-${{ needs.tested.outputs.tree }}
+          path: ${{ runner.temp }}/tested-bench
+          retention-days: 7
+          overwrite: true
 
   # README badges: on every push to main, write the test counts as shields.io endpoint
   # files to the "badges" branch (one commit, replaced each time; not protected).

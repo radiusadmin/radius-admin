@@ -2,14 +2,15 @@
 import difflib
 import re
 
-from flask import Blueprint, g, redirect, render_template, request, url_for
+from flask import Blueprint, redirect, render_template, request, url_for
 
-from .. import certs as certmod, db, helper_client
+from .. import certs as certmod, db, services
 from ..crypto import sha256_hex
 from ..flashing import flash
-from ..security import cfg, login_required, role_required, stepup_required
-from ..services import (policy_format_upgrade, providers_sha256, read_applied, render_all,
-                        render_provider_files, restore_applied_from_history, save_applied, write_staging)
+from ..security import login_required, role_required, stepup_required
+from ..services import (ApplyChanged, ApplyRenderError, apply_now, clear_staging, policy_format_upgrade,
+                        providers_sha256, read_applied, render_all, render_provider_files,
+                        restore_applied_from_history, write_staging)
 from . import ev
 
 bp = Blueprint("apply", __name__, url_prefix="/apply")
@@ -48,26 +49,9 @@ def _mask_duo(text):
     return re.sub(r"(?m)^((?:skey|secret|radius_secret_\d+)=).*$", r"\1********", text or "")
 
 
-def helper_wait(duo_change):
-    """Seconds to wait for the helper: helper_timeout, or helper_duo_timeout when the call may also
-    restart the Duo Authentication Proxy (its worst case, both services failing and being restored,
-    is about 180 s with the helper's defaults; SPEC section 29.4)."""
-    c = cfg()
-    return max(c["helper_timeout"], c.get("helper_duo_timeout", 210)) if duo_change else c["helper_timeout"]
-
-
-def _call(action, duo_change=False, **kw):
-    try:
-        return helper_client.call(cfg()["helper_socket"], action, timeout=helper_wait(duo_change), **kw)
-    except helper_client.HelperError as e:
-        return {"ok": False, "action": action, "message": str(e)}
-
-
-def _log_apply(action, ok, message, policy_sha=None, clients_sha=None, backup_id=None, providers_sha=None):
-    db.execute("INSERT INTO ui.apply_log (actor, action, policy_sha256, clients_sha256, success, message, backup_id,"
-               " providers_sha256) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
-               (g.user["username"], action, policy_sha, clients_sha, ok, (message or "")[:2000], backup_id,
-                providers_sha))
+helper_wait = services.helper_wait
+_call = services.call_helper
+_log_apply = services.log_apply
 
 
 @bp.route("/")
@@ -133,7 +117,10 @@ def validate():
     except Exception as e:
         flash("The configuration could not be rendered: %s" % e, "error")
         return redirect(url_for("apply.index"))
-    resp = _call("validate")
+    try:
+        resp = _call("validate")
+    finally:
+        clear_staging(policy, clients, providers)
     ok = bool(resp.get("ok"))
     _log_apply("validate", ok, resp.get("message"), sha256_hex(policy), sha256_hex(clients),
                providers_sha=providers_sha256(providers))
@@ -151,37 +138,15 @@ def validate():
 @stepup_required
 def apply():
     try:
-        policy, clients, providers = _stage()
-    except Exception as e:
-        flash("The configuration could not be rendered: %s" % e, "error")
-        return redirect(url_for("apply.index"))
-    ph, ch, xh = sha256_hex(policy), sha256_hex(clients), providers_sha256(providers)
-    expected = request.form.get("expected", "")
-    if expected and expected != ph + ":" + ch + ":" + xh:
+        ok, resp, output = apply_now("apply", expected=request.form.get("expected", ""))
+    except ApplyChanged:
         flash("The configuration changed while you were reviewing it. Review the new diff and apply again.",
               "error")
         return redirect(url_for("apply.index"))
-    staged_duo, staged_certs = providers.get("provider-duo"), providers.get("certificates")
-    prev = read_applied()["providers"]
-    # a certificate change may also reload the portal: give the helper the longer time
-    resp = _call("apply", duo_change=(staged_duo is not None and staged_duo != prev.get("provider-duo"))
-                 or (staged_certs is not None and staged_certs != prev.get("certificates")))
-    ok = bool(resp.get("ok"))
-    # Trust the hashes we staged; flag a mismatch reported by the helper.
-    hp, hc = resp.get("policy_sha256"), resp.get("clients_sha256")
-    if ok and ((hp and hp != ph) or (hc and hc != ch)):
-        resp["message"] = (resp.get("message") or "") + " (warning: helper hash differs from staged hash)"
-    backup_id = resp.get("backup_id") if isinstance(resp.get("backup_id"), str) else None
-    _log_apply("apply", ok, resp.get("message"), ph, ch, backup_id, providers_sha=xh)
-    if ok:
-        save_applied(policy, clients, backup_id=backup_id, providers=providers)
-    ev("config.apply", success=ok, object_type="config",
-       detail={"policy_sha256": ph, "clients_sha256": ch, "providers_sha256": xh, "backup_id": backup_id,
-               "rolled_back": bool(resp.get("rolled_back")), "message": (resp.get("message") or "")[:500]})
-    output = resp.get("output")
-    if isinstance(output, list):
-        output = "\n".join(str(x) for x in output)
-    return render_template("apply/result.html", action="apply", ok=ok, resp=resp, output=output or "")
+    except ApplyRenderError as e:
+        flash("The configuration could not be rendered: %s" % e, "error")
+        return redirect(url_for("apply.index"))
+    return render_template("apply/result.html", action="apply", ok=ok, resp=resp, output=output)
 
 
 @bp.route("/rollback", methods=["POST"])

@@ -222,6 +222,98 @@
       });
     }
 
+    // Duo settings (SPEC section 29.3): Save first asks the server what saving would apply
+    // (data-duo-preview: JSON, nothing is saved) and shows it in #duo-apply-dialog, whose buttons
+    // submit the form with then=apply / apply_all / save. Without JavaScript, when the form has
+    // errors, when nothing would change or when no preview comes back, Save just saves.
+    document.querySelectorAll("form[data-duo-preview]").forEach(function (form) {
+      var dlg = document.getElementById("duo-apply-dialog");
+      if (!dlg || typeof dlg.showModal !== "function" || !window.fetch || !window.FormData) return;
+      var q = function (sel) { return dlg.querySelector(sel); };
+      var save = form.querySelector("[data-save]"), allBox = q("[data-confirm-all]"), applyAll = q("[data-apply-all]");
+      var busyLabel = form.getAttribute("data-busy") || "", leaving = false;
+      allBox.addEventListener("change", function () { applyAll.disabled = !allBox.checked; });
+      q("[data-cancel]").addEventListener("click", function () { dlg.close(); });
+      dlg.addEventListener("click", function (e) { if (e.target === dlg) dlg.close(); });   // backdrop
+      dlg.addEventListener("close", function () { if (!leaving) save.focus(); });
+      function list(ul, items) {
+        ul.textContent = "";
+        items.forEach(function (t) { var li = document.createElement("li"); li.textContent = t; ul.appendChild(li); });
+      }
+      function fill(d) {
+        list(q("[data-restarts]"), d.restarts || []);
+        var pre = q("[data-diff]");
+        pre.textContent = "";
+        (d.diff || []).forEach(function (row) {
+          var s = document.createElement("span");
+          s.className = "d-" + row[0];
+          s.textContent = row[1];
+          pre.appendChild(s);
+        });
+        q("[data-diff-wrap]").hidden = !(d.diff && d.diff.length);
+        var others = !d.only_duo;
+        q("[data-others]").hidden = !others;
+        list(q("[data-others-list]"), d.others || []);
+        q("[data-title]").textContent = others ? "Other changes are pending as well. Apply them all?"
+                                               : "Save and apply the Duo settings?";
+        q("[data-apply]").hidden = others;
+        applyAll.hidden = !others;
+        q("[data-save-only]").textContent = others ? "Save Duo only" : "Save only";
+        allBox.checked = false;
+        applyAll.disabled = true;
+      }
+      function idle() { save.classList.remove("is-busy"); save.removeAttribute("aria-busy"); }
+      function direct() {
+        form.setAttribute("data-direct", "1");
+        form.setAttribute("data-busy", busyLabel);
+        if (typeof form.requestSubmit === "function") form.requestSubmit(save); else form.submit();
+      }
+      form.addEventListener("submit", function (e) {
+        var btn = e.submitter;
+        if (btn && btn.name === "then") {          // a choice made in the dialog
+          leaving = true;
+          form.setAttribute("data-busy", btn.getAttribute("data-busy-text") || busyLabel);
+          return;
+        }
+        if (form.getAttribute("data-direct") === "1") { form.removeAttribute("data-direct"); return; }
+        e.preventDefault();
+        if (save.classList.contains("is-busy")) return;
+        save.classList.add("is-busy");
+        save.setAttribute("aria-busy", "true");
+        fetch(form.getAttribute("data-duo-preview"), {method: "POST", body: new FormData(form), credentials: "same-origin",
+                                                      cache: "no-store", headers: {Accept: "application/json"}})
+          .then(function (r) {
+            if (!r.ok || (r.headers.get("Content-Type") || "").indexOf("application/json") !== 0) throw new Error("no preview");
+            return r.json();
+          })
+          .then(function (d) {
+            idle();
+            if (!d.ok || !d.pending) { direct(); return; }   // the server shows errors; nothing to apply: just save
+            fill(d);
+            dlg.showModal();
+            (d.only_duo ? q("[data-apply]") : q("[data-save-only]")).focus();
+          })
+          .catch(function () { idle(); direct(); });
+      });
+    });
+
+    // One button picks a file and uploads it ([data-pick-file]: the id of the form's file field,
+    // hidden while JavaScript runs). Used where an upload only stages something that a later,
+    // separate step acts on (Duo builds go to Ready to install). Without JavaScript the page shows
+    // the file field and its submit button instead.
+    document.querySelectorAll("[data-pick-file]").forEach(function (btn) {
+      var input = document.getElementById(btn.getAttribute("data-pick-file"));
+      if (!input || !input.form) return;
+      btn.addEventListener("click", function () { if (!btn.classList.contains("is-busy")) input.click(); });
+      input.addEventListener("change", function () {
+        if (!input.files || !input.files.length) return;
+        btn.classList.add("is-busy");
+        btn.setAttribute("aria-busy", "true");
+        btn.textContent = "Uploading " + input.files[0].name + "…";
+        if (typeof input.form.requestSubmit === "function") input.form.requestSubmit(); else input.form.submit();
+      });
+    });
+
     // Busy buttons: a form with data-busy shows a spinner on the button that sent it (and,
     // if the attribute has text, that label) until the next page loads. Runs after the
     // data-confirm handler, so a cancelled confirmation leaves the button alone.

@@ -5,6 +5,113 @@ Each release has a section here. `main` builds are the stable releases (`0.2.0`)
 show the "Unreleased" section plus their commits. Bump `VERSION` on `dev` right after a
 release, so previews sort after it.
 
+## Unreleased
+
+### Added
+- **Duo: send a test push.** Once Duo's settings are applied, an admin can send a Duo Push to a
+  user from the Duo page and see whether it was approved, denied, not answered or the user is not
+  enrolled. The server signs the request to Duo with SHA-512; at most one push per user every 30
+  seconds and ten an hour.
+- **Device profile for Cisco Catalyst 9000 switches (IOS-XE).** Built-in profile
+  `cisco-iosxe`: VLAN by the standard tunnel attributes, full admin rights by
+  `shell:priv-lvl=15`, session actions on UDP 1700 (re-authenticate, bounce port, disconnect)
+  naming the session by accounting session id and MAC, and SNMP port names expanded to the
+  names the switch sends in RADIUS (`Gi1/0/5` → `GigabitEthernet1/0/5`). Choose it per client
+  or as the default.
+
+### Changed
+- **Preflight on its own checks this server's settings.** Run without `--admin-net`, it now
+  takes the management subnet and portal name from the installed configuration instead of the
+  example defaults, so it no longer reports a false "no local IPv4 address" failure on an
+  installed server. It prints where the settings came from.
+- **RUNBOOK: moving a server onto the bundled FreeRADIUS package** (§1.3), for FreeRADIUS
+  installed from `.deb` packages or as a source build, with backups and rollback, and a note on
+  Wi-Fi controllers that take minutes to reconnect after FreeRADIUS was stopped.
+- **FIPS mode: FreeRADIUS uses the OpenSSL FIPS provider.** Upstream FreeRADIUS 3.2.10 loads
+  OpenSSL's default provider even on a FIPS kernel, so EAP, password hashing and LDAPS in radiusd
+  were not using the validated module. The bundled `radius-admin-freeradius` package (3.2.10-3)
+  carries a patch that, in FIPS mode only, loads just the FIPS provider and refuses to start
+  without it. Standard mode is unchanged. A password-protected EAP private key encrypted with
+  parameters the FIPS provider rejects can no longer be read in FIPS mode; radius-admin's own keys
+  are unencrypted and not affected.
+- **LDAPS through OpenSSL with the bundled FreeRADIUS.** The `radius-admin-freeradius` package
+  (3.2.10-2) links rlm_ldap against OpenLDAP built from the distribution's own source package
+  with OpenSSL, instead of the distribution's GnuTLS libldap, so in FIPS mode the connection to
+  the directory uses the OpenSSL FIPS provider. The package also carries `ra-ldapwhoami`, built
+  the same way, for testing the directory login. OpenSSL is stricter than GnuTLS: domain
+  controllers with SHA-1-signed or small-key certificates, or without TLS 1.2, are refused.
+  Before installing or upgrading the package, the installer logs in to the directory with the
+  new package's library; when only the new library fails, it stops, changes nothing and says
+  why (for example "EE certificate key too weak"). `--skip-ldap-check` installs anyway.
+  Servers on the distribution's FreeRADIUS are unchanged.
+- **Auth log names MAB devices.** A MAB login from a registered device shows the device's
+  description, with the MAC under it, in the list and on the record. The "User / device" filter
+  also searches MAB descriptions.
+- **Option to allow only catalog-checked Duo builds.** `integration_allow_unlisted = false` in
+  `helper.conf` makes the helper refuse a Duo build that the signed catalog does not list, even
+  with its SHA-256 entered. The default (`true`) keeps today's behaviour; FIPS mode refuses such
+  builds either way.
+- **Duo page: one button uploads a build.** "Upload a build…" picks Duo's source build and
+  uploads it in one step (it goes to Ready to install; installing stays a separate step). Without
+  JavaScript the page keeps the file field and the Upload button.
+- **Duo: one button disables and removes it.** "Disable and remove Duo" turns the provider off,
+  applies that and removes the proxy, after one confirmation. When a second-factor rule uses Duo,
+  the page names it and the rule is turned off in the same action once you tick it. If something
+  fails, the page shows the actual reason.
+- **Duo: Save applies.** Saving the Duo settings shows what changes (Duo's configuration with
+  secrets hidden, and which services restart), then saves and applies it and runs the connectivity
+  check, all on the Duo page. When other changes are pending too, the dialog lists them and offers
+  to apply everything from there (after a tick) or to save Duo only; it never applies part of
+  them. A failed apply shows the reason. Test asks you to apply your Duo settings first instead
+  of checking Duo's sample configuration.
+- **Duo page: an Enabled / Disabled switch and hidden stored secrets.** The Duo provider is turned
+  on and off with a switch that shows its state; when it cannot be changed (Duo not installed, or a
+  second-factor rule uses it) the switch is greyed out with the reason next to it, instead of an
+  error after Save. Once a secret key is stored the page shows "Secret key: set" with a "Change
+  secret key" link to enter a new one; saving without it keeps the stored key. The edit form of a
+  remote MFA server shows its shared secret the same way.
+
+### Fixed
+- **Re-authentication from a result page.** After the Duo check (or another result shown in
+  place), an action that asked you to confirm your identity first ended in "Method Not Allowed"
+  again. You now come back to the Duo page, or to the dashboard when there is no page to return to.
+- **Duo test push: a refusal before any push no longer blocks a retry.** When Duo refuses a user
+  before sending anything (for example no access to the application), the page now says "Refused
+  by Duo before any push" instead of "Denied", and you can try again at once; the 30-second wait
+  only follows a push that was sent.
+- **Licence tool: issuing from the web page works.** `licence-tool.py serve` refused every form
+  as a "cross-site request": its no-referrer policy made browsers send `Origin: null`.
+- **Re-authentication no longer ends in "Method Not Allowed".** When an action such as Remove
+  Duo asked you to confirm your identity first, the portal then sent you to the action's own
+  address, which only accepts form posts. It now returns you to the page you were on.
+- **Second factor: no silent device lockout.** Requiring a second factor for local device admins
+  now needs an exempt break-glass account, or an explicit confirmation that there is none: while the
+  provider is unreachable FreeRADIUS rejects these logins, so devices do not fall back to their own
+  accounts.
+- **Duo: the connection test and applying its configuration work on a real server.** The root
+  helper's sandbox kept `/opt/duoauthproxy` read-only, so the Test button failed with "Read-only
+  file system: 'log/connectivity_tool.log'" and applying a Duo configuration could not write
+  `authproxy.cfg`; with that fixed, the test reported the running proxy's own port as "in use by
+  an Unknown Process". The helper may now write Duo's `conf/` (nothing else of Duo), and
+  runs Duo's connectivity tool in a sandbox of its own that can recognise the running proxy.
+- **Duo: a failed install no longer leaves the proxy stopped.** The installer starts the proxy it
+  stopped again when Duo's installer fails.
+- **Provider secrets no longer pile up in clear.** The portal's history of applied files (which
+  includes Duo's configuration with its secret key) now keeps the same 50 sets as the helper's
+  backups instead of growing without limit, and seals every file it keeps with the data key: the
+  policy, the clients file with the RADIUS shared secrets, Duo's configuration and the private keys of
+  managed certificates. Copies from earlier versions are sealed by the next apply. Removing Duo
+  keeps its configuration with the secrets replaced by `REDACTED`.
+- **RADIUS client shared secrets are encrypted in the database.** They are stored with the data
+  key (AES-256-GCM) instead of in clear; the update encrypts the existing ones, nothing has to be
+  entered again, and the clients file FreeRADIUS reads is unchanged. Rolling back with
+  `update.sh --rollback` (or downgrading) writes them back in clear first, so the older release
+  keeps working.
+- **No secrets left in the staging directory.** The files staged for the helper (clients file,
+  Duo's configuration, certificate private keys) are removed as soon as the helper has read them,
+  and the update removes the ones an older release left and encrypts its copies of applied files
+  right away, not at the next apply.
+
 ## 0.3.0 - 2026-11-20
 
 ### Added

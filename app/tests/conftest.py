@@ -187,6 +187,8 @@ class FakeHelper:
                     "listening": False, "state": {}}
         self.catalog = {"serial": 0, "entries": [], "source": "none", "message": ""}
         self.integration_log = ""
+        self.push = {"result": "allow", "status_msg": "Success. Logging you in...",
+                     "pushed": True}                                     # integration_push_test
         self.cert_status = {}           # what cert_status adds to its answer (SPEC section 30)
         self._sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self._sock.bind(path)
@@ -217,11 +219,19 @@ class FakeHelper:
                 conn.sendall((json.dumps(self.handle(req)) + "\n").encode())
 
     def _staged(self):
+        """Hashes of the staged policy and clients; every staged file as the helper saw it (text,
+        mode) in self.staged, since the app removes them once the helper answered."""
         import hashlib
-        out = {}
-        for n in ("policy", "clients"):
-            with open(os.path.join(self.staging, n), "rb") as fh:
-                out[n] = hashlib.sha256(fh.read()).hexdigest()
+        out, self.staged = {}, {}
+        for n in ("policy", "clients", "provider-duo", "certificates"):
+            try:
+                with open(os.path.join(self.staging, n), "rb") as fh:
+                    data = fh.read()
+                    self.staged[n] = (data.decode(), os.fstat(fh.fileno()).st_mode & 0o777)
+            except FileNotFoundError:
+                continue
+            if n in ("policy", "clients"):
+                out[n] = hashlib.sha256(data).hexdigest()
         return out
 
     def handle(self, req):
@@ -294,6 +304,8 @@ class FakeHelper:
         if a == "integration_test":
             return {"ok": True, "action": a, "message": "the connectivity check passed", "passed": True,
                     "output": "The Auth Proxy was able to reach Duo\nskey [redacted]"}
+        if a == "integration_push_test":
+            return dict({"ok": True, "action": a, "message": "test push: %s" % self.push.get("result")}, **self.push)
         if a == "cert_status":
             return dict({"eap_server": None, "client_ca": None, "eap_ocsp": None, "portal_server": None,
                          "portal_configured": False, "portal_server_name": None}, ok=True, action=a, message="ok",
@@ -366,9 +378,30 @@ def app(tmp_path, clean_db):
     })
     application.config["TESTING"] = True
     application.fake_helper = helper
+    _CURRENT["app"] = application
     yield application
     helper.close()
     dbmod.close_pools()
+
+
+# RADIUS client shared secrets are sealed with the running test app's data key (SPEC section 3.2)
+_CURRENT = {}
+
+
+def client_secrets(superconn):
+    """{client name: its shared secret, opened with the current test app's data key}."""
+    from radius_admin import services
+    key = _CURRENT["app"].config["RA_DATA_KEY"]
+    with superconn.cursor() as cur:
+        cur.execute("SELECT id, name, secret, secret_enc FROM ui.radius_client")
+        rows = cur.fetchall()
+    return {r[1]: services.client_secret({"id": r[0], "name": r[1], "secret": r[2], "secret_enc": r[3]}, key)
+            for r in rows}
+
+
+def only_secret(superconn):
+    (secret,) = client_secrets(superconn).values()
+    return secret
 
 
 # ------------------------------------------------------------ client helpers

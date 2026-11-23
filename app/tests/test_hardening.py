@@ -6,7 +6,7 @@ import threading
 import psycopg2
 import pytest
 
-from conftest import APP_DSN, Browser, fresh_code, login
+from conftest import APP_DSN, Browser, fresh_code, login, only_secret
 
 
 def q(superconn, sql, params=()):
@@ -132,27 +132,28 @@ def test_secret_change_requires_stepup(browser, superconn, logged_in, role):
     r = browser.post("/clients/new", dict(CLIENT, secret_mode="generate", stepup_password=u.password,
                                           stepup_code=fresh_code(superconn, u)))
     assert r.status_code == 200
-    secret = q(superconn, "SELECT secret FROM ui.radius_client")[0][0]
+    secret = only_secret(superconn)
     assert secret in browser.text(r)
     # Edit with an explicit secret after step-up lapses: refused, secret unchanged.
     _expire(superconn)
     r = browser.post("/clients/1/edit", dict(CLIENT, secret_mode="set", secret="Operator-Chosen-Secret-01"))
     assert r.status_code == 401
-    assert q(superconn, "SELECT secret FROM ui.radius_client")[0][0] == secret
+    assert only_secret(superconn) == secret
     assert "Operator-Chosen-Secret-01" not in browser.text(r)  # not echoed back
     # Regenerate on edit: refused without step-up
     r = browser.post("/clients/1/edit", dict(CLIENT, secret_mode="generate"))
     assert r.status_code == 401
-    assert q(superconn, "SELECT secret FROM ui.radius_client")[0][0] == secret
+    assert only_secret(superconn) == secret
     # Non-secret edits do not need step-up
     r = browser.post("/clients/1/edit", dict(CLIENT, secret_mode="keep", description="no step-up needed"))
     assert r.status_code == 302
-    assert q(superconn, "SELECT description, secret FROM ui.radius_client")[0] == ("no step-up needed", secret)
+    assert q(superconn, "SELECT description FROM ui.radius_client")[0][0] == "no step-up needed"
+    assert only_secret(superconn) == secret
     # Explicit secret with inline step-up works
     r = browser.post("/clients/1/edit", dict(CLIENT, secret_mode="set", secret="Operator-Chosen-Secret-01",
                                              stepup_password=u.password, stepup_code=fresh_code(superconn, u)))
     assert r.status_code == 302
-    assert q(superconn, "SELECT secret FROM ui.radius_client")[0][0] == "Operator-Chosen-Secret-01"
+    assert only_secret(superconn) == "Operator-Chosen-Secret-01"
 
 
 def test_secret_change_ok_within_stepup_window(browser, superconn, logged_in):

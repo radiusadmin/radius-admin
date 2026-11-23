@@ -40,8 +40,10 @@ grep -qw freeradius <<<"$(field Conflicts)" && pass "conflicts with the distribu
     || fail "no Conflicts: freeradius"
 dep=$(field Depends)
 missing=""
-for d in libpq5 libssl3 libtalloc2 libldap; do grep -q "$d" <<<"$dep" || missing+=" $d"; done
+for d in libpq5 libssl3 libtalloc2; do grep -q "$d" <<<"$dep" || missing+=" $d"; done
 [[ -z $missing ]] && pass "depends on the distribution libraries" || fail "Depends lacks$missing: $dep"
+grep -qE 'libldap|libgnutls' <<<"$dep" && fail "Depends names libldap/GnuTLS (rlm_ldap should link the private OpenSSL build): $dep" \
+    || pass "no dependency on the distribution's GnuTLS libldap"
 # installable on a stock server: every versioned dependency is in the distribution archive (CI
 # runners carry apt.postgresql.org; a "libpq5 (>= 18.7-1.pgdg...)" package did not install on Ubuntu)
 if out=$("$ROOT/tools/package/check-depends.sh" "$dep" 2>&1); then
@@ -51,7 +53,7 @@ dpkg-deb -c "$DEB" | awk '{print $6}' > "$W/files"
 grep -q '^\./etc/' "$W/files" && fail "package ships files in /etc: $(grep '^\./etc/' "$W/files" | head -3 | tr '\n' ' ')" \
     || pass "no files in /etc (the configuration is never package-owned)"
 missing=""
-for f in sbin/radiusd bin/radclient lib/rlm_sql_postgresql.so lib/rlm_ldap.so lib/rlm_eap_tls.so \
+for f in sbin/radiusd bin/radclient lib/rlm_sql_postgresql.so lib/rlm_ldap.so lib/rlm_eap_tls.so libexec/ra-ldapwhoami \
          share/freeradius/dictionary share/raddb-dist/radiusd.conf share/doc/radius-admin-freeradius/SOURCE; do
     grep -qx "\.$P/$f" "$W/files" || missing+=" $f"
 done
@@ -72,6 +74,55 @@ grep -qx "ExecStart=$P/sbin/radiusd -f \$FREERADIUS_OPTIONS" "$W/x/usr/lib/syste
     && pass "unit starts the packaged radiusd as root (it drops privileges itself)" || fail "unit ExecStart/User"
 grep -q "$FR_KEY_FPR" "$W/x$P/share/doc/radius-admin-freeradius/SOURCE" 2>/dev/null \
     && pass "source note names the upstream signing key" || fail "SOURCE note"
+
+# the radius-admin patches: each one listed in SOURCE with its hash and shipped next to it
+missing=""
+for p in "$ROOT"/tools/package/freeradius/patches/*.patch; do
+    [[ -e $p ]] || continue
+    f=${p##*/}
+    grep -q "^  $f  sha256 $(sha256sum "$p" | cut -d' ' -f1)$" "$W/x$P/share/doc/radius-admin-freeradius/SOURCE" \
+        && cmp -s "$p" "$W/x$P/share/doc/radius-admin-freeradius/patches/$f" || missing+=" $f"
+done
+[[ -z $missing ]] && pass "every radius-admin patch is listed in SOURCE (with its SHA-256) and shipped" \
+    || fail "patches missing or different in the package:$missing"
+
+# rlm_ldap and ra-ldapwhoami: the private OpenLDAP build, TLS by the system OpenSSL (SPEC 15)
+olv=$(sed -n 's/^OpenLDAP client libraries \([^ ]*\) .*/\1/p' "$W/x$P/share/doc/radius-admin-freeradius/SOURCE")
+[[ -n $olv ]] && grep -q 'with-tls=openssl' "$W/x$P/share/doc/radius-admin-freeradius/SOURCE" \
+    && grep -q 'The OpenLDAP Public License' "$W/x$P/share/doc/radius-admin-freeradius/copyright" \
+    && pass "source note and copyright name OpenLDAP $olv (OpenSSL)" || fail "SOURCE/copyright lack the OpenLDAP build"
+for f in lib/rlm_ldap.so libexec/ra-ldapwhoami; do
+    e=$W/x$P/$f
+    needed=$(objdump -p "$e" 2>/dev/null | awk '$1 == "NEEDED" {print $2}')
+    undef=$(nm -D --undefined-only "$e" 2>/dev/null | grep -cE ' (ldap|ber)_')
+    exported=$(nm -D --defined-only "$e" 2>/dev/null | awk '{print $NF}' | grep -E '^(ldap|ber)_' | grep -cvxE 'ldap_scope|ldap_tls_require_cert')
+    if grep -qx libssl.so.3 <<<"$needed" && ! grep -qE '^lib(ldap|lber|gnutls)' <<<"$needed" \
+        && [[ $undef == 0 && $exported == 0 ]]; then
+        pass "$f links the system libssl, no libldap/GnuTLS, no ldap_* symbols in or out"
+    else
+        fail "$f: NEEDED $(tr '\n' ' ' <<<"$needed"); undefined ldap_* $undef; exported ldap_* $exported"
+    fi
+done
+# at run time: ra-ldapwhoami's TLS handshake (to a throwaway openssl s_server) binds SSL_* to libssl
+if command -v openssl >/dev/null 2>&1; then
+    openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 1 -subj /CN=127.0.0.1 \
+        -keyout "$W/srv.key" -out "$W/srv.pem" >/dev/null 2>&1
+    port=$(( 20000 + RANDOM % 20000 ))
+    openssl s_server -accept "127.0.0.1:$port" -cert "$W/srv.pem" -key "$W/srv.key" -naccept 1 -quiet \
+        > /dev/null 2>&1 < /dev/null &
+    spid=$!
+    sleep 1
+    LDAPTLS_REQCERT=never LDAPNOINIT=1 LD_DEBUG=bindings LD_DEBUG_OUTPUT=$W/bind \
+        timeout 10 "$W/x$P/libexec/ra-ldapwhoami" -x -o nettimeout=5 -H "ldaps://127.0.0.1:$port" > /dev/null 2>&1
+    kill "$spid" 2>/dev/null; wait "$spid" 2>/dev/null
+    b=$(cat "$W"/bind.* 2>/dev/null)
+    if grep -qE 'ra-ldapwhoami .* to [^ ]*/libssl\.so\.3 .*`SSL_connect' <<<"$b" \
+        && ! grep -qE 'ra-ldapwhoami .* to [^ ]*(gnutls|libldap\.so|liblber\.so)' <<<"$b"; then
+        pass "ra-ldapwhoami performs TLS through the system libssl (SSL_connect), nothing through GnuTLS"
+    else
+        fail "ra-ldapwhoami bindings: $(grep -oE 'to [^ ]*(libssl|gnutls|libldap)[^ ]*' <<<"$b" | sort -u | tr '\n' ' ')"
+    fi
+fi
 ok_sh=1
 for s in postinst prerm postrm; do sh -n "$W/ctl/$s" || ok_sh=0; done
 (( ok_sh )) && pass "maintainer scripts parse" || fail "maintainer script syntax"

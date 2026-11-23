@@ -29,10 +29,13 @@
 import base64
 import configparser
 import datetime
+import email.utils
 import errno
 import fcntl
 import grp
 import hashlib
+import hmac
+import http.client
 import ipaddress
 import json
 import os
@@ -41,6 +44,7 @@ import re
 import shutil
 import signal
 import socket
+import ssl
 import stat
 import struct
 import subprocess
@@ -59,7 +63,7 @@ SAFE_ENV = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C", "LC_ALL": "C"}
 ACTIONS = ("status", "validate", "apply", "rollback", "update_status", "update_check",
            "update_install", "update_log", "integration_status", "integration_catalog",
            "integration_preflight", "integration_fetch", "integration_install", "integration_log",
-           "integration_remove", "integration_test", "cert_status")
+           "integration_remove", "integration_test", "integration_push_test", "cert_status")
 UPDATE_VERSION_RE = re.compile(r"^(\d{1,4})\.(\d{1,4})\.(\d{1,4})(?:-(dev|rc)\.(\d{1,6}))?\Z")
 UPDATE_CHANNELS = ("main", "testing", "dev")
 UPDATE_LOG_RE = re.compile(r"^update-\d{1,4}\.\d{1,4}\.\d{1,4}(?:-(?:dev|rc)\.\d{1,6})?-\d{8}T\d{6}Z\.log\Z")
@@ -132,8 +136,16 @@ CONFIG_DEFAULTS = {
     "integration_install_unit": "radius-admin-integration-install",
     "integration_remove_unit": "radius-admin-integration-remove",
     "integration_max_mib": "128",
+    # false: install only builds the signed catalog lists, never one checked only against a
+    # SHA-256 the admin entered (that path runs a vendor installer as root on an admin's word)
+    "integration_allow_unlisted": "true",
     "integration_log_dir": "/var/log/radius-admin",
     "duo_dir": "/opt/duoauthproxy",
+    # integration_push_test (SPEC section 29.3) talks to Duo's Auth API at the api_host of the
+    # applied authproxy.cfg, port 443, verified against the system CAs. Tests only: connect to
+    # this IP:port instead (the certificate must still name api_host) and trust this CA file.
+    "duo_api_connect": "",
+    "duo_api_cafile": "",
 }
 # Worst case for apply with defaults: lock 10 + validate 30 + (restart 20 + wait 15)
 # + rollback (restart 20 + wait 15) = 110 s, inside the app's helper_timeout (120 s).
@@ -205,6 +217,14 @@ def load_config(path):
         except ValueError:
             raise HelperError("helper.conf: %s must be an integer" % key)
     cfg["portal_verify_tls"] = cfg["portal_verify_tls"].lower() in ("1", "true", "yes", "on")
+    v = cfg["integration_allow_unlisted"].lower()
+    if v not in ("1", "true", "yes", "on", "0", "false", "no", "off"):
+        raise HelperError("helper.conf: integration_allow_unlisted must be true or false")
+    cfg["integration_allow_unlisted"] = v in ("1", "true", "yes", "on")
+    if cfg["duo_api_connect"] and not re.fullmatch(r"127\.0\.0\.1:[0-9]{1,5}", cfg["duo_api_connect"]):
+        raise HelperError("helper.conf: duo_api_connect must be 127.0.0.1:PORT (tests only) or empty")
+    if cfg["duo_api_cafile"]:
+        cfg["duo_api_cafile"] = _abs(cfg, "duo_api_cafile")
     if cfg["keep_backups"] < 1:
         raise HelperError("helper.conf: keep_backups must be >= 1")
     try:
@@ -2530,6 +2550,9 @@ def act_integration_install(cfg, req):
             elif fips:
                 raise HelperError("in FIPS mode only builds that the signed catalog lists as FIPS-capable can be"
                                   " installed; %s is not in the catalog" % name)
+            elif not cfg["integration_allow_unlisted"]:
+                raise HelperError("%s is not in the signed catalog, and this server installs only builds the signed"
+                                  " catalog lists (helper.conf integration_allow_unlisted = false)" % name)
             elif pasted is None:
                 raise HelperError("%s is not in the signed catalog. Its SHA-256 is %s: compare it with the value"
                                   " the vendor publishes and enter it to install the build unverified" % (name, h))
@@ -2605,10 +2628,158 @@ def act_integration_test(cfg, req):
         raise HelperError("the connectivity tool of %s is missing" % prov["label"])
     if not stat.S_ISREG(st.st_mode) or st.st_uid != 0 or st.st_mode & 0o022:
         raise HelperError("the connectivity tool must be a root-owned file only root can change")
-    rc, out = run([tool], 120)
+    # Its own transient unit: the tool checks that the proxy's port is free and skips that check
+    # when the listener is the running proxy, which it finds by mapping the socket to a process
+    # (/proc/<pid>/fd of the service user: CAP_SYS_PTRACE). The helper itself has no ptrace, so
+    # inside its sandbox every running proxy looked like "Unknown Process, PID -1". The unit gets
+    # that capability, DAC override for Duo's log directory, and write access to that only.
+    sandbox = ("ProtectSystem=strict", "ReadWritePaths=-%s" % os.path.join(cfg["duo_dir"], "log"),
+               "CapabilityBoundingSet=CAP_SYS_PTRACE CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH",
+               "NoNewPrivileges=yes", "PrivateTmp=yes", "PrivateDevices=yes", "ProtectHome=yes",
+               "ProtectKernelTunables=yes", "ProtectKernelModules=yes", "ProtectKernelLogs=yes",
+               "ProtectControlGroups=yes", "ProtectClock=yes", "ProtectHostname=yes",
+               "RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK", "RestrictNamespaces=yes",
+               "RestrictRealtime=yes", "RestrictSUIDSGID=yes", "LockPersonality=yes", "RuntimeMaxSec=115")
+    argv = [cfg["systemd_run"], "--quiet", "--wait", "--pipe", "--collect", "--service-type=oneshot"]
+    for prop in sandbox:
+        argv += ["-p", prop]
+    rc, out = run(argv + ["--", tool], 120)
     text = _TEST_REDACT.sub(lambda m: m.group(1) + " [redacted]", tail(out, 200))
     return {"ok": True, "message": "the connectivity check passed" if rc == 0 else "the connectivity check found problems",
             "passed": rc == 0, "output": text}
+
+
+PUSH_USER_RE = re.compile(r"[A-Za-z0-9._@-]{1,64}")
+PUSH_USER_WAIT = 30          # seconds between two test pushes to the same user
+PUSH_PER_HOUR = 10           # test pushes per hour, all users
+PUSH_TIMEOUT = 70            # Duo waits up to 60 s for the person to answer
+
+
+def _duo_api(cfg, host, ikey, skey, path, params, timeout):
+    """One POST to Duo's Auth API, signed with signature version 5: HMAC-SHA512 over the date,
+    method, host, path, the (empty) query, the SHA-512 of the JSON body and of the (absent)
+    X-Duo headers. Never the SHA-1 version 2 scheme (rule 6). TLS 1.2+, certificate checked
+    against the system CAs and the API host name. Returns Duo's JSON object."""
+    body = json.dumps(params, sort_keys=True, separators=(",", ":"))
+    date = email.utils.formatdate()
+    canon = "\n".join([date, "POST", host.lower(), path, "", hashlib.sha512(body.encode()).hexdigest(),
+                       hashlib.sha512(b"").hexdigest()])
+    sig = hmac.new(skey.encode(), canon.encode(), hashlib.sha512).hexdigest()
+    auth = "Basic " + base64.b64encode(("%s:%s" % (ikey, sig)).encode()).decode()
+    ctx = ssl.create_default_context(cafile=cfg["duo_api_cafile"] or None)
+    ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+    addr = (host, 443)
+    if cfg["duo_api_connect"]:
+        ip, port = cfg["duo_api_connect"].split(":")
+        addr = (ip, int(port))
+    raw = socket.create_connection(addr, timeout=timeout)
+    conn = http.client.HTTPSConnection(host, 443, timeout=timeout, context=ctx)
+    try:
+        conn.sock = ctx.wrap_socket(raw, server_hostname=host)
+        conn.request("POST", path, body=body.encode(), headers={
+            "Authorization": auth, "Date": date, "Host": host, "Content-Type": "application/json",
+            "User-Agent": "radius-admin-helper"})
+        r = conn.getresponse()
+        data = r.read(64 * 1024)
+    finally:
+        conn.close()
+    try:
+        out = json.loads(data.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        raise HelperError("Duo answered HTTP %d without JSON" % r.status)
+    if not isinstance(out, dict):
+        raise HelperError("Duo answered HTTP %d with unexpected JSON" % r.status)
+    return out
+
+
+def _push_tries(cfg, now):
+    """The last hour's requests to Duo: [[time, user hash, pushed]] (work_dir/push-test.json)."""
+    path = os.path.join(cfg["work_dir"], "push-test.json")
+    try:
+        tries = json.loads((read_root_file(path) or b"{}").decode("utf-8")).get("tries", [])
+        return path, [[float(t), str(h), p is True] for t, h, p in tries if now - float(t) < 3600]
+    except (ValueError, TypeError, AttributeError):
+        return path, []
+
+
+def _push_rate(cfg, user, pushed=False):
+    """Rate limit for test pushes, kept with a hash of the username, never the name. Without
+    `pushed`: check and record a request to Duo (PUSH_PER_HOUR in all; refused while a push to
+    this user was sent less than PUSH_USER_WAIT seconds ago). With `pushed`: record that this
+    request goes on to send a push, which starts the user's wait. A request that Duo answers
+    before any push (not enrolled, no access, bypass) does not hold up the next one."""
+    now = time.time()
+    who = hashlib.sha256(user.lower().encode()).hexdigest()[:16]
+    with Lock(cfg, "push-test.lock", "another test push"):
+        path, tries = _push_tries(cfg, now)
+        if pushed:
+            for t in reversed(tries):
+                if t[1] == who:
+                    t[2] = True
+                    break
+        else:
+            last = max((t for t, h, p in tries if h == who and p), default=None)
+            if last is not None and now - last < PUSH_USER_WAIT:
+                raise HelperError("a test push to this user was sent %d s ago; wait %d s"
+                                  % (now - last, PUSH_USER_WAIT - (now - last) + 1))
+            if len(tries) >= PUSH_PER_HOUR:
+                raise HelperError("at most %d test pushes an hour; try again later" % PUSH_PER_HOUR)
+            tries.append([now, who, False])
+        atomic_write(path, json.dumps({"tries": tries}).encode(), 0, 0, 0o600)
+
+
+def act_integration_push_test(cfg, req):
+    """Send a Duo Push to one user with the applied configuration's keys (SPEC section 29.3):
+    preauth, then auth with factor push. Returns only result (allow, deny, timeout,
+    not_enrolled, error), Duo's status message and whether a push was sent; never keys."""
+    pid, prov = _integration(req)
+    user = req.get("username")
+    if not isinstance(user, str) or not PUSH_USER_RE.fullmatch(user):
+        raise HelperError("username must be 1-64 letters, digits, dots, underscores, @ or hyphens")
+    if not _duo_ready(cfg):
+        raise HelperError("%s is not installed" % prov["label"])
+    raw = read_root_file(duo_cfg_path(cfg))
+    if not raw or not raw.startswith(b"; radius-admin"):
+        raise HelperError("Duo still runs its sample configuration: apply the Duo settings first")
+    sec = check_duo_config(raw, fips_on(cfg))["radius_server_auto"]
+    host, ikey, skey = sec["api_host"], sec["ikey"], sec["skey"]
+    if not prov["api_host"].fullmatch(host):
+        raise HelperError("the applied configuration names an unexpected API host")
+    ensure_work_dirs(cfg)
+    _push_rate(cfg, user)
+
+    sent = []
+
+    def outcome(result, msg):
+        log(syslog.LOG_INFO, "integration_push_test result=%s pushed=%s" % (result, bool(sent)))
+        return {"ok": True, "message": "test push: %s" % result, "result": result,
+                "status_msg": str(msg or "")[:200], "pushed": bool(sent)}
+
+    try:
+        pre = _duo_api(cfg, host, ikey, skey, "/auth/v2/preauth", {"username": user}, 15)
+        if pre.get("stat") != "OK":
+            return outcome("error", pre.get("message_detail") or pre.get("message") or "Duo refused the request")
+        p = pre.get("response") if isinstance(pre.get("response"), dict) else {}
+        if p.get("result") == "enroll":
+            return outcome("not_enrolled", p.get("status_msg") or "the user is not enrolled in Duo")
+        if p.get("result") in ("allow", "deny"):
+            return outcome(p["result"], p.get("status_msg"))
+        if p.get("result") != "auth":
+            return outcome("error", "unexpected preauth answer")
+        _push_rate(cfg, user, pushed=True)
+        sent.append(True)
+        res = _duo_api(cfg, host, ikey, skey, "/auth/v2/auth",
+                       {"username": user, "factor": "push", "device": "auto"}, PUSH_TIMEOUT)
+    except (OSError, ssl.SSLError, http.client.HTTPException) as e:
+        return outcome("error", "cannot reach Duo: %s" % (e.__class__.__name__ if not str(e) else e))
+    if res.get("stat") != "OK":
+        return outcome("error", res.get("message_detail") or res.get("message") or "Duo refused the request")
+    a = res.get("response") if isinstance(res.get("response"), dict) else {}
+    if a.get("status") == "timeout":
+        return outcome("timeout", a.get("status_msg"))
+    if a.get("result") in ("allow", "deny"):
+        return outcome(a["result"], a.get("status_msg"))
+    return outcome("error", "unexpected auth answer")
 
 
 def act_integration_log(cfg, req):
@@ -2631,7 +2802,7 @@ HANDLERS = {"cert_status": act_cert_status, "status": act_status, "validate": ac
             "integration_catalog": act_integration_catalog, "integration_preflight": act_integration_preflight,
             "integration_fetch": act_integration_fetch, "integration_install": act_integration_install,
             "integration_log": act_integration_log, "integration_remove": act_integration_remove,
-            "integration_test": act_integration_test}
+            "integration_test": act_integration_test, "integration_push_test": act_integration_push_test}
 
 
 # --------------------------------------------------------------------------- request I/O

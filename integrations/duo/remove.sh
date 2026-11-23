@@ -16,8 +16,11 @@ if [[ -f $DUO_DIR/conf/authproxy.cfg ]]; then
     bd=${RA_BACKUP_DIR:-/var/backups/radius-admin}
     b=$bd/duoauthproxy-authproxy.cfg-$(date -u +%Y%m%dT%H%M%SZ)
     install -d -m 0700 "$bd"
-    install -m 0600 "$DUO_DIR/conf/authproxy.cfg" "$b"
-    echo "configuration kept as $b"
+    # the settings for reference, never the keys: the portal keeps them (encrypted) and writes a
+    # new configuration on the next apply after a reinstall
+    ( umask 077; sed -E 's/^([[:space:]]*[A-Za-z0-9_]*(skey|secret|password|_key)[A-Za-z0-9_]*[[:space:]]*=).*/\1 REDACTED/I' \
+        "$DUO_DIR/conf/authproxy.cfg" > "$b" )
+    echo "configuration kept as $b (secrets removed)"
 fi
 "$SYSTEMCTL" stop duoauthproxy.service 2>/dev/null || true
 if [[ -x $DUO_DIR/uninstall ]]; then

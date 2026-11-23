@@ -23,10 +23,7 @@
   <label for="port">Port</label>
   <input id="port" name="port" value="{{ v.port }}" required inputmode="numeric" maxlength="5" class="mono"{{ m.described(errors, 'port') }}>
   {{ m.field_error(errors, 'port') }}
-  <label for="secret">Shared secret</label>
-  <input id="secret" name="secret" type="password" {{ 'required' if is_new else '' }} maxlength="128" autocomplete="new-password" aria-describedby="secret-hint{{ ' secret-error' if errors.secret else '' }}"{{ ' aria-invalid=true' if errors.secret else '' }}>
-  <p id="secret-hint" class="small muted">{% if not is_new %}A secret is set; leave empty to keep it. {% endif %}16–128 printable characters, no spaces, double quotes or backslashes. Stored encrypted.</p>
-  {{ m.field_error(errors, 'secret') }}
+  {{ m.secret_field(errors, 'secret', 'Shared secret', not is_new, '16–128 printable characters, no spaces, double quotes or backslashes. Stored encrypted.', 128, required=is_new) }}
   <label for="timeout">Wait for the answer (seconds)</label>
   <input id="timeout" name="timeout" value="{{ v.timeout }}" required inputmode="numeric" maxlength="2" class="mono" aria-describedby="timeout-hint{{ ' timeout-error' if errors.timeout else '' }}"{{ ' aria-invalid=true' if errors.timeout else '' }}>
   <p id="timeout-hint" class="small muted">5–60. Long enough for the person to approve the prompt; no answer in time means reject.</p>

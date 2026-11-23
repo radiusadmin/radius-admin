@@ -209,6 +209,13 @@ for n in sys.argv[1:]:
 RA_SITE_YAML=${RA_SITE_YAML:-/etc/radius-admin/site.yaml}
 RA_NGINX_SITE=${RA_NGINX_SITE:-/etc/nginx/sites-available/radius-admin}
 RA_FIREWALL_NFT=${RA_FIREWALL_NFT:-/etc/radius-admin/firewall.nft}
+live_site() { # live_site KEY: KEY from the installed site.yaml ("key: value", optional quotes), or fail
+    [[ -r $RA_SITE_YAML ]] || return 1
+    local v
+    v=$(awk -v k="$1" '$0 ~ "^"k":" { sub("^"k":[[:space:]]*", ""); sub(/[[:space:]]+$/, "");
+        if ($0 ~ /^".*"$/) $0 = substr($0, 2, length($0) - 2); print; exit }' "$RA_SITE_YAML")
+    [[ -n $v ]] && printf '%s\n' "$v"
+}
 live_nginx() {
     [[ -r $RA_NGINX_SITE ]] || return 1
     local v

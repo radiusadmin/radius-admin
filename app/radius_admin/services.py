@@ -1,11 +1,15 @@
 """Domain services shared by views and the CLI: settings, rendering, pending state,
 staging files, user/account operations."""
+import base64
 import datetime
 import functools
 import os
+import re
+import shutil
 import tempfile
 import zoneinfo
 
+from cryptography.exceptions import InvalidTag
 from flask import current_app, g
 
 from . import db, vendors
@@ -167,8 +171,74 @@ def set_setting(key, value, conn=None):
 
 # --------------------------------------------------------------- rendering
 RULE_COLS = "id, priority, connection, ssid, ad_group, vlan, enabled, description, role"
-CLIENT_COLS = ("id, name, ipaddr, secret, require_ma, limit_proxy_state, nas_type, enabled, description,"
+CLIENT_COLS = ("id, name, ipaddr, secret, secret_enc, require_ma, limit_proxy_state, nas_type, enabled, description,"
                " key_status, transport, radsec_peer_name, vendor_profile")
+
+# RADIUS client shared secrets at rest (SPEC section 3.2): ui.radius_client.secret_enc holds the
+# secret sealed with the data key; `secret` stays '' once sealed. A non-empty `secret` is a plain
+# value (written before this release, by a rolled-back release, or by a script) and wins: readers
+# use it, and `cli seal-client-secrets` (run by the app phase of every install and update) seals it.
+_CLIENT_SECRET_AAD = b"radius-admin:radius_client:secret"
+
+
+class ClientSecretUnreadable(ValueError):
+    pass
+
+
+def seal_client_secret(secret, datakey=None):
+    """(secret, secret_enc) column values for a shared secret: ('', sealed) or ('', None)."""
+    if not secret:
+        return "", None
+    return "", _datakey(datakey).encrypt(secret.encode("utf-8"), _CLIENT_SECRET_AAD)
+
+
+def client_secret(row, datakey=None, strict=False):
+    """The plain shared secret of a ui.radius_client row ('' when it has none). A sealed secret that
+    cannot be opened (no or another data key) raises ClientSecretUnreadable when strict, else ''."""
+    if row.get("secret"):
+        return row["secret"]
+    blob = row.get("secret_enc")
+    if blob is None:
+        return ""
+    try:
+        return _datakey(datakey).decrypt(bytes(blob), _CLIENT_SECRET_AAD).decode("utf-8")
+    except (RuntimeError, KeyError, ValueError, InvalidTag):
+        if strict:
+            raise ClientSecretUnreadable(
+                "The shared secret of client %s cannot be read (was the data key replaced?). Set it again."
+                % row.get("name", row.get("id")))
+        return ""
+
+
+def client_secret_readable(row, datakey=None):
+    try:
+        client_secret(row, datakey, strict=True)
+        return True
+    except ClientSecretUnreadable:
+        return False
+
+
+def seal_client_secrets(conn, datakey):
+    """Seal every plain shared secret (install and update). Returns how many were sealed."""
+    n = 0
+    for r in db.query("SELECT id, secret FROM ui.radius_client WHERE secret <> '' ORDER BY id", conn=conn):
+        plain, enc = seal_client_secret(r["secret"], datakey)
+        db.execute("UPDATE ui.radius_client SET secret = %s, secret_enc = %s WHERE id = %s",
+                   (plain, enc, r["id"]), conn=conn)
+        n += 1
+    return n
+
+
+def unseal_client_secrets(conn, datakey):
+    """Write every sealed shared secret back in plain (update.sh, before a release that does not
+    read secret_enc starts). Refuses, changing nothing, when one cannot be opened."""
+    rows = db.query("SELECT id, name, secret, secret_enc FROM ui.radius_client"
+                    " WHERE secret = '' AND secret_enc IS NOT NULL ORDER BY id", conn=conn)
+    plain = [(client_secret(r, datakey, strict=True), r["id"]) for r in rows]
+    for secret, cid in plain:
+        db.execute("UPDATE ui.radius_client SET secret = %s, secret_enc = NULL WHERE id = %s", (secret, cid),
+                   conn=conn)
+    return len(plain)
 
 
 def load_rules(conn=None):
@@ -201,6 +271,11 @@ def render_all(conn=None, datakey=None):
         if c.get("key_status", "ok") != "ok":
             c["enabled"] = False
         c.pop("key_status", None)
+        try:    # sealed secrets need the data key; a disabled client's is not rendered
+            c["secret"] = client_secret(c, datakey, strict=bool(c["enabled"]))
+        except ClientSecretUnreadable as e:
+            raise u.PolicyInputError(str(e))
+        c.pop("secret_enc", None)
         pid = c.get("vendor_profile")
         if c["enabled"] and pid and pid != default_id and pid not in others:
             if pid not in cat:
@@ -336,12 +411,39 @@ def staging_dir():
     return current_app.config["RA"]["staging_dir"]
 
 
-def _put_provider_files(d, providers):
-    """Write the provider files into d and remove those not given (SPEC section 29.2)."""
+# The app's own copies of applied files (applied/ and applied/history/) hold the RADIUS shared
+# secrets, Duo's secret key and the private keys of managed certificates, and the policy shows how
+# access is decided: all of them are sealed with the data key (AES-256-GCM, additional data names
+# the file). Only the staged copies the helper reads stay plain.
+_SEALED_PREFIX = "ra-sealed-v1:"
+_SEALED_AAD = b"radius-admin:applied:"
+SEALED_FILES = ("policy", "clients") + PROVIDER_FILES
+
+
+def _seal(name, text, datakey=None):
+    blob = _datakey(datakey).encrypt(text.encode("utf-8"), _SEALED_AAD + name.encode("ascii"))
+    return _SEALED_PREFIX + base64.b64encode(blob).decode("ascii") + "\n"
+
+
+def _unseal(name, raw, datakey=None):
+    """The text of a sealed copy; a plain one (written before sealing) as it is; None when it
+    cannot be opened (the data key was replaced): then it counts as missing."""
+    if not raw.startswith(_SEALED_PREFIX):
+        return raw
+    try:
+        blob = base64.b64decode(raw[len(_SEALED_PREFIX):].strip(), validate=True)
+        return _datakey(datakey).decrypt(blob, _SEALED_AAD + name.encode("ascii")).decode("utf-8")
+    except (ValueError, InvalidTag):
+        return None
+
+
+def _put_provider_files(d, providers, sealed=False, datakey=None):
+    """Write the provider files into d and remove those not given (SPEC section 29.2); sealed
+    for the app's own copies."""
     for name in PROVIDER_FILES:
         path = os.path.join(d, name)
         if name in providers:
-            _write_0600(path, providers[name])
+            _write_0600(path, _seal(name, providers[name], datakey) if sealed else providers[name])
         else:
             try:
                 os.unlink(path)
@@ -349,15 +451,56 @@ def _put_provider_files(d, providers):
                 pass
 
 
-def _get_provider_files(d):
+def _get_provider_files(d, sealed=False, datakey=None):
     out = {}
     for name in PROVIDER_FILES:
         try:
             with open(os.path.join(d, name), encoding="utf-8") as fh:
-                out[name] = fh.read()
+                text = fh.read()
         except OSError:
-            pass
+            continue
+        if sealed:
+            text = _unseal(name, text, datakey)
+        if text is not None:
+            out[name] = text
     return out
+
+
+def _read_text(path):
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return fh.read()
+    except OSError:
+        return None
+
+
+def _read_sealed(d, name, datakey=None):
+    """A sealed copy's text, or None when it is missing or cannot be opened."""
+    raw = _read_text(os.path.join(d, name))
+    return None if raw is None else _unseal(name, raw, datakey)
+
+
+def _seal_plain_copies(d, datakey=None):
+    """Seal files that an earlier version left plain in applied/ and its history; returns how many."""
+    dirs = [d]
+    h = os.path.join(d, "history")
+    try:
+        dirs += [os.path.join(h, n) for n in os.listdir(h) if _HISTORY_ID_RE.fullmatch(n)]
+    except FileNotFoundError:
+        pass
+    n = 0
+    for x in dirs:
+        for name in SEALED_FILES:
+            path = os.path.join(x, name)
+            try:
+                with open(path, encoding="utf-8") as fh:
+                    text = fh.read()
+            except OSError:
+                continue
+            if not text.startswith(_SEALED_PREFIX):
+                _write_0600(path, _seal(name, text, datakey))
+                n += 1
+    return n
 
 
 def write_staging(policy, clients, base=None, providers=None):
@@ -369,6 +512,35 @@ def write_staging(policy, clients, base=None, providers=None):
     _write_0600(os.path.join(base, "clients"), clients)
     if providers is not None:
         _put_provider_files(base, providers)
+
+
+def clear_staging(policy, clients, providers, base=None):
+    """After the helper read the staged files: remove them (they hold every shared secret, Duo's
+    secret key and private keys in plain). A file another apply staged since is left alone."""
+    base = base or staging_dir()
+    files = dict(providers or {}, policy=policy, clients=clients)
+    for name, text in files.items():
+        path = os.path.join(base, name)
+        try:
+            with open(path, encoding="utf-8") as fh:
+                same = fh.read() == text
+            if same:
+                os.unlink(path)
+        except OSError:
+            pass
+
+
+def clean_staging_after_upgrade(base, datakey):
+    """The installer's app phase (cli seal-staging): remove the staged files an older release left
+    (it kept the last ones, in plain) and seal its plain applied copies. Returns (removed, sealed)."""
+    removed = 0
+    for name in ("policy", "clients") + PROVIDER_FILES:
+        path = os.path.join(base, name)
+        if os.path.isfile(path) and not os.path.islink(path):
+            os.unlink(path)
+            removed += 1
+    d = applied_dir(base)
+    return removed, (_seal_plain_copies(d, datakey) if os.path.isdir(d) else 0)
 
 
 def read_staging(base=None):
@@ -387,60 +559,71 @@ def applied_dir(base=None):
     return os.path.join(base or staging_dir(), "applied")
 
 
-def read_applied(base=None):
+def read_applied(base=None, datakey=None):
     """Copy of the last successfully applied files, kept by the app (see apply view)."""
     d = applied_dir(base)
     out = {}
-    for name in ("policy", "clients"):
-        try:
-            with open(os.path.join(d, name), encoding="utf-8") as fh:
-                out[name] = fh.read()
-        except OSError:
-            out[name] = None
-    out["providers"] = _get_provider_files(d)
+    out["policy"] = _read_sealed(d, "policy", datakey)
+    out["clients"] = _read_sealed(d, "clients", datakey)
+    out["providers"] = _get_provider_files(d, sealed=True, datakey=datakey)
     return out
 
 
-def save_applied(policy, clients, base=None, backup_id=None, providers=None):
+# applied/history keeps as many sets as the helper keeps backups (helper.conf keep_backups,
+# default 50); older sets can no longer be rolled back to and hold old provider secrets.
+APPLIED_HISTORY_KEEP = 50
+_HISTORY_ID_RE = re.compile(r"[0-9]{8}T[0-9]{6}Z")
+
+
+def _prune_history(d):
+    h = os.path.join(d, "history")
+    try:
+        names = sorted((n for n in os.listdir(h) if _HISTORY_ID_RE.fullmatch(n)), reverse=True)
+    except FileNotFoundError:
+        return
+    for n in names[APPLIED_HISTORY_KEEP:]:
+        shutil.rmtree(os.path.join(h, n), ignore_errors=True)
+
+
+def save_applied(policy, clients, base=None, backup_id=None, providers=None, datakey=None):
     """Record what is now live. The helper's backup <backup_id> holds the files that
     were live BEFORE this apply, so the previous applied copy is archived under
     applied/history/<backup_id>/ for a later rollback to that backup."""
     d = applied_dir(base)
     os.makedirs(d, mode=0o700, exist_ok=True)
-    prev = read_applied(base)
+    prev = read_applied(base, datakey)
     if backup_id and prev["policy"] is not None and prev["clients"] is not None:
         h = os.path.join(d, "history", backup_id)
         os.makedirs(h, mode=0o700, exist_ok=True)
-        _write_0600(os.path.join(h, "policy"), prev["policy"])
-        _write_0600(os.path.join(h, "clients"), prev["clients"])
-        _put_provider_files(h, prev["providers"])
-    _write_0600(os.path.join(d, "policy"), policy)
-    _write_0600(os.path.join(d, "clients"), clients)
+        _write_0600(os.path.join(h, "policy"), _seal("policy", prev["policy"], datakey))
+        _write_0600(os.path.join(h, "clients"), _seal("clients", prev["clients"], datakey))
+        _put_provider_files(h, prev["providers"], sealed=True, datakey=datakey)
+    _write_0600(os.path.join(d, "policy"), _seal("policy", policy, datakey))
+    _write_0600(os.path.join(d, "clients"), _seal("clients", clients, datakey))
     if providers is not None:
-        _put_provider_files(d, providers)
+        _put_provider_files(d, providers, sealed=True, datakey=datakey)
+    _prune_history(d)
+    _seal_plain_copies(d, datakey)
 
 
-def restore_applied_from_history(backup_id, base=None, new_backup_id=None, certs_restored=False):
+def restore_applied_from_history(backup_id, base=None, new_backup_id=None, certs_restored=False, datakey=None):
     """After a successful rollback: the archived copy becomes the applied copy.
     Returns (policy, clients) or None when no archived copy exists (then the
     applied copy is removed because it no longer reflects what is live)."""
     d = applied_dir(base)
     # The helper backs up the files it replaces during a rollback too; keep the
     # matching applied copy so that backup can itself be rolled back to later.
-    prev = read_applied(base)
+    prev = read_applied(base, datakey)
     if new_backup_id and prev["policy"] is not None and prev["clients"] is not None:
         nh = os.path.join(d, "history", new_backup_id)
         os.makedirs(nh, mode=0o700, exist_ok=True)
-        _write_0600(os.path.join(nh, "policy"), prev["policy"])
-        _write_0600(os.path.join(nh, "clients"), prev["clients"])
-        _put_provider_files(nh, prev["providers"])
+        _write_0600(os.path.join(nh, "policy"), _seal("policy", prev["policy"], datakey))
+        _write_0600(os.path.join(nh, "clients"), _seal("clients", prev["clients"], datakey))
+        _put_provider_files(nh, prev["providers"], sealed=True, datakey=datakey)
+        _prune_history(d)
     h = os.path.join(d, "history", backup_id)
-    try:
-        with open(os.path.join(h, "policy"), encoding="utf-8") as fh:
-            policy = fh.read()
-        with open(os.path.join(h, "clients"), encoding="utf-8") as fh:
-            clients = fh.read()
-    except OSError:
+    policy, clients = _read_sealed(h, "policy", datakey), _read_sealed(h, "clients", datakey)
+    if policy is None or clients is None:
         names = ("policy", "clients") + (("certificates",) if certs_restored else ())
         for name in names:
             try:
@@ -448,16 +631,17 @@ def restore_applied_from_history(backup_id, base=None, new_backup_id=None, certs
             except OSError:
                 pass
         return None
-    _write_0600(os.path.join(d, "policy"), policy)
-    _write_0600(os.path.join(d, "clients"), clients)
+    _write_0600(os.path.join(d, "policy"), _seal("policy", policy, datakey))
+    _write_0600(os.path.join(d, "clients"), _seal("clients", clients, datakey))
     # The helper does not put Duo's own sample back on a rollback (SPEC section 29.2): an
     # archived set without a Duo file leaves the applied Duo copy as it is.
-    old = _get_provider_files(h)
-    cur = _get_provider_files(d)
+    old = _get_provider_files(h, sealed=True, datakey=datakey)
+    cur = _get_provider_files(d, sealed=True, datakey=datakey)
     if certs_restored and "certificates" not in old:
         # the helper put back certificate files from before the portal managed them (SPEC 30)
         cur.pop("certificates", None)
-    _put_provider_files(d, dict(cur, **old))
+    _put_provider_files(d, dict(cur, **old), sealed=True, datakey=datakey)
+    _seal_plain_copies(d, datakey)
     return policy, clients
 
 
@@ -481,3 +665,151 @@ def switch_admins(conn=None):
         " WHERE g.groupname = %s GROUP BY g.username ORDER BY g.username",
         (SWITCH_GROUP,), conn=conn)
     return rows
+
+
+# ------------------------------------------------------------ pending changes by part, apply
+MFA_TAIL_MARK = "\n#\n#  Second-factor providers (SPEC section 29)"
+_TOP_BLOCK = re.compile(r"(?ms)^(\w+)(?: ([^\s{]+))? \{\n.*?^\}\n")
+
+
+def _split_clients(text):
+    """(base, {(kind, name): block}) of a clients file: the part render_clients writes, and
+    the top-level blocks of the second-factor tail (unlang.render_mfa)."""
+    if text is None:
+        return None, {}
+    i = text.find(MFA_TAIL_MARK)
+    if i < 0:
+        return text, {}
+    return text[:i], {(m.group(1), m.group(2) or ""): m.group(0) for m in _TOP_BLOCK.finditer(text[i:])}
+
+
+def _block_provider(key):
+    """The provider id a second-factor block belongs to: the listener and its clients section
+    are Duo's (they exist only with Duo on), home_server/pool/realm name their provider."""
+    u = unlang()
+    kind, name = key
+    if kind == "listen" or name == u.MFA_CLIENTS_SECTION:
+        return "duo"
+    return name[len(u.MFA_REALM_PREFIX):] if name.startswith(u.MFA_REALM_PREFIX) else name
+
+
+def pending_breakdown(conn=None):
+    """What an apply would change, by part (SPEC section 29.3): policy, certificates, the clients
+    file without its second-factor tail ("clients"), the second-factor blocks of providers other
+    than Duo ("mfa", their ids), and Duo ("duo": its blocks or its file; "duo_file": the Duo
+    proxy's configuration). "others" names every part besides Duo; "only_duo" is true when Duo
+    is all that is pending. A pending state this comparison cannot explain (no applied copy, a
+    copy that cannot be opened) counts as another change, so it never looks like "only Duo"."""
+    from . import integrations
+    if conn is None:
+        g.pop("pending_state", None)     # the caller may just have saved something
+    state = pending_state(conn)
+    out = {"pending": bool(state.get("pending")), "policy": False, "certificates": False, "clients": False,
+           "mfa": [], "duo": False, "duo_file": False, "others": [], "only_duo": False}
+    if state.get("error"):
+        out["others"] = ["The configuration cannot be rendered: %s" % state["error"]]
+        return out
+    policy, clients = render_all(conn)
+    providers = render_provider_files(conn)
+    applied = read_applied()
+    out["policy"] = policy != applied["policy"]
+    out["certificates"] = providers.get("certificates") != applied["providers"].get("certificates")
+    base, blocks = _split_clients(clients)
+    old_base, old_blocks = _split_clients(applied["clients"])
+    out["clients"] = base != old_base
+    changed = {_block_provider(k) for k in set(blocks) | set(old_blocks) if blocks.get(k) != old_blocks.get(k)}
+    duo_id = integrations.DUO_ID
+    staged_duo = providers.get("provider-duo")
+    out["duo_file"] = staged_duo is not None and staged_duo != applied["providers"].get("provider-duo")
+    out["duo"] = out["duo_file"] or duo_id in changed
+    out["mfa"] = sorted(changed - {duo_id})
+    labels = []
+    if out["policy"]:
+        labels.append("Policy")
+    if out["certificates"]:
+        labels.append("Certificates")
+    if out["clients"]:
+        labels.append("RADIUS clients")
+    labels += ["Second-factor provider %s" % pid for pid in out["mfa"]]
+    if out["pending"] and not labels and not out["duo"]:
+        labels.append("Changes not in the last applied copy")
+    out["others"] = labels
+    out["only_duo"] = out["pending"] and out["duo"] and not labels
+    return out
+
+
+def helper_wait(duo_change):
+    """Seconds to wait for the helper: helper_timeout, or helper_duo_timeout when the call may also
+    restart the Duo Authentication Proxy (its worst case, both services failing and being restored,
+    is about 180 s with the helper's defaults; SPEC section 29.4)."""
+    c = current_app.config["RA"]
+    return max(c["helper_timeout"], c.get("helper_duo_timeout", 210)) if duo_change else c["helper_timeout"]
+
+
+def call_helper(action, duo_change=False, **kw):
+    from . import helper_client
+    try:
+        return helper_client.call(current_app.config["RA"]["helper_socket"], action,
+                                  timeout=helper_wait(duo_change), **kw)
+    except helper_client.HelperError as e:
+        return {"ok": False, "action": action, "message": str(e)}
+
+
+def log_apply(action, ok, message, policy_sha=None, clients_sha=None, backup_id=None, providers_sha=None):
+    db.execute("INSERT INTO ui.apply_log (actor, action, policy_sha256, clients_sha256, success, message, backup_id,"
+               " providers_sha256) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
+               (g.user["username"], action, policy_sha, clients_sha, ok, (message or "")[:2000], backup_id,
+                providers_sha))
+
+
+class ApplyChanged(Exception):
+    """The configuration changed after the admin reviewed it (the 'expected' token differs)."""
+
+
+class ApplyRenderError(Exception):
+    """The configuration cannot be rendered (stored data the renderer refuses)."""
+
+
+def apply_now(source, expected=None):
+    """Render, stage and apply everything pending through the helper, then log it, keep the
+    applied copy and audit config.apply (detail 'source': the page that asked, 'apply' or 'duo').
+    Shared by the Apply page and the Duo page (SPEC section 29.3). Raises ApplyRenderError when
+    the configuration cannot be rendered, ApplyChanged when `expected` no longer matches.
+    Returns (ok, helper response, radiusd output)."""
+    from .audit import write as audit_write
+    from .security import client_ip
+    try:
+        policy, clients = render_all()
+        providers = render_provider_files()
+    except Exception as e:
+        raise ApplyRenderError(str(e)) from e
+    ph, ch, xh = sha256_hex(policy), sha256_hex(clients), providers_sha256(providers)
+    if expected and expected != ph + ":" + ch + ":" + xh:
+        raise ApplyChanged()
+    write_staging(policy, clients, providers=providers)
+    staged_duo, staged_certs = providers.get("provider-duo"), providers.get("certificates")
+    prev = read_applied()["providers"]
+    # a certificate change may also reload the portal: give the helper the longer time
+    try:
+        resp = call_helper("apply", duo_change=(staged_duo is not None and staged_duo != prev.get("provider-duo"))
+                           or (staged_certs is not None and staged_certs != prev.get("certificates")))
+    finally:
+        clear_staging(policy, clients, providers)
+    ok = bool(resp.get("ok"))
+    # Trust the hashes we staged; flag a mismatch reported by the helper.
+    hp, hc = resp.get("policy_sha256"), resp.get("clients_sha256")
+    if ok and ((hp and hp != ph) or (hc and hc != ch)):
+        resp["message"] = (resp.get("message") or "") + " (warning: helper hash differs from staged hash)"
+    backup_id = resp.get("backup_id") if isinstance(resp.get("backup_id"), str) else None
+    log_apply("apply", ok, resp.get("message"), ph, ch, backup_id, providers_sha=xh)
+    if ok:
+        save_applied(policy, clients, backup_id=backup_id, providers=providers)
+    g.pop("pending_state", None)
+    audit_write("config.apply", success=ok, actor=g.user["username"], actor_ip=client_ip(), object_type="config",
+                detail={"policy_sha256": ph, "clients_sha256": ch, "providers_sha256": xh, "backup_id": backup_id,
+                        "rolled_back": bool(resp.get("rolled_back")), "source": source,
+                        "message": (resp.get("message") or "")[:500]})
+    output = resp.get("output")
+    if isinstance(output, list):
+        output = "\n".join(str(x) for x in output)
+    return ok, resp, output or ""

@@ -163,6 +163,19 @@ def test_web_issue_download_renew_revoke(web, home):
     assert code == 200 and "Valid signature" in body
 
 
+def test_web_post_from_its_own_page(web, home):
+    # Browsers send "Origin: null" on form POSTs from a page whose Referrer-Policy is
+    # no-referrer (Fetch standard), so the policy must let the real origin through.
+    port, token = web
+    code, headers, _ = req(port, "GET", "/new", cookie=token)
+    assert headers["Referrer-Policy"] == "same-origin"
+    code, _, _ = req(port, "POST", "/new", {"licensee": "Example Corp", "csrf": token}, cookie=token,
+                     origin="http://127.0.0.1:%d" % port)
+    assert code == 303 and len(home.register()) == 1
+    assert req(port, "POST", "/new", {"licensee": "x", "csrf": token}, cookie=token, origin="null")[0] == 403
+    assert len(home.register()) == 1
+
+
 def test_web_refuses_forged_posts_and_bad_ids(web, home):
     port, token = web
     assert req(port, "POST", "/new", {"licensee": "x", "csrf": "nope"}, cookie=token)[0] == 403

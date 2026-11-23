@@ -2,6 +2,8 @@
 {% import "_macros.html" as m %}
 {% block title %}Duo Authentication Proxy{% endblock %}
 {% block content %}
+{# every form here comes back to this page after a step-up, also from a POST result shown in place #}
+{% set duo_page = url_for('integrations.duo') %}
 <p class="crumb"><a class="btn btn-quiet btn-small btn-back" href="{{ url_for('integrations.index') }}">Integrations</a></p>
 <header class="page-head">
   <div><h1>Duo Authentication Proxy</h1>
@@ -21,10 +23,10 @@
     <dt>Service</dt>
     <dd>{% if duo.installed and duo.installed.version %}{{ m.onoff(duo.service_active, 'Running', 'Stopped') }}{% if duo.listening %} <span class="small muted">listening on 127.0.0.1:18120</span>{% elif duo.service_active %} <span class="small warn-text">not listening yet</span>{% endif %}{% else %}—{% endif %}</dd>
     <dt>Provider</dt>
-    <dd>{% if provider %}{{ m.onoff(provider.enabled, 'On', 'Off') }}{% if in_use %} <span class="small muted">chosen in the second-factor rules</span>{% endif %}{% else %}Not set up{% endif %}</dd>
-    {% if fips %}<dt>FIPS mode</dt><dd>Only builds the signed catalog lists as FIPS-capable can be installed; Duo runs with fips_mode and fail mode secure.</dd>{% endif %}
+    <dd>{% if provider %}{{ m.onoff(provider.enabled) }}{% if in_use %} <span class="small muted">chosen in the second-factor rules</span>{% endif %}{% else %}Not set up{% endif %}</dd>
+    {% if fips_mode %}<dt>FIPS mode</dt><dd>Only builds the signed catalog lists as FIPS-capable can be installed; Duo runs with fips_mode and fail mode secure.</dd>{% endif %}
   </dl>
-  {% if fips and duo.installed and duo.installed.version and not build.fips_capable %}<p class="flash flash-error" role="alert">FIPS mode: this build is not FIPS-capable in the signed catalog{% if duo.installed.fips is not sameas true %} or was installed before FIPS mode was turned on{% endif %}. Duo cannot be turned on or applied until a FIPS-capable build is installed.</p>{% endif %}
+  {% if fips_mode and duo.installed and duo.installed.version and not build.fips_capable %}<p class="flash flash-error" role="alert">FIPS mode: this build is not FIPS-capable in the signed catalog{% if duo.installed.fips is not sameas true %} or was installed before FIPS mode was turned on{% endif %}. Duo cannot be turned on or applied until a FIPS-capable build is installed.</p>{% endif %}
   {% if build.withdrawn %}<p class="flash flash-error" role="alert">The project withdrew this build from its signed catalog. Install a current build below; until then an alert is sent once a day.</p>
   {% elif duo.installed and duo.installed.verified and not build.verified %}<p class="warn-text">This build was installed after an admin compared its SHA-256 with Duo's published value; the project's signed catalog does not list it yet.</p>{% endif %}
   {% if state.state in ('done', 'failed', 'removed') and not running %}
@@ -50,7 +52,7 @@
 <section class="panel" id="duo-check" aria-labelledby="duo-pre-h">
   <h2 id="duo-pre-h">1. Check this server</h2>
   <p class="small muted">Disk space, operating system, the build packages the install adds, and whether Duo's API answers (once its hostname is set below).</p>
-  <form method="post" action="{{ url_for('integrations.duo_check') }}#duo-check" data-busy="Checking…">{{ m.csrf() }}<button class="btn" type="submit">Check</button></form>
+  <form method="post" action="{{ url_for('integrations.duo_check') }}#duo-check" data-busy="Checking…">{{ m.csrf(duo_page) }}<button class="btn" type="submit">Check</button></form>
   {% if preflight %}
   {% if preflight.ok %}
   <ul class="check-results">
@@ -69,15 +71,15 @@
     <tbody>
     {% for e in catalog %}
     <tr><td class="mono">{{ e.version }}</td><td class="mono small">{{ e.sha256[:16] }}…</td>
-      <td class="row-actions">{% if not running %}{{ m.post_button(url_for('integrations.duo_fetch'), 'Download', 'btn btn-quiet btn-small', fields={'version': e.version}, busy='Starting the download…') }}{% endif %}</td></tr>
+      <td class="row-actions">{% if not running %}{{ m.post_button(url_for('integrations.duo_fetch'), 'Download', 'btn btn-quiet btn-small', fields={'version': e.version, 'return_to': duo_page}, busy='Starting the download…') }}{% endif %}</td></tr>
     {% endfor %}
     </tbody>
   </table></div>
   {% else %}
-  <p>The signed catalog of this release lists no Duo build{% if fips %} that is FIPS-capable{% endif %} yet.{% if catalog_message %} <span class="small muted">{{ catalog_message }}</span>{% endif %}</p>
-  {% if not fips %}
+  <p>The signed catalog of this release lists no Duo build{% if fips_mode %} that is FIPS-capable{% endif %} yet.{% if catalog_message %} <span class="small muted">{{ catalog_message }}</span>{% endif %}</p>
+  {% if not fips_mode %}
   <form method="post" action="{{ url_for('integrations.duo_fetch') }}" class="inline-form" data-busy="Starting the download…">
-    {{ m.csrf() }}
+    {{ m.csrf(duo_page) }}
     <label for="fetch-version">Download another version from dl.duosecurity.com</label>
     <input id="fetch-version" name="version" placeholder="6.8.1" maxlength="20" class="mono" inputmode="decimal" required>
     <button class="btn" type="submit">Download</button>
@@ -91,11 +93,12 @@
   {% endif %}
 
   <form method="post" action="{{ url_for('integrations.duo_upload') }}" enctype="multipart/form-data" class="stack" data-busy="Uploading…">
-    {{ m.csrf() }}
+    {{ m.csrf(duo_page) }}
     <label for="build">Or upload Duo's source build</label>
-    <input id="build" name="build" type="file" accept=".tgz,application/gzip" required aria-describedby="build-hint">
-    <p id="build-hint" class="small muted">The unmodified file from Duo, named like <span class="mono">duoauthproxy-6.8.1-src.tgz</span>, at most {{ upload_mib }} MiB.</p>
-    <div class="actions"><button class="btn" type="submit">Upload</button></div>
+    <div class="actions"><button type="button" class="btn js-only" data-pick-file="build" aria-describedby="build-hint">Upload a build…</button></div>
+    <div class="nojs-only"><input id="build" name="build" type="file" accept=".tgz,application/gzip" required aria-describedby="build-hint"></div>
+    <p id="build-hint" class="small muted">The unmodified file from Duo, named like <span class="mono">duoauthproxy-6.8.1-src.tgz</span>, at most {{ upload_mib }} MiB. It goes to Ready to install; nothing is installed yet.</p>
+    <div class="actions nojs-only"><button class="btn" type="submit">Upload</button></div>
   </form>
 
   {% if files %}
@@ -103,9 +106,9 @@
   {% for f in files %}
   <form method="post" action="{{ url_for('integrations.duo_install') }}" class="stack install-form" data-busy="Starting the install…"
         data-confirm="Install {{ f }}? The server builds it (a few minutes) and installs Duo into /opt/duoauthproxy.">
-    {{ m.csrf() }}<input type="hidden" name="file" value="{{ f }}">
+    {{ m.csrf(duo_page) }}<input type="hidden" name="file" value="{{ f }}">
     <p class="mono">{{ f }}{% if fetch.file == f and fetch.sha256 %} <span class="small muted">SHA-256 {{ fetch.sha256 }}</span>{% endif %}</p>
-    {% if not fips %}
+    {% if not fips_mode %}
     <details>
       <summary>Not in the signed catalog?</summary>
       <label for="sha-{{ loop.index }}">SHA-256 as Duo publishes it</label>
@@ -122,21 +125,29 @@
 
 <section class="panel" id="duo-connect" aria-labelledby="duo-cfg-h">
   <h2 id="duo-cfg-h">3. Connect to Duo</h2>
-  <p class="small muted">From the Duo Admin Panel: protect an application of type "RADIUS" and copy its keys. Saving needs Apply changes to reach the Duo proxy and FreeRADIUS.</p>
-  <form method="post" action="{{ url_for('integrations.duo_settings') }}" class="stack narrow">
-    {{ m.csrf() }}
+  <p class="small muted">From the Duo Admin Panel: protect an application of type "RADIUS" and copy its keys. Save shows what changes and applies it to the Duo proxy and FreeRADIUS.</p>
+  {% if applied %}
+  <div id="duo-applied" class="flash {{ 'flash-success' if applied.ok else 'flash-error' }}" role="{{ 'status' if applied.ok else 'alert' }}">
+    <p>{% if applied.ok %}Duo settings saved and applied: {{ applied.message }}.{% else %}Duo settings saved, but the apply failed: {{ applied.message or 'the helper reported an error' }}.{% endif %}</p>
+    {% if applied.rolled_back %}<p class="small">The previous configuration was restored.</p>{% endif %}
+    {% if applied.backup_id %}<p class="small">Backup of the previous files: <span class="mono">{{ applied.backup_id }}</span></p>{% endif %}
+  </div>
+  {% if applied.output %}<pre class="code" tabindex="0" aria-label="radiusd output">{{ applied.output }}</pre>{% endif %}
+  {% elif pending %}
+  <p class="pending-note">Changes are waiting to be applied. <a href="{{ url_for('apply.index') }}">Review and apply</a></p>
+  {% endif %}
+  <form method="post" action="{{ url_for('integrations.duo_settings') }}" class="stack narrow" id="duo-settings"
+        data-duo-preview="{{ url_for('integrations.duo_preview') }}" data-busy="Saving…">
+    {{ m.csrf(duo_page) }}
     {% set s = provider.settings if provider else {} %}
     <label for="ikey">Integration key</label>
     <input id="ikey" name="ikey" value="{{ s.ikey or '' }}" maxlength="40" class="mono" autocomplete="off"{{ m.described(errors, 'ikey') }}>
     {{ m.field_error(errors, 'ikey') }}
-    <label for="skey">Secret key</label>
-    <input id="skey" name="skey" type="password" maxlength="64" autocomplete="new-password" aria-describedby="skey-hint{{ ' skey-error' if errors.skey else '' }}"{{ ' aria-invalid=true' if errors.skey else '' }}>
-    <p id="skey-hint" class="small muted">{% if has_skey %}A secret key is set; leave empty to keep it. {% endif %}Stored encrypted; written only into Duo's configuration file.</p>
-    {{ m.field_error(errors, 'skey') }}
+    {{ m.secret_field(errors, 'skey', 'Secret key', has_skey, "Stored encrypted; written only into Duo's configuration file.", 64) }}
     <label for="api_host">API hostname</label>
     <input id="api_host" name="api_host" value="{{ s.api_host or '' }}" maxlength="64" class="mono" placeholder="api-xxxxxxxx.duosecurity.com" autocomplete="off"{{ m.described(errors, 'api_host') }}>
     {{ m.field_error(errors, 'api_host') }}
-    {% if not fips %}
+    {% if not fips_mode %}
     <fieldset>
       <legend>When Duo's service cannot be reached</legend>
       <label class="check"><input type="radio" name="failmode" value="secure" {{ 'checked' if (s.failmode or 'secure') == 'secure' else '' }}> Reject the login (secure)</label>
@@ -149,9 +160,30 @@
       {% for f in factors %}<label class="check"><input type="checkbox" name="factors" value="{{ f }}" {{ 'checked' if f in chosen else '' }}> {{ {'auto': 'Automatic (push, else phone call)', 'push': 'Push to the Duo Mobile app', 'phone': 'Phone call', 'passcode': 'Passcode (typed after the password with a comma)'}[f] }}</label>{% endfor %}
       {{ m.field_error(errors, 'factors') }}
     </fieldset>
-    <label class="check"><input type="checkbox" name="enabled" value="1" {{ 'checked' if provider and provider.enabled else '' }}{{ m.described(errors, 'enabled') }}> On (FreeRADIUS can send logins to Duo; choose it in the <a href="{{ url_for('integrations.policy') }}">second-factor rules</a>)</label>
-    {{ m.field_error(errors, 'enabled') }}
-    <div class="actions"><button type="submit" class="btn btn-primary">Save</button></div>
+    {{ m.switch('enabled', 'Duo provider', provider and provider.enabled, locked=switch_lock, errors=errors) }}
+    <p class="small muted">Enabled: FreeRADIUS can send logins to Duo once it is chosen in the <a href="{{ url_for('integrations.policy') }}">second-factor rules</a>.</p>
+    <div class="actions"><button type="submit" class="btn btn-primary" data-save>Save</button></div>
+    <dialog id="duo-apply-dialog" class="confirm-dialog duo-apply-dialog" aria-labelledby="duo-apply-title">
+      <div class="dialog-body">
+        <h2 id="duo-apply-title" data-title>Save and apply the Duo settings?</h2>
+        <ul class="small" data-restarts></ul>
+        <p class="small muted">Applying takes up to ~3 minutes when the Duo proxy restarts. Logins keep working with the current configuration until it is replaced; a failure restores it.</p>
+        <details data-diff-wrap hidden><summary>Changes to authproxy.cfg (secrets hidden)</summary>
+          <pre class="diff" tabindex="0" aria-label="Changes to authproxy.cfg" data-diff></pre></details>
+        <div data-others hidden>
+          <p>Applying from here would send these to FreeRADIUS too:</p>
+          <ul class="small" data-others-list></ul>
+          <label class="check"><input type="checkbox" name="confirm_all" value="1" data-confirm-all> I reviewed them: apply all pending changes from here</label>
+          <p class="small muted">Or save Duo only: nothing goes live until you <a href="{{ url_for('apply.index') }}">review and apply</a>.</p>
+        </div>
+        <div class="confirm-actions">
+          <button type="button" class="btn btn-quiet" data-cancel>Cancel</button>
+          <button type="submit" name="then" value="save" class="btn" data-save-only data-busy-text="Saving…">Save only</button>
+          <button type="submit" name="then" value="apply_all" class="btn btn-primary" data-apply-all hidden disabled data-busy-text="Applying, up to ~3 minutes…">Apply all</button>
+          <button type="submit" name="then" value="apply" class="btn btn-primary" data-apply data-busy-text="Applying, up to ~3 minutes…">Save and apply</button>
+        </div>
+      </div>
+    </dialog>
   </form>
 </section>
 {% endif %}
@@ -160,20 +192,51 @@
 <section class="panel" id="duo-test" aria-labelledby="duo-test-h">
   <h2 id="duo-test-h">4. Test</h2>
   <p class="small muted">Duo's connectivity check with the applied configuration: Duo's API and the password check on this server.</p>
-  <form method="post" action="{{ url_for('integrations.duo_test') }}#duo-test" data-busy="Testing…">{{ m.csrf() }}<button class="btn" type="submit">Run the check</button></form>
+  {% if duo_applied %}
+  <form method="post" action="{{ url_for('integrations.duo_test') }}#duo-test" data-busy="Testing…">{{ m.csrf(duo_page) }}<button class="btn" type="submit">Run the check</button></form>
+  {% else %}
+  <p class="warn-text">Apply your Duo settings first: until then the Duo proxy runs Duo's sample configuration, which the check can only report as broken.</p>
+  {% endif %}
   {% if test %}
   {% if test.ok %}<p class="flash {{ 'flash-success' if test.passed else 'flash-error' }}">{{ test.message[:1]|upper ~ test.message[1:] }}.</p>
   <pre class="terminal" tabindex="0" aria-label="Connectivity check output">{{ test.output }}</pre>
   {% else %}<p class="flash flash-error">The check did not run: {{ test.message }}</p>{% endif %}
   {% endif %}
 </section>
+
+{% if has_role('admin') and duo.installed and duo.installed.version and duo_applied %}
+<section class="panel" id="duo-push" aria-labelledby="duo-push-h">
+  <h2 id="duo-push-h">Send a test push</h2>
+  <p class="small muted">Duo sends a push to this user's phone with the applied keys, as a device admin login would; nothing is logged in. The user must be enrolled in Duo under this name. At most one push per user every 30 seconds and 10 an hour.</p>
+  <form method="post" action="{{ url_for('integrations.duo_push_test') }}#duo-push" class="inline-form" data-busy="Waiting for the answer (up to 60 s)…">
+    {{ m.csrf(duo_page) }}
+    <label for="push-user">Username</label>
+    <input id="push-user" name="username" value="{{ push.username if push else '' }}" maxlength="64" class="mono" autocomplete="off" required{{ m.described(errors, 'username') }}>
+    <button class="btn" type="submit">Send test push</button>
+  </form>
+  {{ m.field_error(errors, 'username') }}
+  {% if push %}
+  {% if push.ok %}<p class="flash {{ 'flash-success' if push.result == 'allow' else 'flash-error' }}" role="status">{{ push.label }}{% if push.status_msg %}: {{ push.status_msg }}{% endif %}</p>
+  {% else %}<p class="flash flash-error" role="alert">The test push was not sent: {{ push.message or 'the helper gave no reason' }}.</p>{% endif %}
+  {% endif %}
+</section>
+{% endif %}
 {% endif %}
 
 {% if has_role('admin') and duo.installed and duo.installed.version %}
 <section class="panel callout callout-danger" aria-labelledby="duo-rm-h">
-  <h2 id="duo-rm-h">Remove Duo</h2>
-  <p class="small">Stops and removes the Duo proxy from this server; its configuration is kept in /var/backups/radius-admin. Turn the provider off and apply the changes first.</p>
-  {{ m.post_button(url_for('integrations.duo_remove'), 'Remove Duo', 'btn btn-danger-quiet', confirm='Remove the Duo Authentication Proxy from this server?', busy='Starting the removal…') }}
+  {% set duo_on = provider and provider.enabled %}
+  <h2 id="duo-rm-h">{{ 'Disable and remove Duo' if duo_on else 'Remove Duo' }}</h2>
+  <p class="small">{% if duo_on %}Turns the Duo provider off, applies that (FreeRADIUS and the Duo proxy restart; device admin logins stop using a second factor), then stops and removes{% else %}Stops and removes{% endif %} the Duo proxy from this server; its configuration is kept in /var/backups/radius-admin.</p>
+  <form method="post" action="{{ url_for('integrations.duo_remove') }}" class="stack" data-busy="{{ 'Disabling and removing, up to ~3 minutes…' if duo_on else 'Starting the removal…' }}"
+        data-confirm="{{ ('Disable Duo and remove it? Device admin logins stop using a second factor; FreeRADIUS and the Duo proxy restart.' ~ (' The second-factor rules that use Duo are turned off: ' ~ duo_rules|join('; ') ~ '.' if duo_rules else '')) if duo_on else 'Remove the Duo Authentication Proxy from this server?' }}">
+    {{ m.csrf(duo_page) }}
+    {% if duo_rules %}
+    <p class="warn-text">A second-factor rule uses Duo: {{ duo_rules|join('; ') }}. Those logins would be rejected without Duo, so the rule must be turned off with it.</p>
+    <label class="check"><input type="checkbox" name="rules_off" value="1" required> Turn this rule off too</label>
+    {% endif %}
+    <div class="actions"><button type="submit" class="btn btn-danger-quiet">{{ 'Disable and remove Duo' if duo_on else 'Remove Duo' }}</button></div>
+  </form>
 </section>
 {% endif %}
 {% endblock %}

@@ -52,12 +52,13 @@ def test_list_and_builtin_profiles_are_read_only(app, browser, superconn, logged
     logged_in("viewer")
     t = browser.text(browser.get("/profiles/"))
     assert "Device profiles" in t and "Cisco Catalyst 1200/1300" in t and "Generic (RFC standard attributes)" in t
-    assert t.count('<span class="tag tag-ok">Built-in</span>') == 2 and "tested on hardware" not in t
+    assert t.count('<span class="tag tag-ok">Built-in</span>') == 3 and "tested on hardware" not in t
     assert "New profile" not in t and "Import JSON" not in t and "Export JSON" in t
     links = re.findall(r'href="(https://github.com/[^"]+)"', t)
-    assert len(links) == 2 and all("/radiusadmin/radius-admin/issues/new?template=device-profile.yml&amp;" in u
+    assert len(links) == 3 and all("/radiusadmin/radius-admin/issues/new?template=device-profile.yml&amp;" in u
                                    for u in links)
-    assert "profile=cisco-c1300" in links[0] + links[1] and "profile=generic-rfc" in links[0] + links[1]
+    assert all("profile=%s&" % pid in "".join(links).replace("&amp;", "&")
+               for pid in ("cisco-c1300", "cisco-iosxe", "generic-rfc"))
     t = browser.text(browser.get("/profiles/cisco-c1300"))
     assert "Cisco-AVPair += shell:priv-lvl=15" in t and " disabled" in t and "Save profile" not in t
     assert browser.get("/profiles/no-such").status_code == 404
@@ -290,4 +291,4 @@ def test_report_a_problem_only_for_builtin_profiles(app, browser, superconn, log
     assert _create(browser, **ARUBA).status_code == 302
     t = browser.text(browser.get("/profiles/aruba-cx"))
     assert "Report a problem" not in t and "github.com" not in t
-    assert browser.text(browser.get("/profiles/")).count("Report a problem<span") == 2
+    assert browser.text(browser.get("/profiles/")).count("Report a problem<span") == 3
