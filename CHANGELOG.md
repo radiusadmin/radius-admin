@@ -8,6 +8,10 @@ release, so previews sort after it.
 ## Unreleased
 
 ### Added
+- **Duo: send a test push.** Once Duo's settings are applied, an admin can send a Duo Push to a
+  user from the Duo page and see whether it was approved, denied, not answered or the user is not
+  enrolled. The server signs the request to Duo with SHA-512; at most one push per user every 30
+  seconds and ten an hour.
 - **Device profile for Cisco Catalyst 9000 switches (IOS-XE).** Built-in profile
   `cisco-iosxe`: VLAN by the standard tunnel attributes, full admin rights by
   `shell:priv-lvl=15`, session actions on UDP 1700 (re-authenticate, bounce port, disconnect)

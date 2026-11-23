@@ -407,6 +407,7 @@ Actions:
   empty `text` and a message (section 23).
 - `integration_status`, `integration_catalog`, `integration_preflight`, `integration_fetch`,
   `integration_install`, `integration_log`: second-factor provider installs, section 29.1.
+- `integration_remove`, `integration_test`, `integration_push_test`: section 29.1 and 29.3.
 - `cert_status`, and the staged `certificates` file in `validate`/`apply`/`rollback`: certificates
   managed in the portal, section 30.
 Staging path is fixed in helper.conf, never taken from the request. Helper safety
@@ -1741,6 +1742,21 @@ unreachable). The portal pages that drive this follow.
   Duo's `log/` only, `CapabilityBoundingSet=CAP_SYS_PTRACE CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH`,
   `RuntimeMaxSec=115`): the tool recognises the running proxy on its port only by mapping the
   socket to a process, which needs `CAP_SYS_PTRACE`, and the helper has none; `{passed, output}` with lines naming skey, secret or password redacted.
+  `integration_push_test {"id": "duo", "username"}` (section 29.3): `username` must fullmatch
+  `[A-Za-z0-9._@-]{1,64}`; Duo must be installed and the live `authproxy.cfg` must start with
+  `; radius-admin` and pass `check_duo_config` (otherwise "apply the Duo settings first"); ikey,
+  skey and api_host come only from that file (api_host re-checked against
+  `^api-[a-z0-9]{1,16}\.duosecurity\.com$`). Rate limit under the lock `push-test.lock`, kept in
+  `<work_dir>/push-test.json` with a hash of the username, never the name: one push per user per
+  30 s, 10 per hour in all. Then POST `/auth/v2/preauth {username}` and, when its result is
+  `auth`, POST `/auth/v2/auth {username, factor: push, device: auto}` (at most 70 s; Duo waits up
+  to 60 s for the answer), as JSON bodies signed with Duo signature version 5 (HMAC-SHA512 over
+  date, method, host, path, the empty query, the SHA-512 of the body and of the absent X-Duo
+  headers; never the SHA-1 version 2 scheme), over TLS 1.2+ to `api_host:443` verified against the
+  system CAs. Answer `{ok: true, result, status_msg}` with `result` one of `allow`, `deny`,
+  `timeout` (Duo's status `timeout`), `not_enrolled` (preauth `enroll`), `error` (Duo refused the
+  request, or could not be reached or verified); never keys. helper.conf `duo_api_connect`
+  (`127.0.0.1:PORT`) and `duo_api_cafile` exist for tests only and are empty by default.
 
 ### 29.3 Duo in the portal
 
@@ -1825,6 +1841,12 @@ unreachable). The portal pages that drive this follow.
   copy has `provider-duo`), the proxy runs Duo's sample `authproxy.cfg`: section 4 says to apply the
   Duo settings first instead of offering the check, and `POST /integrations/duo/test` refuses with
   the same message without calling the helper.
+- **Send a test push** (`POST /integrations/duo/push-test`, admin + step-up; shown once a Duo
+  configuration has been applied, section 4 of the page): a username (same pattern as the helper,
+  checked before the helper is asked); the helper's `integration_push_test` (timeout 90 s); the page
+  shows Approved, Denied, No answer in time, Not enrolled in Duo or Duo could not be asked with
+  Duo's status message, or the helper's refusal (rate limit, no applied configuration). Audited
+  `integration.push_test` with `username` and `result` (`refused` when the helper refused), never keys.
 - **Stored secrets** (`_macros.secret_field`). Before a secret key is stored the form shows the
   input (needed to turn Duo on). Once one is stored it shows "Secret key: set" and the input only
   inside `<details class="secret-change">` with the summary "Change secret key" (opened when the

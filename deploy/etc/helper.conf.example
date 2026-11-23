@@ -59,6 +59,10 @@ radius_port = 1812
 # integration_max_mib = 128
 # integration_log_dir = /var/log/radius-admin
 # duo_dir = /opt/duoauthproxy
+# tests only (leave empty): where integration_push_test connects instead of <api_host>:443, and the
+# CA file it trusts instead of the system CAs
+# duo_api_connect =
+# duo_api_cafile =
 
 # timeouts (seconds). Worst-case apply = lock + validate + 2 x (restart + wait)
 # = 10 + 30 + 2 x (20 + 15) = 110 s; must stay below the app's helper_timeout (120).
