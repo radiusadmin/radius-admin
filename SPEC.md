@@ -1693,6 +1693,10 @@ unreachable). The portal pages that drive this follow.
   configuration is copied to `/var/backups/radius-admin/duoauthproxy-authproxy.cfg-<time>` (0600)
   with the value of every key containing `skey`, `secret`, `password` or `_key` replaced by `REDACTED`,
   the service stopped, Duo's `uninstall --no-prompt` run, the drop-in removed.
+- **Helper sandbox.** `radius-admin-helper@.service` (`ProtectSystem=strict`) lists
+  `-/opt/duoauthproxy/conf` in `ReadWritePaths`: apply and rollback write `conf/authproxy.cfg`
+  (the connectivity tool runs in a unit of its own, below). Optional (`-`): a server without Duo
+  starts the helper as before. `tests/helper/test_helper_unit.py` checks the unit.
 - **Outcome audit.** The dispatcher records `integration.install` / `integration.remove` (result
   done, removed or failed; version; message; the actor from the state) with
   `python3 -m radius_admin.cli record-integration`.
@@ -1725,7 +1729,10 @@ unreachable). The portal pages that drive this follow.
   and apply first") or an install/removal runs; state `queued` with `action: remove`; starts
   `<integration_remove_unit>@<id>.service`. `integration_test {"id"}`: runs Duo's
   `usr/local/bin/authproxy_connectivity_tool` (root-owned, writable only by root) for at most
-  120 s; `{passed, output}` with lines naming skey, secret or password redacted.
+  120 s, as a transient unit (`systemd-run --wait --pipe`, `ProtectSystem=strict`, write access to
+  Duo's `log/` only, `CapabilityBoundingSet=CAP_SYS_PTRACE CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH`,
+  `RuntimeMaxSec=115`): the tool recognises the running proxy on its port only by mapping the
+  socket to a process, which needs `CAP_SYS_PTRACE`, and the helper has none; `{passed, output}` with lines naming skey, secret or password redacted.
 
 ### 29.3 Duo in the portal
 
