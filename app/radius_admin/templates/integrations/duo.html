@@ -24,9 +24,9 @@
     <dd>{% if duo.installed and duo.installed.version %}{{ m.onoff(duo.service_active, 'Running', 'Stopped') }}{% if duo.listening %} <span class="small muted">listening on 127.0.0.1:18120</span>{% elif duo.service_active %} <span class="small warn-text">not listening yet</span>{% endif %}{% else %}—{% endif %}</dd>
     <dt>Provider</dt>
     <dd>{% if provider %}{{ m.onoff(provider.enabled) }}{% if in_use %} <span class="small muted">chosen in the second-factor rules</span>{% endif %}{% else %}Not set up{% endif %}</dd>
-    {% if fips %}<dt>FIPS mode</dt><dd>Only builds the signed catalog lists as FIPS-capable can be installed; Duo runs with fips_mode and fail mode secure.</dd>{% endif %}
+    {% if fips_mode %}<dt>FIPS mode</dt><dd>Only builds the signed catalog lists as FIPS-capable can be installed; Duo runs with fips_mode and fail mode secure.</dd>{% endif %}
   </dl>
-  {% if fips and duo.installed and duo.installed.version and not build.fips_capable %}<p class="flash flash-error" role="alert">FIPS mode: this build is not FIPS-capable in the signed catalog{% if duo.installed.fips is not sameas true %} or was installed before FIPS mode was turned on{% endif %}. Duo cannot be turned on or applied until a FIPS-capable build is installed.</p>{% endif %}
+  {% if fips_mode and duo.installed and duo.installed.version and not build.fips_capable %}<p class="flash flash-error" role="alert">FIPS mode: this build is not FIPS-capable in the signed catalog{% if duo.installed.fips is not sameas true %} or was installed before FIPS mode was turned on{% endif %}. Duo cannot be turned on or applied until a FIPS-capable build is installed.</p>{% endif %}
   {% if build.withdrawn %}<p class="flash flash-error" role="alert">The project withdrew this build from its signed catalog. Install a current build below; until then an alert is sent once a day.</p>
   {% elif duo.installed and duo.installed.verified and not build.verified %}<p class="warn-text">This build was installed after an admin compared its SHA-256 with Duo's published value; the project's signed catalog does not list it yet.</p>{% endif %}
   {% if state.state in ('done', 'failed', 'removed') and not running %}
@@ -76,8 +76,8 @@
     </tbody>
   </table></div>
   {% else %}
-  <p>The signed catalog of this release lists no Duo build{% if fips %} that is FIPS-capable{% endif %} yet.{% if catalog_message %} <span class="small muted">{{ catalog_message }}</span>{% endif %}</p>
-  {% if not fips %}
+  <p>The signed catalog of this release lists no Duo build{% if fips_mode %} that is FIPS-capable{% endif %} yet.{% if catalog_message %} <span class="small muted">{{ catalog_message }}</span>{% endif %}</p>
+  {% if not fips_mode %}
   <form method="post" action="{{ url_for('integrations.duo_fetch') }}" class="inline-form" data-busy="Starting the download…">
     {{ m.csrf(duo_page) }}
     <label for="fetch-version">Download another version from dl.duosecurity.com</label>
@@ -108,7 +108,7 @@
         data-confirm="Install {{ f }}? The server builds it (a few minutes) and installs Duo into /opt/duoauthproxy.">
     {{ m.csrf(duo_page) }}<input type="hidden" name="file" value="{{ f }}">
     <p class="mono">{{ f }}{% if fetch.file == f and fetch.sha256 %} <span class="small muted">SHA-256 {{ fetch.sha256 }}</span>{% endif %}</p>
-    {% if not fips %}
+    {% if not fips_mode %}
     <details>
       <summary>Not in the signed catalog?</summary>
       <label for="sha-{{ loop.index }}">SHA-256 as Duo publishes it</label>
@@ -147,7 +147,7 @@
     <label for="api_host">API hostname</label>
     <input id="api_host" name="api_host" value="{{ s.api_host or '' }}" maxlength="64" class="mono" placeholder="api-xxxxxxxx.duosecurity.com" autocomplete="off"{{ m.described(errors, 'api_host') }}>
     {{ m.field_error(errors, 'api_host') }}
-    {% if not fips %}
+    {% if not fips_mode %}
     <fieldset>
       <legend>When Duo's service cannot be reached</legend>
       <label class="check"><input type="radio" name="failmode" value="secure" {{ 'checked' if (s.failmode or 'secure') == 'secure' else '' }}> Reject the login (secure)</label>
