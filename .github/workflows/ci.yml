@@ -84,6 +84,8 @@ jobs:
         run: cd "$REPO" && bash tests/installer/test_ad_join.sh | tee "$LOGS/ad-join.log"
       - name: Update install checks
         run: cd "$REPO" && sudo bash tests/installer/test_update_install.sh | tee "$LOGS/update-install.log"
+      - name: Update keeps client secrets readable (rollback)
+        run: cd "$REPO" && sudo bash tests/installer/test_update_secrets.sh | tee "$LOGS/update-secrets.log"
       - name: Integration install checks
         run: cd "$REPO" && sudo bash tests/installer/test_integration_install.sh | tee "$LOGS/integration-install.log"
       - name: Duo install checks
@@ -107,7 +109,7 @@ jobs:
         if: always()
         run: |
           tools/ci/test-counts.py "$LOGS/helper.log" "$LOGS/licence-tool.log" "$LOGS/installer.log" "$LOGS/live-settings.log" "$LOGS/ad-join.log" \
-              "$LOGS/ldap-carry-over.log" "$LOGS/eap-carry-over.log" "$LOGS/update-install.log" "$LOGS/integration-install.log" "$LOGS/duo-install.log" "$LOGS/nginx-dropin.log" "$LOGS/nginx-update.log" "$LOGS/max-request-time.log" "$LOGS/install-reruns.log" "$LOGS/release.log" "$LOGS/fetch-release.log" "$LOGS/tested-tree.log" | tee -a "$GITHUB_OUTPUT"
+              "$LOGS/ldap-carry-over.log" "$LOGS/eap-carry-over.log" "$LOGS/update-install.log" "$LOGS/update-secrets.log" "$LOGS/integration-install.log" "$LOGS/duo-install.log" "$LOGS/nginx-dropin.log" "$LOGS/nginx-update.log" "$LOGS/max-request-time.log" "$LOGS/install-reruns.log" "$LOGS/release.log" "$LOGS/fetch-release.log" "$LOGS/tested-tree.log" | tee -a "$GITHUB_OUTPUT"
 
   # The package and bench jobs take most of a run. Each one, when it passes, records the tree it
   # tested (an artifact tested-<job>-<tree>); a later run of the same tree within 7 days skips

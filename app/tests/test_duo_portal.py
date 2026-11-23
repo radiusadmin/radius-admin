@@ -203,14 +203,13 @@ def test_duo_config_staged_and_applied(app, browser, superconn, logged_in, idir)
     r = browser.post("/apply/apply", {"expected": m.group(1)}, csrf_page="/apply/")
     assert r.status_code == 200
     staging = app.config["RA"]["staging_dir"]
-    with open(os.path.join(staging, "provider-duo")) as fh:
-        staged = fh.read()
+    staged = h.staged["provider-duo"][0]          # what the helper read; removed from staging since
+    assert not os.path.exists(os.path.join(staging, "provider-duo"))
     secrets = ig.decrypt_secrets(app.config["RA_DATA_KEY"], "duo",
                                  q(superconn, "SELECT secrets_enc FROM ui.mfa_provider WHERE id='duo'")[0][0])
     assert staged == unlang.render_duo_config(dict(json.loads(q(superconn, "SELECT settings::text FROM ui.mfa_provider"
                                                                             " WHERE id='duo'")[0][0]), **secrets))
-    with open(os.path.join(staging, "clients")) as fh:
-        assert "home_server radius_admin_mfa_duo" in fh.read()
+    assert "home_server radius_admin_mfa_duo" in h.staged["clients"][0]
     row = q(superconn, "SELECT providers_sha256 FROM ui.apply_log WHERE action='apply' ORDER BY id DESC LIMIT 1")[0][0]
     assert row and len(row) == 64
     with open(os.path.join(staging, "applied", "provider-duo")) as fh:     # sealed with the data key
@@ -227,7 +226,7 @@ def test_duo_config_staged_and_applied(app, browser, superconn, logged_in, idir)
     m = re.search(r'name="expected" value="([^"]+)"', page)
     assert m.group(1).endswith(":")
     browser.post("/apply/apply", {"expected": m.group(1)}, csrf_page="/apply/")
-    assert not os.path.exists(os.path.join(staging, "provider-duo"))
+    assert "provider-duo" not in h.staged
 
 
 def test_duo_can_serve_local_accounts_in_the_rules(browser, superconn, logged_in, idir):

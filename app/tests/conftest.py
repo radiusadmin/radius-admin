@@ -217,11 +217,19 @@ class FakeHelper:
                 conn.sendall((json.dumps(self.handle(req)) + "\n").encode())
 
     def _staged(self):
+        """Hashes of the staged policy and clients; every staged file as the helper saw it (text,
+        mode) in self.staged, since the app removes them once the helper answered."""
         import hashlib
-        out = {}
-        for n in ("policy", "clients"):
-            with open(os.path.join(self.staging, n), "rb") as fh:
-                out[n] = hashlib.sha256(fh.read()).hexdigest()
+        out, self.staged = {}, {}
+        for n in ("policy", "clients", "provider-duo", "certificates"):
+            try:
+                with open(os.path.join(self.staging, n), "rb") as fh:
+                    data = fh.read()
+                    self.staged[n] = (data.decode(), os.fstat(fh.fileno()).st_mode & 0o777)
+            except FileNotFoundError:
+                continue
+            if n in ("policy", "clients"):
+                out[n] = hashlib.sha256(data).hexdigest()
         return out
 
     def handle(self, req):
@@ -366,9 +374,30 @@ def app(tmp_path, clean_db):
     })
     application.config["TESTING"] = True
     application.fake_helper = helper
+    _CURRENT["app"] = application
     yield application
     helper.close()
     dbmod.close_pools()
+
+
+# RADIUS client shared secrets are sealed with the running test app's data key (SPEC section 3.2)
+_CURRENT = {}
+
+
+def client_secrets(superconn):
+    """{client name: its shared secret, opened with the current test app's data key}."""
+    from radius_admin import services
+    key = _CURRENT["app"].config["RA_DATA_KEY"]
+    with superconn.cursor() as cur:
+        cur.execute("SELECT id, name, secret, secret_enc FROM ui.radius_client")
+        rows = cur.fetchall()
+    return {r[1]: services.client_secret({"id": r[0], "name": r[1], "secret": r[2], "secret_enc": r[3]}, key)
+            for r in rows}
+
+
+def only_secret(superconn):
+    (secret,) = client_secrets(superconn).values()
+    return secret
 
 
 # ------------------------------------------------------------ client helpers

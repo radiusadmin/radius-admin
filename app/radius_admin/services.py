@@ -171,8 +171,74 @@ def set_setting(key, value, conn=None):
 
 # --------------------------------------------------------------- rendering
 RULE_COLS = "id, priority, connection, ssid, ad_group, vlan, enabled, description, role"
-CLIENT_COLS = ("id, name, ipaddr, secret, require_ma, limit_proxy_state, nas_type, enabled, description,"
+CLIENT_COLS = ("id, name, ipaddr, secret, secret_enc, require_ma, limit_proxy_state, nas_type, enabled, description,"
                " key_status, transport, radsec_peer_name, vendor_profile")
+
+# RADIUS client shared secrets at rest (SPEC section 3.2): ui.radius_client.secret_enc holds the
+# secret sealed with the data key; `secret` stays '' once sealed. A non-empty `secret` is a plain
+# value (written before this release, by a rolled-back release, or by a script) and wins: readers
+# use it, and `cli seal-client-secrets` (run by the app phase of every install and update) seals it.
+_CLIENT_SECRET_AAD = b"radius-admin:radius_client:secret"
+
+
+class ClientSecretUnreadable(ValueError):
+    pass
+
+
+def seal_client_secret(secret, datakey=None):
+    """(secret, secret_enc) column values for a shared secret: ('', sealed) or ('', None)."""
+    if not secret:
+        return "", None
+    return "", _datakey(datakey).encrypt(secret.encode("utf-8"), _CLIENT_SECRET_AAD)
+
+
+def client_secret(row, datakey=None, strict=False):
+    """The plain shared secret of a ui.radius_client row ('' when it has none). A sealed secret that
+    cannot be opened (no or another data key) raises ClientSecretUnreadable when strict, else ''."""
+    if row.get("secret"):
+        return row["secret"]
+    blob = row.get("secret_enc")
+    if blob is None:
+        return ""
+    try:
+        return _datakey(datakey).decrypt(bytes(blob), _CLIENT_SECRET_AAD).decode("utf-8")
+    except (RuntimeError, KeyError, ValueError, InvalidTag):
+        if strict:
+            raise ClientSecretUnreadable(
+                "The shared secret of client %s cannot be read (was the data key replaced?). Set it again."
+                % row.get("name", row.get("id")))
+        return ""
+
+
+def client_secret_readable(row, datakey=None):
+    try:
+        client_secret(row, datakey, strict=True)
+        return True
+    except ClientSecretUnreadable:
+        return False
+
+
+def seal_client_secrets(conn, datakey):
+    """Seal every plain shared secret (install and update). Returns how many were sealed."""
+    n = 0
+    for r in db.query("SELECT id, secret FROM ui.radius_client WHERE secret <> '' ORDER BY id", conn=conn):
+        plain, enc = seal_client_secret(r["secret"], datakey)
+        db.execute("UPDATE ui.radius_client SET secret = %s, secret_enc = %s WHERE id = %s",
+                   (plain, enc, r["id"]), conn=conn)
+        n += 1
+    return n
+
+
+def unseal_client_secrets(conn, datakey):
+    """Write every sealed shared secret back in plain (update.sh, before a release that does not
+    read secret_enc starts). Refuses, changing nothing, when one cannot be opened."""
+    rows = db.query("SELECT id, name, secret, secret_enc FROM ui.radius_client"
+                    " WHERE secret = '' AND secret_enc IS NOT NULL ORDER BY id", conn=conn)
+    plain = [(client_secret(r, datakey, strict=True), r["id"]) for r in rows]
+    for secret, cid in plain:
+        db.execute("UPDATE ui.radius_client SET secret = %s, secret_enc = NULL WHERE id = %s", (secret, cid),
+                   conn=conn)
+    return len(plain)
 
 
 def load_rules(conn=None):
@@ -205,6 +271,11 @@ def render_all(conn=None, datakey=None):
         if c.get("key_status", "ok") != "ok":
             c["enabled"] = False
         c.pop("key_status", None)
+        try:    # sealed secrets need the data key; a disabled client's is not rendered
+            c["secret"] = client_secret(c, datakey, strict=bool(c["enabled"]))
+        except ClientSecretUnreadable as e:
+            raise u.PolicyInputError(str(e))
+        c.pop("secret_enc", None)
         pid = c.get("vendor_profile")
         if c["enabled"] and pid and pid != default_id and pid not in others:
             if pid not in cat:
@@ -438,6 +509,22 @@ def write_staging(policy, clients, base=None, providers=None):
     _write_0600(os.path.join(base, "clients"), clients)
     if providers is not None:
         _put_provider_files(base, providers)
+
+
+def clear_staging(policy, clients, providers, base=None):
+    """After the helper read the staged files: remove them (they hold every shared secret, Duo's
+    secret key and private keys in plain). A file another apply staged since is left alone."""
+    base = base or staging_dir()
+    files = dict(providers or {}, policy=policy, clients=clients)
+    for name, text in files.items():
+        path = os.path.join(base, name)
+        try:
+            with open(path, encoding="utf-8") as fh:
+                same = fh.read() == text
+            if same:
+                os.unlink(path)
+        except OSError:
+            pass
 
 
 def read_staging(base=None):

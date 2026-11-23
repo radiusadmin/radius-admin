@@ -1403,6 +1403,12 @@ import socket,sys
 s=socket.socket(socket.AF_UNIX); s.settimeout(30); s.connect("/run/radius-admin-helper.sock")
 s.sendall(sys.stdin.buffer.read()); print(s.recv(65536).decode().strip())' 2>&1 || true)
     if [[ $st == *'"ok":true'* ]]; then ok "helper reachable by radius-admin: $st"; else warn "helper status failed: $st"; fi
+    # RADIUS client shared secrets are sealed with the data key at rest (SPEC section 3.2): seal the
+    # plain ones (an upgrade, a rollback that wrote them back, a migration from SQLite)
+    local sealed
+    sealed=$(app_env "$RA_PYTHON" -m radius_admin.cli seal-client-secrets 2>&1) \
+        || die "sealing the RADIUS client shared secrets failed: $sealed"
+    ok "$sealed"
 }
 
 need_admin_net() {

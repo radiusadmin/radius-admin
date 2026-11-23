@@ -5,7 +5,7 @@ import re
 import psycopg2
 import pytest
 
-from conftest import APP_DSN, Browser, login, stepup
+from conftest import APP_DSN, Browser, login, only_secret, stepup
 
 
 def q(superconn, sql, params=()):
@@ -109,6 +109,8 @@ def test_client_crud(browser, superconn, logged_in):
                                       "enabled": "1", "description": "lab"})
     assert r.status_code == 200
     row = q(superconn, "SELECT name, ipaddr, secret, require_ma FROM ui.radius_client")[0]
+    assert row[2] == ""                                         # sealed at rest (SPEC section 3.2)
+    row = row[:2] + (only_secret(superconn),) + row[3:]
     assert row[0] == "sw-192-0-2-26" and row[3] == "yes"
     assert re.fullmatch(r"[A-Za-z0-9]{32}", row[2])
     assert row[2] in browser.text(r)  # shown once to the creator
@@ -123,14 +125,14 @@ def test_client_crud(browser, superconn, logged_in):
     r = browser.post("/clients/1/edit", {"name": "sw-192-0-2-26", "ipaddr": "192.0.2.0/28", "secret_mode": "keep",
                                          "nas_type": "cisco", "require_ma": "auto", "limit_proxy_state": "no"})
     assert r.status_code == 302
-    row2 = q(superconn, "SELECT ipaddr, secret, enabled, limit_proxy_state FROM ui.radius_client")[0]
-    assert row2 == ("192.0.2.0/28", row[2], False, "no")
+    row2 = q(superconn, "SELECT ipaddr, enabled, limit_proxy_state FROM ui.radius_client")[0]
+    assert row2 == ("192.0.2.0/28", False, "no") and only_secret(superconn) == row[2]
     # set explicit secret
     r = browser.post("/clients/1/edit", {"name": "sw-192-0-2-26", "ipaddr": "192.0.2.26", "secret_mode": "set",
                                          "secret": "Explicit-Secret-0123", "nas_type": "cisco", "require_ma": "auto",
                                          "limit_proxy_state": "auto", "enabled": "1"})
     assert r.status_code == 302
-    assert q(superconn, "SELECT secret FROM ui.radius_client")[0][0] == "Explicit-Secret-0123"
+    assert only_secret(superconn) == "Explicit-Secret-0123"
     r = browser.post("/clients/1/delete", {}, csrf_page="/clients/")
     assert r.status_code == 302
     assert q(superconn, "SELECT count(*) FROM ui.radius_client")[0][0] == 0
@@ -270,11 +272,11 @@ def test_apply_flow(app, browser, superconn, logged_in):
     # validate
     r = browser.post("/apply/validate", {}, csrf_page="/apply/")
     assert r.status_code == 200 and "Validation passed" in browser.text(r)
-    for n in ("policy", "clients"):
-        st = os.stat(os.path.join(staging, n))
-        assert st.st_mode & 0o777 == 0o600
-    with open(os.path.join(staging, "clients")) as fh:
-        assert "SuperSecretValue123456" in fh.read()
+    seen = app.fake_helper.staged
+    assert seen["policy"][1] == seen["clients"][1] == 0o600
+    assert "SuperSecretValue123456" in seen["clients"][0]
+    # removed once the helper has read them: the shared secrets do not stay on disk in plain
+    assert not os.path.exists(os.path.join(staging, "clients")) and not os.path.exists(os.path.join(staging, "policy"))
     # apply (fresh login = step-up ok)
     m = re.search(r'name="expected" value="([^"]+)"', page)
     r = browser.post("/apply/apply", {"expected": m.group(1)}, csrf_page="/apply/")

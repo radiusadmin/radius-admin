@@ -37,7 +37,7 @@ record them in the SSP.
 | — verified | FreeRADIUS rlm_pap | `PKCS5_PBKDF2_HMAC` | OpenSSL FIPS provider |
 | Session tokens, CSRF tokens, salts, TOTP secrets, generated RADIUS secrets | app | `ssl.RAND_bytes` (DRBG) | OpenSSL FIPS provider |
 | Data key (`data.key`, 256-bit) | install.sh | `openssl rand 32` | OpenSSL FIPS provider |
-| TOTP secret encryption at rest (AES-256-GCM, 96-bit nonce) | app | `python3-cryptography` (apt, links system libcrypto) | OpenSSL FIPS provider |
+| TOTP secret encryption at rest (AES-256-GCM, 96-bit nonce); likewise RADIUS client shared secrets and the app's copies of applied files | app | `python3-cryptography` (apt, links system libcrypto) | OpenSSL FIPS provider |
 | TOTP (RFC 6238, HMAC-SHA1) | app | `hmac` → libcrypto | OpenSSL FIPS provider (HMAC-SHA1 is approved) |
 | Session token storage (SHA-256), audit hash chain (SHA-256) | app | `hashlib` | OpenSSL FIPS provider |
 | EAP-TLS (TLS 1.2, FIPS cipher list) | FreeRADIUS rlm_eap_tls | libssl | OpenSSL FIPS provider |
@@ -183,7 +183,9 @@ Operator controls:
    management-subnet check on; RADIUS that crosses sites or untrusted segments inside IPsec with
    approved algorithms between the sites' firewalls; RadSec for every device that supports it (it
    removes the MD5 exception for that device).
-3. **RADIUS clients:** a unique random 32-character shared secret per device;
+3. **RADIUS clients:** a unique random 32-character shared secret per device, stored in the
+   database encrypted with the data key (AES-256-GCM) and in clear only in the FreeRADIUS clients
+   file and, while an apply runs, the app's staging directory;
    Message-Authenticator required for every device that sends it (F-9, BlastRADIUS).
 4. **Host firewall:** inbound RADIUS only from the management network; nothing may reach
    127.0.0.1:18120/18121 from outside the host; outbound from the Duo proxy only to

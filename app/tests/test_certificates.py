@@ -121,10 +121,13 @@ def test_upload_eap_server_staged_and_applied(app, browser, superconn, admin, pk
     # validate stages the certificates file for the helper
     r = browser.post("/apply/validate", {}, csrf_page="/apply/")
     assert r.status_code == 200
-    staged = json.load(open(os.path.join(app.config["RA"]["staging_dir"], "certificates")))
+    text, mode = app.fake_helper.staged["certificates"]
+    staged = json.loads(text)
     assert staged["format"] == 1 and staged["eap_server"]["key"].startswith("-----BEGIN PRIVATE KEY-----")
     assert "client_ca" not in staged and "eap_ocsp" not in staged
-    assert oct(os.stat(os.path.join(app.config["RA"]["staging_dir"], "certificates")).st_mode & 0o777) == "0o600"
+    assert mode == 0o600
+    # the private key does not stay in the staging directory once the helper has read it
+    assert not os.path.exists(os.path.join(app.config["RA"]["staging_dir"], "certificates"))
 
 
 @pytest.mark.parametrize("case,msg", [
