@@ -87,7 +87,8 @@ fingerprints (`hashlib`).
    libssl and nothing to GnuTLS), so this exception does not apply to it. radiusd still maps
    `libgnutls` because the system `libldap.so.2` comes in through libpq, which uses it for nothing
    radius-admin configures. Fixes for that libldap arrive as distribution updates; the package is
-   rebuilt and released within 14 days of a high or critical one. With the bundled package,
+   rebuilt and released within 14 days of a high or critical one. The FreeRADIUS bench checks this at
+   run time on every CI run (`LD_DEBUG=bindings`). With the bundled package,
    `tls_min_version` is enforced (a TLS 1.2-only server is refused with `"1.3"`), but
    `cipher_list` has no effect either: FreeRADIUS 3.2.10 sets it after creating the TLS context
    (`ldap.c`), so the suites come from the system OpenSSL policy (in FIPS mode, approved suites
@@ -99,7 +100,8 @@ fingerprints (`hashlib`).
      exchange; stand-alone `ldapsearch` rejects it with `TLS: could not set cipher list`).
      The LDAPS cipher suites are therefore GnuTLS defaults, negotiated with whatever the
      DC offers — see mitigations (a) and (b).
-   * `tls_min_version = "1.2"` is set; its enforcement through GnuTLS was **not verified**.
+   * `tls_min_version = "1.2"` is set and enforced (the bench refuses a TLS 1.2-only directory
+     with `"1.3"`, with GnuTLS as with OpenSSL).
    * radiusd warns that mixing GnuTLS (libldap) and OpenSSL in one process may cause
      crashes.
    Mitigations (recommended a + b):

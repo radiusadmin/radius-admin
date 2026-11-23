@@ -872,7 +872,12 @@ CSV columns (header row required, exact names, any order tolerated by name):
   dictionaries `DICT_DIRS`, installer).
 - Tests: `tests/package/test_freeradius_deb.sh` (package contents; with `--install`, the installer
   phase, idempotency, kept configuration, checksum refusal, start and answer, upgrade without
-  restart, purge).
+  restart, purge; linkage of `rlm_ldap.so`/`ra-ldapwhoami` and a TLS handshake of `ra-ldapwhoami`
+  bound to libssl). The bench (`ldap_tls_cases`, after the other cases) starts radiusd under
+  `LD_DEBUG=bindings` and requires that rlm_ldap binds to the directory with `SSL_CTX_new` and
+  `SSL_connect` from libssl and binds nothing to GnuTLS or the system libldap/liblber (so the
+  bench needs a FreeRADIUS built by `tools/ci/build-freeradius.sh`), then restarts slapd TLS
+  1.2-only and requires that `tls_min_version = "1.2"` binds and `"1.3"` does not.
 
 ## 16. Change (2026-11-02): updates from signed GitHub builds
 
