@@ -37,6 +37,12 @@ release, so previews sort after it.
   now needs an exempt break-glass account, or an explicit confirmation that there is none: while the
   provider is unreachable FreeRADIUS rejects these logins, so devices do not fall back to their own
   accounts.
+- **Duo: the connection test and applying its configuration work on a real server.** The root
+  helper's sandbox kept `/opt/duoauthproxy` read-only, so the Test button failed with "Read-only
+  file system: 'log/connectivity_tool.log'" and applying a Duo configuration could not write
+  `authproxy.cfg`; with that fixed, the test reported the running proxy's own port as "in use by
+  an Unknown Process". The helper may now write Duo's `conf/` (nothing else of Duo), and
+  runs Duo's connectivity tool in a sandbox of its own that can recognise the running proxy.
 - **Duo: a failed install no longer leaves the proxy stopped.** The installer starts the proxy it
   stopped again when Duo's installer fails.
 - **Provider secrets no longer pile up in clear.** The portal's history of applied files (which
@@ -51,7 +57,9 @@ release, so previews sort after it.
   `update.sh --rollback` (or downgrading) writes them back in clear first, so the older release
   keeps working.
 - **No secrets left in the staging directory.** The files staged for the helper (clients file,
-  Duo's configuration, certificate private keys) are removed as soon as the helper has read them.
+  Duo's configuration, certificate private keys) are removed as soon as the helper has read them,
+  and the update removes the ones an older release left and encrypts its copies of applied files
+  right away, not at the next apply.
 
 ## 0.3.0 - 2026-11-20
 
