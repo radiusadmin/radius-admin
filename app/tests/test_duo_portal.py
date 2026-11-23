@@ -390,9 +390,11 @@ def test_fips_mode_turns_duo_on_only_with_a_fips_capable_build(app, browser, sup
     admin(browser, superconn, logged_in)
     body = browser.text(browser.get("/integrations/duo"))
     assert "not FIPS-capable" not in body                            # standard mode: never mentioned
+    assert not _has(_switch(body), "disabled")
     app.config["RA"]["require_fips"] = True
     body = browser.text(browser.get("/integrations/duo"))
     assert "FIPS mode: this build is not FIPS-capable" in body and "installed before FIPS mode" in body
+    assert _has(_switch(body), "disabled") and 'id="enabled-locked"' in body                # with the reason
     r = browser.post("/integrations/duo/settings", dict(SETTINGS_FORM, enabled="1"), csrf_page="/integrations/duo")
     assert r.status_code == 400 and "Install a FIPS-capable build first" in browser.text(r)
     assert q(superconn, "SELECT enabled FROM ui.mfa_provider WHERE id='duo'") in ([], [(False,)])
@@ -401,7 +403,8 @@ def test_fips_mode_turns_duo_on_only_with_a_fips_capable_build(app, browser, sup
     assert r.status_code == 302
     h.catalog["entries"][0].update(fips=True, fips_tested=["ubuntu-24.04-pro-fips-updates"])
     h.duo["installed"]["fips"] = True
-    assert "not FIPS-capable" not in browser.text(browser.get("/integrations/duo"))
+    body = browser.text(browser.get("/integrations/duo"))
+    assert "not FIPS-capable" not in body and not _has(_switch(body), "disabled")
     r = browser.post("/integrations/duo/settings", dict(SETTINGS_FORM, enabled="1"), csrf_page="/integrations/duo")
     assert r.status_code == 302 and q(superconn, "SELECT enabled FROM ui.mfa_provider WHERE id='duo'") == [(True,)]
 
@@ -418,3 +421,94 @@ def test_checks_return_to_their_section(browser, superconn, logged_in, idir):
     assert 'id="duo-test"' in body and "The Auth Proxy was able to reach Duo" in body
     # the back link above the heading is a button
     assert '<a class="btn btn-quiet btn-small btn-back" href="/integrations/">Integrations</a>' in body
+
+
+def _switch(body):
+    """The Enabled/Disabled switch of the Duo provider (SPEC section 29.3)."""
+    m = re.search(r'<input[^>]*role="switch"[^>]*>', body)
+    assert m, "no switch on the page"
+    return m.group(0)
+
+
+def _has(tag, attr):
+    return re.search(r"\s%s[\s>=]" % attr, tag) is not None
+
+
+def _plain(body):
+    return " ".join(re.sub(r"<[^>]+>", " ", body).split())
+
+
+def test_provider_switch_shows_state_and_why_it_is_locked(browser, superconn, logged_in, idir):
+    """SPEC section 29.3: Duo is turned on and off with a switch, a real checkbox with role=switch
+    and visible Enabled/Disabled text. When the server would refuse the change the switch is
+    disabled and the reason is next to it, instead of an error after Save."""
+    h = helper_of(browser)
+    admin(browser, superconn, logged_in)
+    body = browser.text(browser.get("/integrations/duo"))
+    sw = _switch(body)
+    assert 'type="checkbox"' in sw and 'name="enabled"' in sw and 'value="1"' in sw
+    assert '<span class="switch-on">Enabled</span>' in body and '<span class="switch-off">Disabled</span>' in body
+    # not installed: cannot be turned on
+    assert not _has(sw, "checked") and _has(sw, "disabled")
+    assert "enabled-locked" in sw and 'id="enabled-locked"' in body
+    assert "Install the Duo Authentication Proxy first" in body
+    # the helper does not answer: the install state is unknown
+    h.fail_next["integration_status"] = {"message": "helper down"}
+    body = browser.text(browser.get("/integrations/duo"))
+    assert _has(_switch(body), "disabled") and "install state is unknown" in _plain(body).split("Second factors")[1]
+    # installed: free to turn on
+    h.duo["installed"] = {"version": "6.8.1", "verified": "catalog"}
+    body = browser.text(browser.get("/integrations/duo"))
+    sw = _switch(body)
+    assert not _has(sw, "disabled") and not _has(sw, "checked") and 'id="enabled-locked"' not in body
+    r = browser.post("/integrations/duo/settings", dict(SETTINGS_FORM, enabled="1"), csrf_page="/integrations/duo")
+    assert r.status_code == 302
+    sw = _switch(browser.text(browser.get("/integrations/duo")))
+    assert _has(sw, "checked") and not _has(sw, "disabled")
+    # a second-factor rule names Duo: locked on, and a save keeps it on
+    q(superconn, "UPDATE ui.mfa_policy SET enabled=true, provider_id='duo' WHERE account_kind='directory'")
+    body = browser.text(browser.get("/integrations/duo"))
+    sw = _switch(body)
+    assert _has(sw, "checked") and _has(sw, "disabled") and "A second-factor rule uses Duo" in body
+    assert '<input type="hidden" name="enabled" value="1">' in body
+    r = browser.post("/integrations/duo/settings", dict(SETTINGS_FORM, skey="", enabled="1"),
+                     csrf_page="/integrations/duo")
+    assert r.status_code == 302 and q(superconn, "SELECT enabled FROM ui.mfa_provider WHERE id='duo'") == [(True,)]
+    # the rule is off again: the switch can turn Duo off
+    q(superconn, "UPDATE ui.mfa_policy SET enabled=false WHERE account_kind='directory'")
+    body = browser.text(browser.get("/integrations/duo"))
+    assert not _has(_switch(body), "disabled") and '<input type="hidden" name="enabled"' not in body
+
+
+def test_secret_key_behind_change_once_set(app, browser, superconn, logged_in, idir):
+    """SPEC section 29.3: before a secret key exists the page shows its input; once one is stored
+    it shows "Secret key: set" and the input only behind "Change secret key" (no JavaScript)."""
+    from radius_admin import integrations as ig
+    admin(browser, superconn, logged_in)
+    body = browser.text(browser.get("/integrations/duo"))
+    assert re.search(r'<input id="skey" name="skey" type="password"', body)
+    assert "Change secret key" not in body and "Secret key: set" not in _plain(body)
+    assert browser.post("/integrations/duo/settings", SETTINGS_FORM, csrf_page="/integrations/duo").status_code == 302
+    body = browser.text(browser.get("/integrations/duo"))
+    assert "Secret key: set" in _plain(body)
+    d = re.search(r'<details class="secret-change"([^>]*)>(.*?)</details>', body, re.S)
+    assert d and "open" not in d.group(1)
+    assert "<summary>Change secret key</summary>" in d.group(2) and 'name="skey"' in d.group(2)
+    assert body.count('name="skey"') == 1
+
+    def stored():
+        blob = q(superconn, "SELECT secrets_enc FROM ui.mfa_provider WHERE id='duo'")[0][0]
+        return ig.decrypt_secrets(app.config["RA_DATA_KEY"], "duo", blob)["skey"]
+    # saved without opening it: the stored key stays
+    browser.post("/integrations/duo/settings", dict(SETTINGS_FORM, skey="", factors="push"),
+                 csrf_page="/integrations/duo")
+    assert stored() == SKEY and "duo_skey_updated" not in audit(superconn, "integration.configure")[-1]
+    # a new key replaces it
+    browser.post("/integrations/duo/settings", dict(SETTINGS_FORM, skey="T" * 40), csrf_page="/integrations/duo")
+    assert stored() == "T" * 40 and audit(superconn, "integration.configure")[-1]["duo_skey_updated"] is True
+    # a wrong new key: the details open with the error
+    r = browser.post("/integrations/duo/settings", dict(SETTINGS_FORM, skey="short"), csrf_page="/integrations/duo")
+    assert r.status_code == 400
+    d = re.search(r'<details class="secret-change"([^>]*)>(.*?)</details>', browser.text(r), re.S)
+    assert d and "open" in d.group(1) and "Secret key must be" in d.group(2)
+    assert stored() == "T" * 40

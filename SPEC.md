@@ -1571,7 +1571,8 @@ complete on the FreeRADIUS side and bench-tested with a stand-in.
   rules, providers, available integrations. Admin + step-up: add/edit/remove a remote MFA server
   (id, description, address, port, shared secret write-only, timeout 5–60, require
   Message-Authenticator, on/off; a provider used by an enabled rule cannot be turned off, and one named
-  by any rule cannot be removed); Second-factor rules (`/integrations/policy`): per account kind on/off,
+  by any rule cannot be removed; the edit form shows "Shared secret: set" with the input behind a
+  "Change shared secret" `<details>`, and an empty input keeps the stored secret, see 29.3); Second-factor rules (`/integrations/policy`): per account kind on/off,
   provider (must be on; a remote server only for directory accounts), all or selected clients
   (at least one), exempt local device admins (at most 10, must be local device admins). The local
   rule on with no exempt account needs the confirmation `no_exempt_ok` (a provider that cannot be
@@ -1760,6 +1761,20 @@ unreachable). The portal pages that drive this follow.
   only, a SHA-256 field and a required confirmation that it was compared with Duo's published value);
   3. Connect to Duo (ikey, skey write-only, API hostname, fail mode (standard mode only), factors,
   on/off); 4. Test (`integration_test`); Remove (refused while the provider is on).
+- **On/off switch.** The provider is turned on and off with a switch (`_macros.switch`): a real
+  checkbox `name=enabled` with `role="switch"` and visible Enabled/Disabled text that CSS follows
+  (no JavaScript). The page computes the same checks as the save (`_duo_enable_block`,
+  `_duo_disable_block`): while Duo is on and an enabled rule names it, or while it is off and cannot
+  be turned on (not installed; FIPS mode: build not FIPS-capable; helper unreachable: install state
+  unknown), the switch is disabled with the reason next to it (`id="enabled-locked"`, in the
+  switch's `aria-describedby`); when locked on, a hidden `enabled=1` keeps it on through a save. The
+  save still refuses a change those checks forbid (a stale page, a crafted request).
+- **Stored secrets** (`_macros.secret_field`). Before a secret key is stored the form shows the
+  input (needed to turn Duo on). Once one is stored it shows "Secret key: set" and the input only
+  inside `<details class="secret-change">` with the summary "Change secret key" (opened when the
+  new value has an error). An empty or missing `skey` keeps the stored key; a new one replaces it
+  and the audit detail records `duo_skey_updated`. The remote MFA server's edit form does the same
+  for its shared secret (`shared_key_updated`).
 - **Upload** `POST /integrations/duo/upload`: multipart field `build`; the file name (directory part
   dropped) must be `duoauthproxy-X.Y.Z-src.tgz`; at most 128 MiB, written to a temporary file in
   `integration_dir` and renamed (0640). The request size limit is 2 MiB everywhere else; this path
