@@ -297,6 +297,23 @@
       });
     });
 
+    // One button picks a file and uploads it ([data-pick-file]: the id of the form's file field,
+    // hidden while JavaScript runs). Used where an upload only stages something that a later,
+    // separate step acts on (Duo builds go to Ready to install). Without JavaScript the page shows
+    // the file field and its submit button instead.
+    document.querySelectorAll("[data-pick-file]").forEach(function (btn) {
+      var input = document.getElementById(btn.getAttribute("data-pick-file"));
+      if (!input || !input.form) return;
+      btn.addEventListener("click", function () { if (!btn.classList.contains("is-busy")) input.click(); });
+      input.addEventListener("change", function () {
+        if (!input.files || !input.files.length) return;
+        btn.classList.add("is-busy");
+        btn.setAttribute("aria-busy", "true");
+        btn.textContent = "Uploading " + input.files[0].name + "…";
+        if (typeof input.form.requestSubmit === "function") input.form.requestSubmit(); else input.form.submit();
+      });
+    });
+
     // Busy buttons: a form with data-busy shows a spinner on the button that sent it (and,
     // if the attribute has text, that label) until the next page loads. Runs after the
     // data-confirm handler, so a cancelled confirmation leaves the button alone.

@@ -2682,32 +2682,46 @@ def _duo_api(cfg, host, ikey, skey, path, params, timeout):
     return out
 
 
-def _push_rate(cfg, user):
-    """Record a test push for `user` or refuse it: one per user per PUSH_USER_WAIT seconds,
-    PUSH_PER_HOUR in all. Only a hash of the username is kept (work_dir/push-test.json)."""
+def _push_tries(cfg, now):
+    """The last hour's requests to Duo: [[time, user hash, pushed]] (work_dir/push-test.json)."""
     path = os.path.join(cfg["work_dir"], "push-test.json")
+    try:
+        tries = json.loads((read_root_file(path) or b"{}").decode("utf-8")).get("tries", [])
+        return path, [[float(t), str(h), p is True] for t, h, p in tries if now - float(t) < 3600]
+    except (ValueError, TypeError, AttributeError):
+        return path, []
+
+
+def _push_rate(cfg, user, pushed=False):
+    """Rate limit for test pushes, kept with a hash of the username, never the name. Without
+    `pushed`: check and record a request to Duo (PUSH_PER_HOUR in all; refused while a push to
+    this user was sent less than PUSH_USER_WAIT seconds ago). With `pushed`: record that this
+    request goes on to send a push, which starts the user's wait. A request that Duo answers
+    before any push (not enrolled, no access, bypass) does not hold up the next one."""
     now = time.time()
     who = hashlib.sha256(user.lower().encode()).hexdigest()[:16]
     with Lock(cfg, "push-test.lock", "another test push"):
-        try:
-            sent = json.loads((read_root_file(path) or b"{}").decode("utf-8")).get("sent", [])
-            sent = [[float(t), str(h)] for t, h in sent if now - float(t) < 3600]
-        except (ValueError, TypeError, AttributeError):
-            sent = []
-        last = max((t for t, h in sent if h == who), default=None)
-        if last is not None and now - last < PUSH_USER_WAIT:
-            raise HelperError("a test push to this user was sent %d s ago; wait %d s"
-                              % (now - last, PUSH_USER_WAIT - (now - last) + 1))
-        if len(sent) >= PUSH_PER_HOUR:
-            raise HelperError("at most %d test pushes an hour; try again later" % PUSH_PER_HOUR)
-        sent.append([now, who])
-        atomic_write(path, json.dumps({"sent": sent}).encode(), 0, 0, 0o600)
+        path, tries = _push_tries(cfg, now)
+        if pushed:
+            for t in reversed(tries):
+                if t[1] == who:
+                    t[2] = True
+                    break
+        else:
+            last = max((t for t, h, p in tries if h == who and p), default=None)
+            if last is not None and now - last < PUSH_USER_WAIT:
+                raise HelperError("a test push to this user was sent %d s ago; wait %d s"
+                                  % (now - last, PUSH_USER_WAIT - (now - last) + 1))
+            if len(tries) >= PUSH_PER_HOUR:
+                raise HelperError("at most %d test pushes an hour; try again later" % PUSH_PER_HOUR)
+            tries.append([now, who, False])
+        atomic_write(path, json.dumps({"tries": tries}).encode(), 0, 0, 0o600)
 
 
 def act_integration_push_test(cfg, req):
     """Send a Duo Push to one user with the applied configuration's keys (SPEC section 29.3):
     preauth, then auth with factor push. Returns only result (allow, deny, timeout,
-    not_enrolled, error) and Duo's status message; never keys."""
+    not_enrolled, error), Duo's status message and whether a push was sent; never keys."""
     pid, prov = _integration(req)
     user = req.get("username")
     if not isinstance(user, str) or not PUSH_USER_RE.fullmatch(user):
@@ -2724,10 +2738,12 @@ def act_integration_push_test(cfg, req):
     ensure_work_dirs(cfg)
     _push_rate(cfg, user)
 
+    sent = []
+
     def outcome(result, msg):
-        log(syslog.LOG_INFO, "integration_push_test result=%s" % result)
+        log(syslog.LOG_INFO, "integration_push_test result=%s pushed=%s" % (result, bool(sent)))
         return {"ok": True, "message": "test push: %s" % result, "result": result,
-                "status_msg": str(msg or "")[:200]}
+                "status_msg": str(msg or "")[:200], "pushed": bool(sent)}
 
     try:
         pre = _duo_api(cfg, host, ikey, skey, "/auth/v2/preauth", {"username": user}, 15)
@@ -2740,6 +2756,8 @@ def act_integration_push_test(cfg, req):
             return outcome(p["result"], p.get("status_msg"))
         if p.get("result") != "auth":
             return outcome("error", "unexpected preauth answer")
+        _push_rate(cfg, user, pushed=True)
+        sent.append(True)
         res = _duo_api(cfg, host, ikey, skey, "/auth/v2/auth",
                        {"username": user, "factor": "push", "device": "auto"}, PUSH_TIMEOUT)
     except (OSError, ssl.SSLError, http.client.HTTPException) as e:

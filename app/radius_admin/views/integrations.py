@@ -650,8 +650,13 @@ def duo_push_test():
     r = _helper("integration_push_test", timeout=90, id="duo", username=user)
     result = r.get("result") if r.get("ok") and r.get("result") in PUSH_RESULTS else None
     ev("integration.push_test", success=result == "allow", object_type="integration", object_id="duo",
-       detail={"username": user, "result": result or "refused"})
-    return _duo_page(push={"ok": bool(result), "result": result, "label": PUSH_RESULTS.get(result, ""),
+       detail={"username": user, "result": result or "refused", "pushed": r.get("pushed") is True})
+    label = PUSH_RESULTS.get(result, "")
+    if r.get("pushed") is False and result == "deny":
+        label = "Refused by Duo before any push"
+    elif r.get("pushed") is False and result == "allow":
+        label = "Allowed by Duo without a push"
+    return _duo_page(push={"ok": bool(result), "result": result, "label": label,
                            "status_msg": (r.get("status_msg") or "")[:200], "username": user,
                            "message": r.get("message") or ""})
 

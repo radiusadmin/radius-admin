@@ -187,7 +187,8 @@ class FakeHelper:
                     "listening": False, "state": {}}
         self.catalog = {"serial": 0, "entries": [], "source": "none", "message": ""}
         self.integration_log = ""
-        self.push = {"result": "allow", "status_msg": "Success. Logging you in..."}   # integration_push_test
+        self.push = {"result": "allow", "status_msg": "Success. Logging you in...",
+                     "pushed": True}                                     # integration_push_test
         self.cert_status = {}           # what cert_status adds to its answer (SPEC section 30)
         self._sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self._sock.bind(path)
