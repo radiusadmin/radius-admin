@@ -210,7 +210,7 @@ def test_import_refuses_an_unknown_profile():
     with pytest.raises(ci.ImportError_) as e:
         ci.parse_csv("ip,secret,hostname,secret_type,vendor_profile\r\n"
                      "192.0.2.41,Example-Plaintext-Key-0041,sw-41,plaintext,juniper\r\n", unlang)
-    assert "vendor_profile must be default or one of: cisco-c1300, generic-rfc." in str(e.value.errors)
+    assert "vendor_profile must be default or one of: cisco-c1300, cisco-iosxe, generic-rfc." in str(e.value.errors)
 
 
 # ----------------------------------------------------------------------- a role per access rule

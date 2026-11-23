@@ -1,0 +1,41 @@
+{
+  "format": 1,
+  "id": "cisco-iosxe",
+  "label": "Cisco Catalyst 9000 (IOS-XE)",
+  "description": "Catalyst 9200, 9300, 9400, 9500 and other IOS-XE access switches. The admin level needs aaa authorization exec default group radius on the switch.",
+  "status": "supported",
+  "reply": {
+    "vlan": [
+      {"attr": "Tunnel-Type", "op": ":=", "value": "VLAN"},
+      {"attr": "Tunnel-Medium-Type", "op": ":=", "value": "IEEE-802"},
+      {"attr": "Tunnel-Private-Group-Id", "op": ":=", "value": "{vlan}"}
+    ],
+    "admin_full": [
+      {"attr": "Cisco-AVPair", "op": "+=", "value": "shell:priv-lvl=15"}
+    ],
+    "role": []
+  },
+  "mab": {
+    "port_types": ["Ethernet"]
+  },
+  "coa": {
+    "port": 1700,
+    "identify": "session-and-mac",
+    "send_nas_port_id": false,
+    "reauth": {"packet": "coa", "attrs": [{"attr": "Cisco-AVPair", "value": "subscriber:command=reauthenticate"}]},
+    "bounce": {"packet": "coa", "attrs": [{"attr": "Cisco-AVPair", "value": "subscriber:command=bounce-host-port"}]},
+    "disconnect": {"packet": "disconnect", "attrs": []}
+  },
+  "snmp": {
+    "port_names": [
+      {"match": "Fa([0-9]+(?:/[0-9]+)*)", "ignore_case": false, "format": "FastEthernet{1}"},
+      {"match": "Gi([0-9]+(?:/[0-9]+)*)", "ignore_case": false, "format": "GigabitEthernet{1}"},
+      {"match": "Te([0-9]+(?:/[0-9]+)*)", "ignore_case": false, "format": "TenGigabitEthernet{1}"}
+    ]
+  },
+  "setup": {
+    "accounting": "aaa accounting dot1x default start-stop group radius",
+    "coa": "aaa server radius dynamic-author\n client <this RADIUS server's IP> server-key <the switch's shared secret in this console>\n exit",
+    "mfa_timeout": "radius server <this RADIUS server's name on the switch>\n timeout 30\n retransmit 2\n exit"
+  }
+}

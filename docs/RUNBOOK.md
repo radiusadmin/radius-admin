@@ -1052,7 +1052,7 @@ names or addresses.
   installation default) and *Session-action port* (leave empty for the profile's port).
 * **Default:** Settings → Devices → *Default device profile*, used by every client that does
   not name one.
-* **CSV import:** an optional `vendor_profile` column (`default`, `cisco-c1300`, `generic-rfc`).
+* **CSV import:** an optional `vendor_profile` column (`default`, `cisco-c1300`, `cisco-iosxe`, `generic-rfc`).
 * **Roles:** Access rules → edit → *Role* (optional). Devices whose profile uses roles get it
   with the VLAN (the Generic profile sends it as `Filter-Id`: the device must know a filter or
   role of that name, or it may refuse the session); others get the VLAN only. Takes effect at
@@ -1343,6 +1343,12 @@ nothing: the Release run's version check shows the warning "No release published
 signed build job is skipped, so there is nothing to approve. Rename
 `## Unreleased` before the merge to `main`, or the run warns "Empty release notes" and the
 release is published without notes.
+
+**CI on promotions.** The package and bench jobs (most of a CI run) record the tree they
+passed on. A run of the same tree within 7 days skips them and links the run that passed, so
+a squash merge into `dev` and the `dev` → `testing` promotion do not repeat what the pull request
+already ran (`tools/ci/tested-tree.py`). Pushes to `main` and runs started by hand
+(Actions → CI → Run workflow) always run every job; use one to force a full run elsewhere.
 
 **On a server.** Settings → **Updates** shows the installed and the latest build on the
 channel, what changed in between, and whether the update restarts FreeRADIUS.

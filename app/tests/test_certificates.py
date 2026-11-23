@@ -239,15 +239,23 @@ def test_ocsp_setting(app, browser, superconn, admin):
 
 def test_installed_certificates_shown(app, browser, superconn, logged_in):
     logged_in("viewer")
+    # Dates relative to now: the page counts whole days left. Half a day past the 4-day mark
+    # keeps the count at 4 however long the request takes.
+    now = datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0)
+    not_after = now + datetime.timedelta(days=4, hours=12)
+    openssl_date = "%b %d %H:%M:%S %Y GMT"  # the helper passes openssl's format
     app.fake_helper.cert_status = {
         "eap_server": [{"subject": "CN=radius.example.net", "issuer": "CN=radius-admin EAP CA radius.example.net",
-                        "not_before": "Nov 20 12:00:00 2026 GMT", "not_after": "Nov 25 12:00:00 2026 GMT",
+                        "not_before": (now - datetime.timedelta(days=1)).strftime(openssl_date),
+                        "not_after": not_after.strftime(openssl_date),
                         "sha256": "AB:" * 31 + "AB", "san": ["DNS:radius.example.net"], "key": "ECDSA P-384",
                         "ca": False, "expired": False}],
         "eap_ocsp": {"enable": False, "url": ""}, "portal_configured": True, "portal_server_name": "radius.example.net"}
     t = browser.text(browser.get("/certificates/"))
-    assert "CN=radius-admin EAP CA radius.example.net" in t and "2026-11-25" in t and "ECDSA P-384" in t
-    assert "made by the installer: replace it" in t and "expires in 4 days" in t
+    assert "CN=radius-admin EAP CA radius.example.net" in t and "ECDSA P-384" in t
+    assert not_after.strftime("%Y-%m-%d") in t
+    assert "made by the installer: replace it" in t
+    assert "expires in 4 days" in t
 
 
 def test_rollback_before_portal_managed_certs_drops_applied_copy(app, browser, superconn, admin, pki):
