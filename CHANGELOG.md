@@ -7,6 +7,14 @@ release, so previews sort after it.
 
 ## Unreleased
 
+### Added
+- **Device profile for Cisco Catalyst 9000 switches (IOS-XE).** Built-in profile
+  `cisco-iosxe`: VLAN by the standard tunnel attributes, full admin rights by
+  `shell:priv-lvl=15`, session actions on UDP 1700 (re-authenticate, bounce port, disconnect)
+  naming the session by accounting session id and MAC, and SNMP port names expanded to the
+  names the switch sends in RADIUS (`Gi1/0/5` → `GigabitEthernet1/0/5`). Choose it per client
+  or as the default.
+
 ### Fixed
 - **Second factor: no silent device lockout.** Requiring a second factor for local device admins
   now needs an exempt break-glass account, or an explicit confirmation that there is none: while the

@@ -1277,20 +1277,25 @@ meta refresh stays only inside `<noscript>`, so every page still works without J
   names.
 - **Built-in profiles.**
 
-  | id | Status | VLAN | Full admin | CoA |
-  |---|---|---|---|---|
   | id | MAB from | Role |
   |---|---|---|
   | `cisco-c1300` | Ethernet | none |
+  | `cisco-iosxe` | Ethernet | none |
   | `generic-rfc` | Ethernet, Wireless-802.11 | `Filter-Id := {role}` (RFC 2865) |
 
   | id | Status | VLAN | Full admin | CoA |
   |---|---|---|---|---|
   | `cisco-c1300` (default) | supported | RFC 3580 tunnel attributes | `Cisco-AVPair += "shell:priv-lvl=15"` | UDP 1700, `mac-then-session`; reauth and bounce by `Cisco-AVPair` subscriber commands; Disconnect |
+  | `cisco-iosxe` | supported | RFC 3580 tunnel attributes | `Cisco-AVPair += "shell:priv-lvl=15"` | UDP 1700, `session-and-mac` without NAS-Port-Id (IOS-XE refuses a request unless every session identifier matches); reauth and bounce by `Cisco-AVPair` subscriber commands; Disconnect |
   | `generic-rfc` | unverified | RFC 3580 tunnel attributes | `Service-Type := Administrative-User` (RFC 2865) | UDP 3799, `session-and-mac`; Disconnect only (re-authenticate and bounce have no standard form) |
 
-  `generic-rfc` keeps SNMP port names as reported. Both render a policy that passes
-  `radiusd -XC`; `generic-rfc` stays "unverified" until it has run against real hardware.
+  `generic-rfc` keeps SNMP port names as reported. `cisco-iosxe` expands the IOS-XE short
+  ifName to the interface name in NAS-Port-Id (`Gi1/0/5` → `GigabitEthernet1/0/5`, likewise
+  `Fa`, `Te`; other names as reported). All render a policy that passes `radiusd -XC`;
+  `cisco-iosxe` has the same reply lists as `cisco-c1300`, so it adds no policy branches.
+  `generic-rfc` stays "unverified" until it has run against real hardware. `cisco-iosxe`
+  (added 2026-11-20) is "supported" by the maintainer's decision, from Cisco's documentation,
+  before a run on hardware.
 - **A profile per client.**
   - **Database** (`sql/99-vendor-profiles.sql`, additive, idempotent): `ui.radius_client.vendor_profile`
     (`NULL` = the default; CHECK `^[a-z0-9][a-z0-9-]{0,31}$`) and `ui.radius_client.coa_port`
@@ -1790,7 +1795,8 @@ unreachable). The portal pages that drive this follow.
   provider column (rule 3). Setup checklist: optional step `mfa` "Second factor for device admins",
   done when a rule is on and its provider is on, linking to the Integrations page.
 - **Device timeout.** Vendor profiles gain `setup.mfa_timeout` (section 26; Catalyst 1200/1300:
-  `radius-server timeout 30` + `radius-server retransmit 2`; generic-rfc `null` → the generic text;
+  `radius-server timeout 30` + `radius-server retransmit 2`; Catalyst 9000: `timeout 30` +
+  `retransmit 2` under `radius server <name>`, which overrides the global values; generic-rfc `null` → the generic text;
   custom profiles: form field `setup_mfa_timeout`). The Integrations page lists, per profile of the
   enabled clients the enabled rules cover (all enabled clients when a rule covers all, or no rule
   is on), the profile's commands or the generic text and the client count.
