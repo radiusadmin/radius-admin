@@ -329,7 +329,7 @@
         <ul>
           <li>RADIUS clients with per-client Message-Authenticator and Proxy-State settings (BlastRADIUS mitigations), generated shared secrets and CSV import.</li>
           <li>RadSec per client: TLS 1.2/1.3, certificates from your CA, an optional expected certificate name, and OCSP revocation checks.</li>
-          <li>Device profiles per RADIUS client: built-in Cisco Catalyst 1200/1300 and generic RFC 3580 profiles, custom profiles copied and edited in the console, JSON export and import, and a dictionary check of attribute names.</li>
+          <li>Device profiles per RADIUS client: built-in Cisco Catalyst 1200/1300, Cisco Catalyst 9000 (IOS-XE) and generic RFC 3580 profiles, custom profiles copied and edited in the console, JSON export and import, and a dictionary check of attribute names.</li>
           <li>Access rules for wired or per-SSID connections, with an optional role and a rule tester.</li>
           <li>MAB devices from wired ports and wireless access points, and the unknown-device approval queue.</li>
           <li>Device administrator logins for switches, access points and firewalls: local accounts, PBKDF2-hashed, or members of chosen directory groups with their directory password over LDAPS.</li>
@@ -541,7 +541,6 @@ EOF</code></pre>
     <h3>Current limitations</h3>
     <ul class="limits">
       <li><strong>One distribution.</strong> The bundled FreeRADIUS package is built for Ubuntu 24.04 on amd64. Debian 12 follows.</li>
-      <li><strong>One tested switch family.</strong> Cisco Catalyst 1200/1300 is what the project is tested against today. The generic RFC 3580 profile is marked unverified until it has run against real hardware; other devices need a custom profile.</li>
       <li><strong>The directory is set up by hand.</strong> A new server starts without a directory (EAP-TLS and directory accounts are rejected until it is configured in <code>mods-available/ldap</code>). A console step for the directory comes with the generated FreeRADIUS configuration, the next phase.</li>
     </ul>
     <p>Found something? <a href="https://github.com/radiusadmin/radius-admin/issues">Report it on GitHub</a>.</p>
