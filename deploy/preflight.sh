@@ -111,7 +111,9 @@ else
                 TLSLIB=$( { ldd "$LIBDIR/rlm_ldap.so"; if [[ -n $LDAPLIB ]]; then ldd "$LDAPLIB"; fi; } 2>/dev/null \
                     | grep -oE 'lib(gnutls|ssl|crypto)\.so[.0-9]*' | sort -u | tr '\n' ' ')
                 if [[ $FIPS_MODE == on ]] && grep -q gnutls <<<"$TLSLIB"; then
-                    warn "rlm_ldap -> ${LDAPLIB:-libldap} uses GnuTLS ($TLSLIB): LDAPS to AD is NOT protected by the OpenSSL FIPS provider and cipher_list does not apply. Restrict the DC (Schannel) to TLS1.2+/AES-GCM and verify whether this GnuTLS is a FIPS-validated module in your Ubuntu Pro stream (docs/SECURITY.md)."
+                    warn "rlm_ldap -> ${LDAPLIB:-libldap} uses GnuTLS ($TLSLIB): LDAPS to AD is NOT protected by the OpenSSL FIPS provider. The bundled radius-admin-freeradius package links rlm_ldap against OpenSSL instead; with this FreeRADIUS, restrict the DC (Schannel) to TLS1.2+/AES-GCM and verify whether this GnuTLS is a FIPS-validated module in your Ubuntu Pro stream (docs/SECURITY.md)."
+                elif [[ -z $LDAPLIB ]] && grep -q 'libssl' <<<"$TLSLIB" && ! grep -q gnutls <<<"$TLSLIB"; then
+                    info "rlm_ldap: private OpenLDAP client library (static), LDAPS through the system OpenSSL ($TLSLIB)"
                 else
                     info "rlm_ldap TLS libraries: ${TLSLIB:-unknown} (libldap ${LDAPLIB:-not found})"
                 fi

@@ -173,9 +173,11 @@ jobs:
       - uses: actions/checkout@v7
       - name: Build radius-admin-freeradius
         run: |
+          # deb-src: the package builds rlm_ldap's OpenLDAP from the distribution source package
+          sudo sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/ubuntu.sources
           sudo apt-get update -q
           sudo apt-get install -y -q --no-install-recommends build-essential pkg-config dpkg-dev \
-              binutils libtalloc-dev libssl-dev libpq-dev libldap-dev curl gnupg ca-certificates file python3-apt
+              binutils libtalloc-dev libssl-dev libpq-dev curl gnupg ca-certificates file python3-apt
           sudo tools/ci/distro-libpq.sh
           sudo tools/package/build-freeradius-deb.sh "$GITHUB_WORKSPACE/packages" /var/tmp/ra-frpkg
       - name: Package tests (install, start, upgrade, purge)

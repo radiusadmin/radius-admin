@@ -91,6 +91,29 @@ sudo ./deploy/install.sh --phase fr-package       # also part of a full install
 - Upgrades: a release with a newer package upgrades it in the `fr-package` phase (also from
   `update.sh`). The running daemon keeps the old binaries until you restart it in a window
   (`systemctl restart freeradius`, or `--restart-freeradius`).
+- LDAPS: from package revision 2, rlm_ldap's TLS to the directory uses the system OpenSSL
+  (`libexec/ra-ldapwhoami` is built the same way), not the distribution's GnuTLS libldap. Before
+  installing or upgrading the package, `fr-package` logs in to the directory with the new
+  package's `ra-ldapwhoami` and the live `mods-available/ldap` settings. When that fails but the
+  FreeRADIUS installed now can log in, the phase stops and changes nothing, because FreeRADIUS
+  would fail its LDAP bind (and not start) after the next restart. The message quotes OpenSSL's
+  reason. Common causes and the check from the server:
+
+  ```bash
+  openssl s_client -connect dc01.example.net:636 -verify_hostname dc01.example.net \
+      -CAfile /etc/freeradius/certs/site/ca.pem -brief </dev/null
+  ```
+
+  * `EE certificate key too weak`: the DC certificate has an RSA key below 2048 bits.
+  * `CA signature digest algorithm too weak`: the certificate is signed with SHA-1.
+  * `Hostname mismatch`: the DC name in `server` is not in the certificate's subject alt names.
+  * `unsupported protocol` / `no protocols available`: the DC offers nothing above TLS 1.1.
+
+  Fix the directory side (new DC certificate, Schannel TLS 1.2), then run the phase again. To
+  install anyway (for example when the DC is fixed in the same window), add
+  `--skip-ldap-check` (`update.sh … -- --skip-ldap-check`); FreeRADIUS then keeps running the old
+  binaries and fails its LDAP bind on the next restart until the DC is fixed. An update started
+  from the portal stops the same way; its log shows the message.
 
 Building the package (on the distribution release it is for, as root, network access to GitHub
 and freeradius.org):
@@ -101,9 +124,17 @@ sudo bash tests/package/test_freeradius_deb.sh         # inspect the package
 tools/package/make-bundle.sh                            # -> dist/radius-admin-<version>.tar.gz
 ```
 
+The build also needs deb-src entries for the distribution archive: rlm_ldap's OpenLDAP comes
+from `apt-get source openldap` (Ubuntu: `Types: deb deb-src` in
+`/etc/apt/sources.list.d/ubuntu.sources`, then `apt-get update`). When the distribution publishes
+an openldap security update, rebuild and release the package (target: 14 days for high and
+critical fixes); `SOURCE` and `dpkg -s radius-admin-freeradius` name the openldap version a
+server runs.
+
 The upstream source tarball and its signature are kept in `packages/source/` and ship in the
-bundle (FreeRADIUS is GPLv2). `/opt/radius-admin-freeradius/share/doc/radius-admin-freeradius/SOURCE`
-records the URL, SHA-256, signing key and configure line.
+bundle (FreeRADIUS is GPLv2), with the openldap source package (`.dsc` and tarballs).
+`/opt/radius-admin-freeradius/share/doc/radius-admin-freeradius/SOURCE` records the URLs, SHA-256s,
+signing key and configure lines.
 
 ---
 
@@ -1448,7 +1479,7 @@ migration (new switch-admin passwords, MAB devices) exists only in PostgreSQL.
 | Device admin rejected | Auth log reason; source IP not in admin subnet; user not in `net-admins`; directory account not in an allowed group (§6.9a); legacy hash → reset password in UI; account disabled (`Auth-Type := Reject`) |
 | MAB rejected | MAC registered + enabled? switch sends PAP (not EAP-MD5)? Calling-Station-Id matches User-Name? |
 | EAP-TLS rejected | cert SAN DNS present? chains to Example-IssuingCA/Example-RootCA (`reject_unknown_intermediate_ca`)? OCSP reachable from FreeRADIUS? AD computer object in a rule group? `radiusd -X` |
-| LDAP bind/TLS errors | libldap uses GnuTLS (preflight shows it); `cipher_list` is unset on purpose; check the DC's Schannel policy allows TLS 1.2 ECDHE-AES-GCM; `ldapsearch -H ldaps://dc01.example.net -x -D '<bind DN>' -W -b '' -s base` |
+| LDAP bind/TLS errors | preflight shows rlm_ldap's TLS library (bundled package: the system OpenSSL, stricter than GnuTLS: SHA-1-signed or small-key DC certificates and TLS < 1.2 fail; distribution FreeRADIUS: GnuTLS); `cipher_list` is unset on purpose (FreeRADIUS 3.2.10 ignores it); check the DC's Schannel policy allows TLS 1.2 ECDHE-AES-GCM; `ldapsearch -H ldaps://dc01.example.net -x -D '<bind DN>' -W -b '' -s base` |
 | `rlm_sql_postgresql` load error | §1.1; `ldd <libdir>/rlm_sql_postgresql.so` (needs libpq5) |
 | DB permission denied | grants (`sql/30-grants.sql`), pg_hba order (`radius-admin` block must precede generic `local` lines) |
 
