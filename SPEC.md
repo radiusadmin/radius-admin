@@ -467,6 +467,10 @@ No Flask sessions/itsdangerous; own server-side sessions (§3.2).
 - CSRF token per session on every POST (hidden field) + Origin/Referer same-host check.
 - Step-up re-auth (password + MFA) within `stepup_minutes` for: apply, rollback,
   custom policy edit, settings, UI admin management, revealing a secret, MFA reset.
+  A GET whose step-up lapsed returns to itself after the re-authentication; a POST is not
+  replayed (the admin submits again) and returns to the form's `return_to`, else the page it was
+  sent from (Referer naming this host, `safe_next`), else its own path only when that route also
+  answers GET (never a POST-only URL, which would end in 405), else the dashboard.
 - RBAC: viewer = read-only (secrets masked); operator = edit clients, switch admins,
   MAB, access rules, and apply; admin = everything incl. custom policy, settings,
   UI admins, rollback, secret reveal.

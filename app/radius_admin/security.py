@@ -305,10 +305,30 @@ def stepup_required(view):
                 nxt = request.full_path if request.query_string else request.path
             else:
                 flash("Confirm your identity, then submit the form again.", "info")
-                nxt = safe_next(request.form.get("return_to")) or request.path
-            return redirect(url_for("auth.stepup", next=nxt))
+                nxt = _stepup_return()
+            return redirect(url_for("auth.stepup", next=nxt) if nxt else url_for("auth.stepup"))
         return view(*a, **kw)
     return wrapped
+
+
+def _stepup_return():
+    """Where a POST bounced to step-up comes back to: the form's return_to, else the page the form
+    was on (Referer naming this host), else the action's own path only when it also answers GET
+    (a POST-only action would end in 405 after the re-authentication). None: the dashboard."""
+    nxt = safe_next(request.form.get("return_to"))
+    if nxt:
+        return nxt
+    ref = request.headers.get("Referer")
+    if ref:
+        parts = urlsplit(ref)
+        if parts.netloc.lower() == request.host.lower():
+            nxt = safe_next(parts.path + ("?" + parts.query if parts.query else ""))
+            if nxt:
+                return nxt
+    rule = request.url_rule
+    if rule is not None and "GET" in (rule.methods or ()):
+        return request.path
+    return None
 
 
 _SAFE_PATH_RE = re.compile(r"^/(?:[A-Za-z0-9._~!$&'()*+,;=:@%-][A-Za-z0-9._~!$&'()*+,;=:@%/-]*)?(?:\?[A-Za-z0-9._~!$&'()*+,;=:@%/?-]*)?$")

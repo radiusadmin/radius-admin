@@ -24,6 +24,9 @@ release, so previews sort after it.
   remote MFA server shows its shared secret the same way.
 
 ### Fixed
+- **Re-authentication no longer ends in "Method Not Allowed".** When an action such as Remove
+  Duo asked you to confirm your identity first, the portal then sent you to the action's own
+  address, which only accepts form posts. It now returns you to the page you were on.
 - **Second factor: no silent device lockout.** Requiring a second factor for local device admins
   now needs an exempt break-glass account, or an explicit confirmation that there is none: while the
   provider is unreachable FreeRADIUS rejects these logins, so devices do not fall back to their own
