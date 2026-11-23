@@ -245,7 +245,10 @@ ui.audit_log(id bigserial PK, at timestamptz NOT NULL DEFAULT now(), actor text,
 
 Client shared secrets at rest (sql/103-client-secrets.sql): the portal and the client import
 write `secret_enc` (and `secret` = ''); `python3 -m radius_admin.cli seal-client-secrets`, run at
-the end of the installer's app phase, seals every plain `secret` (audit `client.secrets_seal`).
+the end of the installer's app phase, seals every plain `secret` (audit `client.secrets_seal`);
+right after it `seal-staging` removes the staged files an older release left (it kept the last
+ones, in plain) and seals its plain applied copies (audit `config.staging_sealed` with the counts,
+only when it changed something). Both record the actor `installer` (the CLI runs with `env -i`).
 `update.sh` (rollback and install) runs the installed release's `unseal-client-secrets` (audit
 `client.secrets_unseal`) before it starts a release whose CLI has no `seal-client-secrets`, and
 installs nothing when that fails; a sealed secret it cannot open stops it with nothing changed.
@@ -1698,6 +1701,10 @@ unreachable). The portal pages that drive this follow.
   configuration is copied to `/var/backups/radius-admin/duoauthproxy-authproxy.cfg-<time>` (0600)
   with the value of every key containing `skey`, `secret`, `password` or `_key` replaced by `REDACTED`,
   the service stopped, Duo's `uninstall --no-prompt` run, the drop-in removed.
+- **Helper sandbox.** `radius-admin-helper@.service` (`ProtectSystem=strict`) lists
+  `-/opt/duoauthproxy/conf` in `ReadWritePaths`: apply and rollback write `conf/authproxy.cfg`
+  (the connectivity tool runs in a unit of its own, below). Optional (`-`): a server without Duo
+  starts the helper as before. `tests/helper/test_helper_unit.py` checks the unit.
 - **Outcome audit.** The dispatcher records `integration.install` / `integration.remove` (result
   done, removed or failed; version; message; the actor from the state) with
   `python3 -m radius_admin.cli record-integration`.
@@ -1730,7 +1737,10 @@ unreachable). The portal pages that drive this follow.
   and apply first") or an install/removal runs; state `queued` with `action: remove`; starts
   `<integration_remove_unit>@<id>.service`. `integration_test {"id"}`: runs Duo's
   `usr/local/bin/authproxy_connectivity_tool` (root-owned, writable only by root) for at most
-  120 s; `{passed, output}` with lines naming skey, secret or password redacted.
+  120 s, as a transient unit (`systemd-run --wait --pipe`, `ProtectSystem=strict`, write access to
+  Duo's `log/` only, `CapabilityBoundingSet=CAP_SYS_PTRACE CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH`,
+  `RuntimeMaxSec=115`): the tool recognises the running proxy on its port only by mapping the
+  socket to a process, which needs `CAP_SYS_PTRACE`, and the helper has none; `{passed, output}` with lines naming skey, secret or password redacted.
 
 ### 29.3 Duo in the portal
 
@@ -1899,8 +1909,9 @@ unreachable). The portal pages that drive this follow.
 
 ## 30. Change (2026-11-20): certificates managed in the portal
 
-Page **Certificates** (`/certificates/`, Network access; every role sees it, changes need admin +
-step-up, each one audited `certificate.upload|csr|issued|forget|ocsp`, never with key material):
+Page **Certificates** (`/certificates/`, under Settings; every role can open it but only admins see
+the Settings button; changes need admin + step-up, each one audited
+`certificate.upload|csr|issued|forget|ocsp`, never with key material):
 
 - **802.1X server certificate** (`eap_server`): FreeRADIUS's `certs/site/radius.pem` + `radius.key`
   (EAP-TLS/TTLS/PEAP and RadSec).

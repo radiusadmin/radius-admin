@@ -18,6 +18,8 @@
                                                             data key (run by the app phase of install/update)
   unseal-client-secrets                                     write sealed shared secrets back in plain (run by
                                                             update.sh before a release that cannot read them)
+  seal-staging                                              remove staged files an older release left and seal
+                                                            its plain applied copies (run by the app phase)
 """
 import argparse
 import os
@@ -189,6 +191,12 @@ def cmd_record_integration(cfg, args):
     return 0
 
 
+def _install_actor():
+    """Who ran an install step: the sudo/login user, or the installer (it runs the CLI with env -i)."""
+    user = os.environ.get("SUDO_USER") or os.environ.get("USER")
+    return "cli:" + user if user else "installer"
+
+
 def _client_secrets(cfg, args, unseal):
     from . import services
     from .crypto import DataKey
@@ -206,8 +214,7 @@ def _client_secrets(cfg, args, unseal):
             print("error: %s Nothing was changed." % e, file=sys.stderr)
             return 1
         if n:
-            audit.write("client.secrets_unseal" if unseal else "client.secrets_seal",
-                        actor="cli:" + (os.environ.get("SUDO_USER") or os.environ.get("USER") or "?"),
+            audit.write("client.secrets_unseal" if unseal else "client.secrets_seal", actor=_install_actor(),
                         object_type="radius_client", detail={"clients": n}, conn=conn)
         conn.commit()
     finally:
@@ -222,6 +229,27 @@ def cmd_seal_client_secrets(cfg, args):
 
 def cmd_unseal_client_secrets(cfg, args):
     return _client_secrets(cfg, args, unseal=True)
+
+
+def cmd_seal_staging(cfg, args):
+    from . import services
+    from .crypto import DataKey
+    try:
+        key = DataKey.from_file(cfg["key_file"])
+    except (OSError, ValueError) as e:
+        print("error: data key %s: %s" % (cfg["key_file"], e), file=sys.stderr)
+        return 1
+    removed, sealed = services.clean_staging_after_upgrade(cfg["staging_dir"], key)
+    if removed or sealed:
+        conn = _conn(cfg)
+        try:
+            audit.write("config.staging_sealed", actor=_install_actor(), object_type="config",
+                        detail={"removed": removed, "sealed": sealed}, conn=conn)
+            conn.commit()
+        finally:
+            conn.close()
+    print("removed %d staged file(s), sealed %d applied copy file(s)" % (removed, sealed))
+    return 0
 
 
 def main(argv=None):
@@ -258,6 +286,7 @@ def main(argv=None):
     ri.add_argument("--actor", default="")
     sub.add_parser("seal-client-secrets", help="seal plain RADIUS client shared secrets with the data key")
     sub.add_parser("unseal-client-secrets", help="write sealed shared secrets back in plain (before a downgrade)")
+    sub.add_parser("seal-staging", help="remove staged files an older release left and seal its applied copies")
     args = p.parse_args(argv)
     try:
         cfg = load_config(args.config)
@@ -272,7 +301,7 @@ def main(argv=None):
             "unlock": cmd_unlock, "reset-mfa": cmd_reset_mfa, "render": cmd_render, "verify-audit": cmd_verify_audit,
             "check-fips": cmd_check_fips, "record-update": cmd_record_update,
             "record-integration": cmd_record_integration, "seal-client-secrets": cmd_seal_client_secrets,
-            "unseal-client-secrets": cmd_unseal_client_secrets}[args.cmd](cfg, args)
+            "unseal-client-secrets": cmd_unseal_client_secrets, "seal-staging": cmd_seal_staging}[args.cmd](cfg, args)
 
 
 if __name__ == "__main__":
