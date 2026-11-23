@@ -2,6 +2,8 @@
 {% import "_macros.html" as m %}
 {% block title %}Duo Authentication Proxy{% endblock %}
 {% block content %}
+{# every form here comes back to this page after a step-up, also from a POST result shown in place #}
+{% set duo_page = url_for('integrations.duo') %}
 <p class="crumb"><a class="btn btn-quiet btn-small btn-back" href="{{ url_for('integrations.index') }}">Integrations</a></p>
 <header class="page-head">
   <div><h1>Duo Authentication Proxy</h1>
@@ -50,7 +52,7 @@
 <section class="panel" id="duo-check" aria-labelledby="duo-pre-h">
   <h2 id="duo-pre-h">1. Check this server</h2>
   <p class="small muted">Disk space, operating system, the build packages the install adds, and whether Duo's API answers (once its hostname is set below).</p>
-  <form method="post" action="{{ url_for('integrations.duo_check') }}#duo-check" data-busy="Checking…">{{ m.csrf() }}<button class="btn" type="submit">Check</button></form>
+  <form method="post" action="{{ url_for('integrations.duo_check') }}#duo-check" data-busy="Checking…">{{ m.csrf(duo_page) }}<button class="btn" type="submit">Check</button></form>
   {% if preflight %}
   {% if preflight.ok %}
   <ul class="check-results">
@@ -69,7 +71,7 @@
     <tbody>
     {% for e in catalog %}
     <tr><td class="mono">{{ e.version }}</td><td class="mono small">{{ e.sha256[:16] }}…</td>
-      <td class="row-actions">{% if not running %}{{ m.post_button(url_for('integrations.duo_fetch'), 'Download', 'btn btn-quiet btn-small', fields={'version': e.version}, busy='Starting the download…') }}{% endif %}</td></tr>
+      <td class="row-actions">{% if not running %}{{ m.post_button(url_for('integrations.duo_fetch'), 'Download', 'btn btn-quiet btn-small', fields={'version': e.version, 'return_to': duo_page}, busy='Starting the download…') }}{% endif %}</td></tr>
     {% endfor %}
     </tbody>
   </table></div>
@@ -77,7 +79,7 @@
   <p>The signed catalog of this release lists no Duo build{% if fips %} that is FIPS-capable{% endif %} yet.{% if catalog_message %} <span class="small muted">{{ catalog_message }}</span>{% endif %}</p>
   {% if not fips %}
   <form method="post" action="{{ url_for('integrations.duo_fetch') }}" class="inline-form" data-busy="Starting the download…">
-    {{ m.csrf() }}
+    {{ m.csrf(duo_page) }}
     <label for="fetch-version">Download another version from dl.duosecurity.com</label>
     <input id="fetch-version" name="version" placeholder="6.8.1" maxlength="20" class="mono" inputmode="decimal" required>
     <button class="btn" type="submit">Download</button>
@@ -91,11 +93,12 @@
   {% endif %}
 
   <form method="post" action="{{ url_for('integrations.duo_upload') }}" enctype="multipart/form-data" class="stack" data-busy="Uploading…">
-    {{ m.csrf() }}
+    {{ m.csrf(duo_page) }}
     <label for="build">Or upload Duo's source build</label>
-    <input id="build" name="build" type="file" accept=".tgz,application/gzip" required aria-describedby="build-hint">
-    <p id="build-hint" class="small muted">The unmodified file from Duo, named like <span class="mono">duoauthproxy-6.8.1-src.tgz</span>, at most {{ upload_mib }} MiB.</p>
-    <div class="actions"><button class="btn" type="submit">Upload</button></div>
+    <div class="actions"><button type="button" class="btn js-only" data-pick-file="build" aria-describedby="build-hint">Upload a build…</button></div>
+    <div class="nojs-only"><input id="build" name="build" type="file" accept=".tgz,application/gzip" required aria-describedby="build-hint"></div>
+    <p id="build-hint" class="small muted">The unmodified file from Duo, named like <span class="mono">duoauthproxy-6.8.1-src.tgz</span>, at most {{ upload_mib }} MiB. It goes to Ready to install; nothing is installed yet.</p>
+    <div class="actions nojs-only"><button class="btn" type="submit">Upload</button></div>
   </form>
 
   {% if files %}
@@ -103,7 +106,7 @@
   {% for f in files %}
   <form method="post" action="{{ url_for('integrations.duo_install') }}" class="stack install-form" data-busy="Starting the install…"
         data-confirm="Install {{ f }}? The server builds it (a few minutes) and installs Duo into /opt/duoauthproxy.">
-    {{ m.csrf() }}<input type="hidden" name="file" value="{{ f }}">
+    {{ m.csrf(duo_page) }}<input type="hidden" name="file" value="{{ f }}">
     <p class="mono">{{ f }}{% if fetch.file == f and fetch.sha256 %} <span class="small muted">SHA-256 {{ fetch.sha256 }}</span>{% endif %}</p>
     {% if not fips %}
     <details>
@@ -135,7 +138,7 @@
   {% endif %}
   <form method="post" action="{{ url_for('integrations.duo_settings') }}" class="stack narrow" id="duo-settings"
         data-duo-preview="{{ url_for('integrations.duo_preview') }}" data-busy="Saving…">
-    {{ m.csrf() }}
+    {{ m.csrf(duo_page) }}
     {% set s = provider.settings if provider else {} %}
     <label for="ikey">Integration key</label>
     <input id="ikey" name="ikey" value="{{ s.ikey or '' }}" maxlength="40" class="mono" autocomplete="off"{{ m.described(errors, 'ikey') }}>
@@ -190,7 +193,7 @@
   <h2 id="duo-test-h">4. Test</h2>
   <p class="small muted">Duo's connectivity check with the applied configuration: Duo's API and the password check on this server.</p>
   {% if duo_applied %}
-  <form method="post" action="{{ url_for('integrations.duo_test') }}#duo-test" data-busy="Testing…">{{ m.csrf() }}<button class="btn" type="submit">Run the check</button></form>
+  <form method="post" action="{{ url_for('integrations.duo_test') }}#duo-test" data-busy="Testing…">{{ m.csrf(duo_page) }}<button class="btn" type="submit">Run the check</button></form>
   {% else %}
   <p class="warn-text">Apply your Duo settings first: until then the Duo proxy runs Duo's sample configuration, which the check can only report as broken.</p>
   {% endif %}
@@ -206,7 +209,7 @@
   <h2 id="duo-push-h">Send a test push</h2>
   <p class="small muted">Duo sends a push to this user's phone with the applied keys, as a device admin login would; nothing is logged in. The user must be enrolled in Duo under this name. At most one push per user every 30 seconds and 10 an hour.</p>
   <form method="post" action="{{ url_for('integrations.duo_push_test') }}#duo-push" class="inline-form" data-busy="Waiting for the answer (up to 60 s)…">
-    {{ m.csrf() }}
+    {{ m.csrf(duo_page) }}
     <label for="push-user">Username</label>
     <input id="push-user" name="username" value="{{ push.username if push else '' }}" maxlength="64" class="mono" autocomplete="off" required{{ m.described(errors, 'username') }}>
     <button class="btn" type="submit">Send test push</button>
@@ -227,7 +230,7 @@
   <p class="small">{% if duo_on %}Turns the Duo provider off, applies that (FreeRADIUS and the Duo proxy restart; device admin logins stop using a second factor), then stops and removes{% else %}Stops and removes{% endif %} the Duo proxy from this server; its configuration is kept in /var/backups/radius-admin.</p>
   <form method="post" action="{{ url_for('integrations.duo_remove') }}" class="stack" data-busy="{{ 'Disabling and removing, up to ~3 minutes…' if duo_on else 'Starting the removal…' }}"
         data-confirm="{{ ('Disable Duo and remove it? Device admin logins stop using a second factor; FreeRADIUS and the Duo proxy restart.' ~ (' The second-factor rules that use Duo are turned off: ' ~ duo_rules|join('; ') ~ '.' if duo_rules else '')) if duo_on else 'Remove the Duo Authentication Proxy from this server?' }}">
-    {{ m.csrf() }}
+    {{ m.csrf(duo_page) }}
     {% if duo_rules %}
     <p class="warn-text">A second-factor rule uses Duo: {{ duo_rules|join('; ') }}. Those logins would be rejected without Duo, so the rule must be turned off with it.</p>
     <label class="check"><input type="checkbox" name="rules_off" value="1" required> Turn this rule off too</label>

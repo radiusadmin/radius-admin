@@ -473,8 +473,10 @@ No Flask sessions/itsdangerous; own server-side sessions (§3.2).
   custom policy edit, settings, UI admin management, revealing a secret, MFA reset.
   A GET whose step-up lapsed returns to itself after the re-authentication; a POST is not
   replayed (the admin submits again) and returns to the form's `return_to`, else the page it was
-  sent from (Referer naming this host, `safe_next`), else its own path only when that route also
-  answers GET (never a POST-only URL, which would end in 405), else the dashboard.
+  sent from (Referer naming this host), else its own path; each only when it passes `safe_next`
+  and is a page that answers GET (never a POST-only address, which would end in 405: a POST result
+  shown in place, such as the Duo check at `/integrations/duo/test`, is not a page), else the
+  dashboard. Every form on the Duo page carries `return_to=/integrations/duo` (`m.csrf(return_to)`).
 - RBAC: viewer = read-only (secrets masked); operator = edit clients, switch admins,
   MAB, access rules, and apply; admin = everything incl. custom policy, settings,
   UI admins, rollback, secret reveal.
@@ -1747,13 +1749,16 @@ unreachable). The portal pages that drive this follow.
   `; radius-admin` and pass `check_duo_config` (otherwise "apply the Duo settings first"); ikey,
   skey and api_host come only from that file (api_host re-checked against
   `^api-[a-z0-9]{1,16}\.duosecurity\.com$`). Rate limit under the lock `push-test.lock`, kept in
-  `<work_dir>/push-test.json` with a hash of the username, never the name: one push per user per
-  30 s, 10 per hour in all. Then POST `/auth/v2/preauth {username}` and, when its result is
+  `<work_dir>/push-test.json` (`tries`: time, a hash of the username, never the name, and whether a
+  push was sent): 10 requests to Duo per hour in all, and no request for a user while a push to
+  that user was sent less than 30 s ago. A request that Duo answers before any push (not
+  enrolled, no access to the application, bypass) does not start that wait. Then POST `/auth/v2/preauth {username}` and, when its result is
   `auth`, POST `/auth/v2/auth {username, factor: push, device: auto}` (at most 70 s; Duo waits up
   to 60 s for the answer), as JSON bodies signed with Duo signature version 5 (HMAC-SHA512 over
   date, method, host, path, the empty query, the SHA-512 of the body and of the absent X-Duo
   headers; never the SHA-1 version 2 scheme), over TLS 1.2+ to `api_host:443` verified against the
-  system CAs. Answer `{ok: true, result, status_msg}` with `result` one of `allow`, `deny`,
+  system CAs. Answer `{ok: true, result, status_msg, pushed}` (`pushed`: the auth call that sends
+  the push was made) with `result` one of `allow`, `deny`,
   `timeout` (Duo's status `timeout`), `not_enrolled` (preauth `enroll`), `error` (Duo refused the
   request, or could not be reached or verified); never keys. helper.conf `duo_api_connect`
   (`127.0.0.1:PORT`) and `duo_api_cafile` exist for tests only and are empty by default.
@@ -1845,8 +1850,10 @@ unreachable). The portal pages that drive this follow.
   configuration has been applied, section 4 of the page): a username (same pattern as the helper,
   checked before the helper is asked); the helper's `integration_push_test` (timeout 90 s); the page
   shows Approved, Denied, No answer in time, Not enrolled in Duo or Duo could not be asked with
-  Duo's status message, or the helper's refusal (rate limit, no applied configuration). Audited
-  `integration.push_test` with `username` and `result` (`refused` when the helper refused), never keys.
+  Duo's status message ("Refused by Duo before any push" / "Allowed by Duo without a push" when
+  Duo answered at preauth, e.g. a user without access to the application or a bypass user), or the helper's refusal (rate limit, no applied configuration). Audited
+  `integration.push_test` with `username`, `result` (`refused` when the helper refused) and
+  `pushed`, never keys.
 - **Stored secrets** (`_macros.secret_field`). Before a secret key is stored the form shows the
   input (needed to turn Duo on). Once one is stored it shows "Secret key: set" and the input only
   inside `<details class="secret-change">` with the summary "Change secret key" (opened when the
