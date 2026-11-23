@@ -30,6 +30,21 @@ def _date(name):
         return None
 
 
+def _mac_dash(value):
+    """Station id -> AA-BB-CC-DD-EE-FF (the mab_device notation), or None."""
+    mac = oui.normalize(value)
+    return "-".join(mac[i:i + 2] for i in range(0, 12, 2)) if mac else None
+
+
+def _mab_descriptions(station_ids):
+    """Registered MAB device descriptions by MAC, for the given station ids (empty ones left out)."""
+    macs = sorted({m for m in map(_mac_dash, station_ids) if m})
+    if not macs:
+        return {}
+    return {r["mac"]: r["description"] for r in db.query(
+        "SELECT mac, description FROM mab_device WHERE mac = ANY(%s) AND description <> ''", (macs,))}
+
+
 @bp.route("/auth-log")
 @login_required
 def auth_log():
@@ -37,8 +52,10 @@ def auth_log():
     since, until = _date("since"), _date("until")
     where, params = [], []
     if f["user"]:
-        where.append("username ILIKE %s")
-        params.append("%" + f["user"] + "%")
+        # a MAB device is also found by its description
+        where.append("(username ILIKE %s OR (authmethod = 'mab' AND upper(callingstationid) IN"
+                     " (SELECT mac FROM mab_device WHERE description ILIKE %s)))")
+        params += ["%" + f["user"] + "%"] * 2
     if f["nas"]:
         where.append("host(nasipaddress) LIKE %s")
         params.append(f["nas"] + "%")
@@ -65,9 +82,11 @@ def auth_log():
                     + frm + " ORDER BY authdate DESC, id DESC LIMIT %s OFFSET %s",
                     params + [PAGE, pager.offset])
     idx = insight.ClientIndex.load()
+    descriptions = _mab_descriptions(r["callingstationid"] for r in rows if r["authmethod"] == "mab")
     for r in rows:
         r["client"] = idx.find(r["nas"])
         r["reason_text"] = insight.clean_reason(r["reason"])
+        r["device"] = descriptions.get(_mac_dash(r["callingstationid"])) if r["authmethod"] == "mab" else None
     return render_template("logs/auth.html", rows=rows, f=f, since=since, until=until, pager=pager)
 
 
@@ -88,11 +107,11 @@ def auth_detail(aid):
         if r.get("authmethod") in ("admin-ldap", "admin-ldap+mfa") else []
     mfa_provider = integrations.login_provider(r.get("authmethod"), r.get("authdate"))
     expiry = insight.cert_expiry(r.get("cert_expiry"))
-    mac = oui.normalize(r["callingstationid"])
+    mac_dash = _mac_dash(r["callingstationid"])
     mab = pending = None
-    if mac:
-        mac_dash = "-".join(mac[i:i + 2] for i in range(0, 12, 2))
-        mab = db.query_one("SELECT id, vlan, enabled, expires_at FROM mab_device WHERE mac = %s", (mac_dash,))
+    if mac_dash:
+        mab = db.query_one("SELECT id, vlan, enabled, expires_at, description FROM mab_device WHERE mac = %s",
+                           (mac_dash,))
         pending = db.query_one("SELECT mac, ignored FROM mab_pending_open WHERE mac = %s", (mac_dash,))
     history = db.query("SELECT id, authdate, reply, vlan, reason FROM radpostauth"
                        " WHERE id <> %s AND ((callingstationid IS NOT NULL AND callingstationid = %s)"

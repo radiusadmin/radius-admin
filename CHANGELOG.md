@@ -20,6 +20,9 @@ release, so previews sort after it.
   or as the default.
 
 ### Changed
+- **Auth log names MAB devices.** A MAB login from a registered device shows the device's
+  description, with the MAC under it, in the list and on the record. The "User / device" filter
+  also searches MAB descriptions.
 - **Option to allow only catalog-checked Duo builds.** `integration_allow_unlisted = false` in
   `helper.conf` makes the helper refuse a Duo build that the signed catalog does not list, even
   with its SHA-256 entered. The default (`true`) keeps today's behaviour; FIPS mode refuses such
