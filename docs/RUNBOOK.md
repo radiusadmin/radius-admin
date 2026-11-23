@@ -87,7 +87,7 @@ sudo ./deploy/install.sh --phase fr-package       # also part of a full install
   `radiusd -XC` passes and restarts it with `--restart-freeradius`.
 - A FreeRADIUS installed another way (the distribution's `freeradius` package or a source build)
   is kept; the phase warns and does nothing. Moving such a server onto the package is a
-  separate, planned step.
+  separate, planned step (§1.3).
 - Upgrades: a release with a newer package upgrades it in the `fr-package` phase (also from
   `update.sh`). The running daemon keeps the old binaries until you restart it in a window
   (`systemctl restart freeradius`, or `--restart-freeradius`).
@@ -138,6 +138,156 @@ The upstream source tarball and its signature are kept in `packages/source/` and
 bundle (FreeRADIUS is GPLv2), with the openldap source package (`.dsc` and tarballs).
 `/opt/radius-admin-freeradius/share/doc/radius-admin-freeradius/SOURCE` records the URLs, SHA-256s,
 signing key and configure lines.
+
+### 1.3 Moving a server onto the bundled FreeRADIUS package
+
+A server that runs FreeRADIUS installed another way keeps it on every update (§1.2). It then gets
+none of the package's FreeRADIUS changes: rlm_ldap keeps its own libldap (usually GnuTLS,
+SECURITY.md exception 5), and in FIPS mode radiusd does not use the OpenSSL FIPS provider
+(SECURITY.md §1). Moving it onto the package is done by hand, in a maintenance window, as root,
+with nothing applied in the portal until the end. Plan for 10–15 minutes of RADIUS downtime;
+more with the waits described under *Wi-Fi behind a controller or relay* below.
+
+This procedure assumes the raddb is `/etc/freeradius`, radiusd drops to `freerad`, and the old
+build has no modules enabled that the package leaves out (perl, python, rest, json, krb5, pam,
+redis, rediswho, cache_redis, cache_memcached, kafka, unbound, couchbase, eap_ikev2, eap_tnc, the
+other SQL drivers, yubikey). The distribution's own `freeradius` package keeps its raddb in
+`/etc/freeradius/3.0`; that layout needs its own plan.
+
+**1. Inspect** (read-only):
+
+```bash
+systemctl list-unit-files 'freeradius*' 'radiusd*'
+for u in freeradius radiusd; do systemctl show -p FragmentPath -p ExecStart "$u.service" 2>/dev/null; done
+grep -E '^\s*(raddb|radiusd|service)\s*=' /etc/radius-admin/helper.conf
+grep -nE '^\s*(prefix|exec_prefix|localstatedir|logdir|raddbdir|run_dir|libdir|user|group)\s*=' /etc/freeradius/radiusd.conf
+ls /etc/freeradius/mods-enabled
+dpkg -S "$(systemctl show -p FragmentPath --value freeradius.service)" 2>/dev/null   # owned by a package?
+```
+
+If the unit file belongs to a package (a `.deb` build, binary `/usr/sbin/freeradius`), follow
+2a; if it is a source build with its own unit file in `/etc/systemd/system`, follow 2b.
+
+**2a. Packaged FreeRADIUS (`.deb`).** Back up the installed packages (the old `.deb` files are
+usually not in any archive) and the configuration:
+
+```bash
+B=/root/fr-switch-$(date +%Y%m%d%H%M); mkdir -p $B/debs
+apt-get install -y dpkg-repack
+dpkg-query -W -f '${Package} ${Version} ${Status}\n' 'freeradius*' 'libfreeradius*'; apt-mark showhold
+cd $B/debs && dpkg-repack <each installed freeradius* / libfreeradius* package>
+tar -C / -czf $B/etc-freeradius.tgz etc/freeradius && cp -a /etc/radius-admin/helper.conf $B/
+```
+
+`dpkg-repack` can fail for the configuration package (`freeradius-config`) when one of its
+conffiles was deleted (`conffile … does not appear in package`). Keep that package installed:
+it owns only files in `/etc/freeradius`, and the bundled package conflicts only with
+`freeradius`. `freeradius-config` depends on `freeradius-common`, so keep that one too. Check
+what a removal of the rest would take with a dry run (held packages need the flag):
+
+```bash
+apt-get remove -s --allow-change-held-packages freeradius freeradius-ldap freeradius-postgresql freeradius-utils libfreeradius3 | grep -E '^Remv'
+```
+
+Then, in the window — `remove`, **never `purge`** (purging `freeradius-config` deletes the live
+configuration):
+
+```bash
+systemctl stop freeradius
+apt-mark unhold freeradius freeradius-ldap freeradius-utils libfreeradius3
+NEEDRESTART_SUSPEND=1 apt-get remove -y freeradius freeradius-ldap freeradius-postgresql freeradius-utils libfreeradius3
+ls /etc/freeradius/radiusd.conf && dpkg -l 'freeradius*' 'libfreeradius*' | awk '/^(ii|hi|rc)/{print $1, $2}'
+```
+
+Do not run `apt autoremove` until the move is final: it removes libraries the old build needs
+for a rollback.
+
+**2b. Source build with its own unit.** Back up the configuration and the unit file, then stop
+the old service and move its unit file aside (the installer refuses to install the package
+while any `freeradius`/`radiusd` unit exists):
+
+```bash
+B=/root/fr-switch-$(date +%Y%m%d%H%M); mkdir -p $B
+tar -C / -czf $B/etc-freeradius.tgz etc/freeradius && cp -a /etc/radius-admin/helper.conf $B/
+OLD=radiusd   # the old unit's name
+systemctl stop $OLD.service && systemctl disable $OLD.service
+mv "$(systemctl show -p FragmentPath --value $OLD.service)" $B/ && systemctl daemon-reload
+```
+
+The old build's files under its own prefix stay where they are until you remove them.
+
+**3. Install the package** from the verified release bundle (§9; `update.sh` verifies it the
+same way). The `fr-package` phase first logs in to the directory with the new package's
+`ra-ldapwhoami` and stops, with nothing changed, when only the new (OpenSSL) library fails:
+
+```bash
+cd /path/to/radius-admin && ./deploy/install.sh --phase fr-package -y
+```
+
+**4. Point the configuration at the package** (`radiusd.conf` keeps the old build's paths, so
+the new radiusd would otherwise load the old modules), check it with the new binary:
+
+```bash
+sed -i -E -e 's#^(\s*prefix\s*=).*#\1 /opt/radius-admin-freeradius#' -e 's#^(\s*exec_prefix\s*=).*#\1 ${prefix}#' \
+    -e 's#^(\s*libdir\s*=).*#\1 ${exec_prefix}/lib#' /etc/freeradius/radiusd.conf
+sed -i -E 's#^(\s*radiusd\s*=).*#\1 /opt/radius-admin-freeradius/sbin/radiusd#' /etc/radius-admin/helper.conf
+grep -n INCLUDE /etc/freeradius/dictionary
+/opt/radius-admin-freeradius/sbin/radiusd -XC -d /etc/freeradius 2>&1 | tail -1     # Configuration appears to be OK
+```
+
+Also set `localstatedir = /var` and `logdir = /var/log/freeradius` if the old build used other
+paths (the unit allows writes to `/var/log/freeradius` only), and `service = freeradius` in
+`helper.conf` if the old unit had another name. An old drop-in under
+`/etc/systemd/system/freeradius.service.d/` also applies to the package's unit: a
+`ReadWritePaths`/`ReadWriteDirectories` path that does not exist stops the service from starting
+(status 226/NAMESPACE); prefix such a path with `-`.
+
+**5. Start and check:**
+
+```bash
+systemctl enable --now freeradius && systemctl is-active freeradius
+journalctl -u freeradius -b --no-pager | grep -E 'FIPS mode' ; grep -E 'Ready to process|ERROR' /var/log/freeradius/radius.log | tail -3
+grep -c ossl-modules/fips.so /proc/$(systemctl show -p MainPID --value freeradius)/maps   # FIPS mode: 1 or more
+./deploy/preflight.sh
+```
+
+In FIPS mode radiusd logs `(TLS) FIPS mode: OpenSSL providers base, fips, default property
+fips=yes`; preflight reports `rlm_ldap: private OpenLDAP client library (static), LDAPS through the
+system OpenSSL`. Then a device-admin login, an 802.1X login, a MAB login, and **Review and apply**
+once in the portal (the helper now checks and restarts the package's radiusd).
+
+**Wi-Fi behind a controller or relay.** Wireless controllers (and cloud-managed access points)
+often reach FreeRADIUS through a relay on the same host, typically `radsecproxy` terminating
+RadSec or RADIUS/DTLS and forwarding to `127.0.0.1:1812`. While radiusd is stopped the relay logs
+`no server response, … dead?` and the controller drops its connection and marks the RADIUS
+server dead; it reconnects only after its own dead-time, which can be several minutes after
+radiusd is back. Wi-Fi logins in that time never reach FreeRADIUS: the portal's auth log stays
+empty and `radius.log` shows nothing, while MAB and device-admin logins from switches work. Do
+not restart the relay (that drops the controller again); keep the downtime short and wait for
+the controller to reconnect before testing Wi-Fi:
+
+```bash
+journalctl -u radsecproxy -f | grep --line-buffered -E 'connection from|dead|Access-'
+```
+
+The controller's dead-time (RADIUS server dead criteria) is a setting on the controller.
+
+**Rollback.** 2a (packaged):
+
+```bash
+systemctl disable --now freeradius; NEEDRESTART_SUSPEND=1 apt-get remove -y radius-admin-freeradius
+cd $B/debs && dpkg -i libfreeradius3_*.deb freeradius_*.deb freeradius-ldap_*.deb freeradius-postgresql_*.deb freeradius-utils_*.deb
+tar -C / -xzf $B/etc-freeradius.tgz && cp -a $B/helper.conf /etc/radius-admin/helper.conf
+apt-mark hold <the packages that were held>; systemctl enable --now freeradius
+```
+
+2b (source build): remove the package as above, restore the configuration and `helper.conf`, put
+the unit file back from `$B`, `systemctl daemon-reload`, `systemctl enable --now $OLD.service`.
+Removing or purging `radius-admin-freeradius` never touches `/etc/freeradius`.
+
+Keep `$B` until the move is final. Afterwards the old packages left in `rc` state may be purged,
+except `freeradius-config` (and `freeradius-common`, which it needs): purging `freeradius-config`
+deletes the configuration in `/etc/freeradius`, so leave it installed and held.
 
 ---
 
@@ -1482,6 +1632,7 @@ migration (new switch-admin passwords, MAB devices) exists only in PostgreSQL.
 | Device admin rejected | Auth log reason; source IP not in admin subnet; user not in `net-admins`; directory account not in an allowed group (§6.9a); legacy hash → reset password in UI; account disabled (`Auth-Type := Reject`) |
 | MAB rejected | MAC registered + enabled? switch sends PAP (not EAP-MD5)? Calling-Station-Id matches User-Name? |
 | EAP-TLS rejected | cert SAN DNS present? chains to Example-IssuingCA/Example-RootCA (`reject_unknown_intermediate_ca`)? OCSP reachable from FreeRADIUS? AD computer object in a rule group? `radiusd -X` |
+| Wi-Fi logins fail right after a FreeRADIUS stop or restart, nothing in the auth log, MAB and switch logins work | The wireless controller marked the RADIUS server dead and reconnects only after its dead-time; with a local relay, `journalctl -u radsecproxy` shows `… dead?` and the controller's connection lost. Wait for the controller to reconnect (§1.3, *Wi-Fi behind a controller or relay*); do not restart the relay |
 | LDAP bind/TLS errors | preflight shows rlm_ldap's TLS library (bundled package: the system OpenSSL, stricter than GnuTLS: SHA-1-signed or small-key DC certificates and TLS < 1.2 fail; distribution FreeRADIUS: GnuTLS); `cipher_list` is unset on purpose (FreeRADIUS 3.2.10 ignores it); check the DC's Schannel policy allows TLS 1.2 ECDHE-AES-GCM; `ldapsearch -H ldaps://dc01.example.net -x -D '<bind DN>' -W -b '' -s base` |
 | `rlm_sql_postgresql` load error | §1.1; `ldd <libdir>/rlm_sql_postgresql.so` (needs libpq5) |
 | DB permission denied | grants (`sql/30-grants.sql`), pg_hba order (`radius-admin` block must precede generic `local` lines) |

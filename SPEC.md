@@ -774,6 +774,10 @@ CSV columns (header row required, exact names, any order tolerated by name):
   `preflight.sh --fips-mode on|off` (install.sh passes the mode; default the installed value, else
   off): the kernel/OpenSSL/Python FIPS checks block only in FIPS mode; standard mode prints one
   line and skips the FIPS-only notes (radiusd FIPS strings, GnuTLS LDAPS warning).
+  Run on its own (no `--admin-net`), preflight takes the management subnet and portal name the
+  way install.sh does without answers: `site.yaml` (`live_site`), then the nginx site, then the
+  firewall table; only with none of them the example defaults, and then the "no local IPv4
+  address" failure says the subnet is the example default. It prints `settings from <source>`.
 - **Portal settings without answers** (`update.sh`, which runs `install.sh --phase … -y`, or a
   phase run by hand): `server_name`, `admin_net`, `listen_ip` and `resolver` come from
   `/etc/radius-admin/site.yaml` (read with `ans_load`), else from the installed nginx site
