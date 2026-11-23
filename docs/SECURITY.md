@@ -507,8 +507,10 @@ tokens and RADIUS secrets are never logged; the helper redacts `secret = …` an
 - **Provider builds** (section 29.1). A build is installed only when its SHA-256 matches an entry of
   the integrations catalog signed with the update key (ECDSA P-384), or, in standard mode only, the
   SHA-256 the admin entered after comparing it with the vendor's published value (recorded as
-  `pasted-hash`). In FIPS mode only catalog entries marked FIPS-capable are accepted, by the helper,
-  whatever the portal sends. The helper keeps the newest catalog (serial) it has verified, so an
+  `pasted-hash`). An entered SHA-256 means a portal admin (with step-up) decides alone that a vendor
+  installer runs as root; set `integration_allow_unlisted = false` in `helper.conf` to refuse such
+  builds on this server (only catalog-listed builds install). In FIPS mode only catalog entries
+  marked FIPS-capable are accepted, by the helper, whatever the portal sends. The helper keeps the newest catalog (serial) it has verified, so an
   older release cannot reinstate a withdrawn build. The download unit is unprivileged, reaches only
   the vendor's fixed host, and its output is never trusted: the helper copies the file into its own
   root-only directory (O_NOFOLLOW, single link, owner and size checked) and hashes that copy; the

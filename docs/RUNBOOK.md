@@ -907,7 +907,9 @@ signed catalog: builds then need the SHA-256 entered, and nothing installs in FI
    secret key and API hostname. Allow outbound HTTPS from this server to that hostname.
 2. *Check this server*, then *Download* a build the catalog lists (or *Upload* Duo's unmodified
    source file). A build that is not in the catalog can be installed outside FIPS mode after you
-   enter its SHA-256 from Duo's checksum page; it shows as *Unverified*.
+   enter its SHA-256 from Duo's checksum page; it shows as *Unverified*. To allow only catalog
+   builds on this server, set `integration_allow_unlisted = false` in `/etc/radius-admin/helper.conf`
+   (the helper reads it on every request; no restart needed).
 3. *Install* (a few minutes; the Details drop-down shows the log).
 4. *Connect to Duo*: keys, API hostname, fail mode, factors; tick *On*, save, then **Apply
    changes** (this starts the Duo proxy and restarts FreeRADIUS).
